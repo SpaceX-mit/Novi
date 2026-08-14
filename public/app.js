@@ -1,6 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, activeJob: null };
+const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, contextPanel: 'wiki', activeDocumentId: null, monitoringJobId: null, composerDraft: '', composerMode: 'auto' };
 let authRegister = false;
 const roleRank = Object.freeze({ viewer: 10, editor: 20, admin: 30, owner: 40 });
 const canRole = (required) => (roleRank[state.role] || 0) >= roleRank[required];
@@ -168,7 +168,105 @@ function showWorkspace(project) {
   $('#view-overview').classList.remove('active-view'); $('#view-workspace').classList.add('active-view');
   $('#page-label').textContent = project.title;
   $$('.nav-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.view === project.type));
+  if (state.sessionProjectId !== project.id) {
+    state.sessionProjectId = project.id; state.sessions = []; state.activeSessionId = null; state.activeSession = null; state.workspaceKnowledge = null; state.contextPanel = 'wiki'; state.activeDocumentId = null; state.composerDraft = ''; state.composerMode = 'auto';
+    void loadAgentWorkspace(project.id);
+  }
   renderWorkspace(project);
+}
+
+function sessionModeLabel(mode) {
+  return ({ auto: 'Auto', workflow: 'Workflow', react: 'ReAct', 'plan-execute': 'Plan & Execute', supervisor: 'Supervisor' })[mode] || mode || 'Auto';
+}
+
+async function loadAgentWorkspace(projectId, preferredSessionId = null) {
+  try {
+    const [sessionResult, knowledge] = await Promise.all([
+      request(`/api/projects/${projectId}/sessions`),
+      request(`/api/projects/${projectId}/knowledge`),
+    ]);
+    if (state.activeProject?.id !== projectId) return;
+    state.sessions = sessionResult.sessions || [];
+    const selectedId = preferredSessionId || (state.sessions.some((item) => item.id === state.activeSessionId) ? state.activeSessionId : state.sessions[0]?.id);
+    state.activeSessionId = selectedId || null; state.workspaceKnowledge = knowledge;
+    state.activeSession = selectedId ? (await request(`/api/projects/${projectId}/sessions/${selectedId}`)).session : null;
+    if (state.activeProject?.id !== projectId) return;
+    renderWorkspace(state.activeProject, state.activeTab);
+    const run = state.activeSession?.activeRun;
+    if (run?.jobId && !String(run.jobId).startsWith('sync:') && state.monitoringJobId !== run.jobId) {
+      const current = await request(`/api/jobs/${run.jobId}`).catch(() => null);
+      if (current?.job && ['queued', 'running'].includes(current.job.status)) void monitorGeneration(projectId, current.job, selectedId, false);
+    }
+  } catch (error) { if (state.activeProject?.id === projectId) showToast(error.message); }
+}
+
+async function selectAgentSession(projectId, sessionId) {
+  try {
+    state.activeSessionId = sessionId; state.composerDraft = ''; state.composerMode = 'auto';
+    state.activeSession = (await request(`/api/projects/${projectId}/sessions/${sessionId}`)).session;
+    renderWorkspace(state.activeProject, state.activeTab);
+  } catch (error) { showToast(error.message); }
+}
+
+async function createAgentSessionUi(projectId) {
+  if (!canRole('editor')) return showToast('Editor access is required to create a session');
+  const title = window.prompt('Session name', `Session ${state.sessions.length + 1}`);
+  if (title === null) return;
+  try {
+    const result = await request(`/api/projects/${projectId}/sessions`, { method: 'POST', body: JSON.stringify({ title: title.trim() }) });
+    state.activeSessionId = result.session.id; state.activeSession = result.session; state.sessions = result.sessions || []; state.composerDraft = ''; state.composerMode = 'auto';
+    renderWorkspace(state.activeProject, state.activeTab); $('#agent-prompt')?.focus();
+  } catch (error) { showToast(error.message); }
+}
+
+async function deleteAgentSessionUi(projectId, sessionId) {
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session || session.status === 'running') return showToast('An active session cannot be deleted');
+  if (!window.confirm(`Delete “${session.title}” and its conversation?`)) return;
+  try {
+    await request(`/api/projects/${projectId}/sessions/${sessionId}`, { method: 'DELETE' });
+    state.activeSession = null; state.activeSessionId = null;
+    await loadAgentWorkspace(projectId);
+    showToast('Session deleted');
+  } catch (error) { showToast(error.message); }
+}
+
+function renderSessionRail(project) {
+  const items = state.sessions.map((session) => `<button class="session-item ${session.id === state.activeSessionId ? 'active' : ''}" data-session-id="${escapeHtml(session.id)}"><span>${escapeHtml(session.title)}</span><small>${session.status === 'running' ? `${sessionModeLabel(session.activeRun?.currentMode)} · ${Number(session.activeRun?.progress || 0)}%` : `${session.messageCount} messages`}</small></button>`).join('');
+  return `<aside class="session-rail"><div class="session-rail-head"><span>Sessions</span>${canRole('editor') ? '<button id="new-session" title="New session" aria-label="New session">+</button>' : ''}</div><div class="session-list">${items || '<p>Loading sessions...</p>'}</div>${canRole('editor') && state.activeSession ? `<button class="session-delete" id="delete-session" ${state.activeSession.status === 'running' ? 'disabled' : ''}>Delete session</button>` : ''}</aside>`;
+}
+
+function renderAgentMessage(message) {
+  const isUser = message.role === 'user';
+  const meta = [message.mode ? sessionModeLabel(message.mode) : '', message.status || '', formatDateTime(message.createdAt)].filter(Boolean).join(' · ');
+  return `<article class="agent-message ${isUser ? 'user' : 'assistant'} ${message.kind || 'message'}"><div class="message-author"><b>${isUser ? 'You' : 'Novi'}</b><span>${escapeHtml(meta)}</span></div><p>${escapeHtml(message.content)}</p>${message.artifactId ? `<button class="message-artifact" data-artifact-id="${escapeHtml(message.artifactId)}">Open generated artifact</button>` : ''}</article>`;
+}
+
+function renderConversation(project) {
+  const session = state.activeSession;
+  const messages = session?.messages || [];
+  const run = session?.activeRun;
+  const busy = project.status === 'generating' || session?.status === 'running';
+  const editor = canRole('editor');
+  const modes = [['auto', 'Auto'], ['workflow', 'Workflow'], ['react', 'ReAct'], ['plan-execute', 'Plan & Execute'], ['supervisor', 'Supervisor']];
+  return `<section class="conversation-panel"><header><div><p class="eyebrow">AGENT SESSION</p><h2>${escapeHtml(session?.title || 'Loading session')}</h2></div>${run ? `<div class="conversation-run" id="conversation-run"><b id="conversation-run-mode">${escapeHtml(sessionModeLabel(run.currentMode))}</b><span id="conversation-run-stage">${escapeHtml(run.currentStage || 'Preparing')}</span><small id="conversation-run-progress">${Number(run.progress || 0)}%</small></div>` : ''}</header><div class="conversation-messages" id="conversation-messages" aria-live="polite">${messages.map(renderAgentMessage).join('') || '<div class="conversation-loading">Loading conversation...</div>'}</div>${!project.artifacts?.length && editor ? `<button class="primary-button generate-now" id="generate-empty" ${busy ? 'disabled' : ''}>${busy ? 'Generating...' : 'Generate now'}</button>` : ''}${editor ? `<form class="agent-composer" id="agent-composer"><textarea id="agent-prompt" name="prompt" rows="2" maxlength="20000" placeholder="Ask Novi to research, build knowledge, or draft..." ${busy || !session ? 'disabled' : ''}>${escapeHtml(state.composerDraft)}</textarea><div><label>Execution mode<select id="agent-mode" name="mode" ${busy ? 'disabled' : ''}>${modes.map(([value, label]) => `<option value="${value}" ${state.composerMode === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button class="composer-send" type="submit" title="Send request" aria-label="Send request" ${busy || !session ? 'disabled' : ''}>↑</button></div></form>` : '<p class="conversation-readonly">Viewer access is read only.</p>'}</section>`;
+}
+
+function renderDocumentViewer() {
+  const knowledge = state.workspaceKnowledge || { documents: [], chunks: [] };
+  const document = knowledge.documents?.find((item) => item.id === state.activeDocumentId) || knowledge.documents?.[0];
+  if (!document) return '<div class="context-empty"><b>No document selected</b><p>Import notes or a public URL to inspect it here.</p></div>';
+  const chunks = (knowledge.chunks || []).filter((item) => item.documentId === document.id).slice(0, 12);
+  return `<article class="document-viewer"><span>${escapeHtml(document.sourceKind || 'text')} · ${document.chunkCount || chunks.length} chunks</span><h3>${escapeHtml(document.title)}</h3>${document.sourceUrl ? `<a href="${escapeHtml(safeExternalUrl(document.sourceUrl))}" target="_blank" rel="noopener noreferrer">Open source</a>` : ''}<div>${chunks.map((chunk) => `<p>${escapeHtml(chunk.text || '')}</p>`).join('') || '<p>No indexed passages.</p>'}</div></article>`;
+}
+
+function renderContextBody(project, artifact, artifactIndex, selected) {
+  const knowledge = state.workspaceKnowledge || { documents: [] };
+  if (state.contextPanel === 'files') return knowledge.documents?.length ? `<div class="context-file-list">${knowledge.documents.map((document) => `<button data-document-id="${escapeHtml(document.id)}"><span>${escapeHtml(document.title)}</span><small>${escapeHtml(document.sourceKind || 'text')} · ${document.chunkCount || 0} chunks</small></button>`).join('')}</div>` : '<div class="context-empty"><b>No files yet</b><p>Import notes, web pages, PDFs, or a GitHub repository.</p></div>';
+  if (state.contextPanel === 'document') return renderDocumentViewer();
+  if (!artifact) return '<div class="context-empty"><b>No artifact yet</b><p>Send a request in this Session to create the first knowledge asset.</p></div>';
+  const tabs = tabsFor(project.type); const c = artifact.content;
+  return `${renderVersionToolbar(project, artifactIndex)}${state.compareVersions && project.artifacts[artifactIndex + 1] ? renderVersionComparison(project, artifactIndex) : ''}<div class="artifact-panel"><div class="artifact-tabs">${tabs.map((tab) => `<button class="artifact-tab ${selected === tab.key ? 'active' : ''}" data-artifact-tab="${tab.key}">${tab.label}</button>`).join('')}</div><div class="artifact-content">${renderArtifact(project, selected, c)}</div></div>`;
 }
 
 function renderWorkspace(project, selected = state.activeTab) {
@@ -177,7 +275,6 @@ function renderWorkspace(project, selected = state.activeTab) {
   if (artifactIndex < 0) artifactIndex = 0;
   const artifact = artifacts[artifactIndex];
   if (artifact) state.activeArtifactId = artifact.id;
-  const previousArtifact = artifactIndex >= 0 ? artifacts[artifactIndex + 1] : null;
   const c = artifact?.content;
   const activeJob = state.activeJob?.projectId === project.id && ['queued', 'running'].includes(state.activeJob.status) ? state.activeJob : null;
   const meta = typeMeta[project.type];
@@ -187,10 +284,19 @@ function renderWorkspace(project, selected = state.activeTab) {
   state.activeTab = selected;
   $('#workspace-root').innerHTML = `<button class="back-link" id="back-overview">← All workspaces</button>
     <div class="workspace-head"><div><span class="type-label ${meta.color}">${meta.label}</span><h1>${escapeHtml(project.title)}</h1><p>${escapeHtml(project.topic)}</p>${activeJob || project.status === 'generating' ? `<div class="agent-run-strip" id="agent-run-status" aria-live="polite"><span>ACTIVE MODE</span><b id="agent-run-mode">${escapeHtml(activeJob?.currentModeLabel || activeJob?.currentMode || 'Routing')}</b><i></i><strong id="agent-run-stage">${escapeHtml(activeJob?.currentStage || 'Preparing')}</strong><small id="agent-run-progress">${Number(activeJob?.progress || 0)}%</small></div>` : ''}</div><div class="workspace-actions">${editor ? `<button class="secondary-button" id="pin-workspace">${project.pinned ? '★ Pinned' : '☆ Pin'}</button>` : ''}${artifact ? `<button class="secondary-button" id="export-md">↓ Markdown</button>${project.type === 'paper' ? '<button class="secondary-button" id="export-ieee">↓ IEEE LaTeX</button><button class="secondary-button" id="export-acm">↓ ACM LaTeX</button>' : ''}` : ''}${administrator ? '<button class="secondary-button danger-button" id="delete-workspace">Delete</button>' : ''}${editor ? `<button class="primary-button" id="generate" ${project.status === 'generating' ? 'disabled' : ''}>${project.status === 'generating' ? 'Generating…' : artifact ? '↻ Regenerate' : '✦ Generate asset'}</button>` : ''}</div></div>
-    ${artifact ? `${renderVersionToolbar(project, artifactIndex)}${state.compareVersions && previousArtifact ? renderVersionComparison(project, artifactIndex) : ''}<div class="workspace-layout"><div class="artifact-panel"><div class="artifact-tabs">${availableTabs.map((tab) => `<button class="artifact-tab ${selected === tab.key ? 'active' : ''}" data-artifact-tab="${tab.key}">${tab.label}</button>`).join('')}</div><div class="artifact-content">${renderArtifact(project, selected, c)}</div></div><aside><div class="side-panel"><h3>Workspace details</h3><div class="side-meta"><div><span>Workspace created</span><b>${formatDate(project.createdAt)}</b></div><div><span>Selected version</span><b>Version ${artifacts.length - artifactIndex}</b></div><div><span>Generated</span><b>${formatDate(artifact.createdAt)}</b></div><div><span>Sources mapped</span><b>${c.sources?.length || 0}</b></div></div></div><div class="side-panel"><h3>Knowledge actions</h3><div class="generate-box"><p>Keep this workspace current as your understanding evolves.</p><button class="secondary-button full" id="copy-summary">Copy summary</button>${editor ? '<button class="secondary-button full" id="ingest-document" style="margin-top:8px">Import notes</button><button class="secondary-button full" id="import-url" style="margin-top:8px">Import web/PDF URL</button>' : ''}<button class="secondary-button full" id="knowledge-library" style="margin-top:8px">Browse & search knowledge</button>${editor ? '<button class="secondary-button full" id="refresh-sources" style="margin-top:8px">Refresh sources</button>' : ''}<button class="secondary-button full" id="show-snapshots" style="margin-top:8px">View source history</button>${editor ? '<button class="secondary-button full" id="toggle-watch" style="margin-top:8px">Configure updates</button>' : ''}</div></div></aside></div>` : `<div class="empty-state show"><div class="empty-icon">✦</div><h3>Your workspace is ready</h3><p>${editor ? `Generate a structured ${meta.label.toLowerCase()} artifact to begin.` : 'This workspace has not generated an artifact yet.'}</p>${editor ? `<button class="primary-button" id="generate-empty" ${project.status === 'generating' ? 'disabled' : ''}>${project.status === 'generating' ? 'Generating…' : 'Generate now'} <span>${project.status === 'generating' ? '' : '→'}</span></button>` : ''}</div>`}`;
+    <div class="session-workspace">${renderSessionRail(project)}${renderConversation(project)}<aside class="context-panel"><div class="context-tabs"><button data-context-panel="files" class="${state.contextPanel === 'files' ? 'active' : ''}">Files</button><button data-context-panel="wiki" class="${state.contextPanel === 'wiki' ? 'active' : ''}">LLM Wiki</button><button data-context-panel="document" class="${state.contextPanel === 'document' ? 'active' : ''}">Document</button></div><div class="context-body">${renderContextBody(project, artifact, artifactIndex, selected)}</div><div class="context-actions">${artifact ? '<button class="secondary-button full" id="copy-summary">Copy summary</button>' : ''}${editor ? '<button class="secondary-button full" id="ingest-document">Import notes</button><button class="secondary-button full" id="import-url">Import web/PDF URL</button>' : ''}<button class="secondary-button full" id="knowledge-library">Browse &amp; search knowledge</button>${editor ? '<button class="secondary-button full" id="refresh-sources">Refresh sources</button>' : ''}<button class="secondary-button full" id="show-snapshots">View source history</button>${editor ? '<button class="secondary-button full" id="toggle-watch">Configure updates</button>' : ''}</div></aside></div>`;
   if (c?.knowledgeContext?.length && ['wiki', 'report', 'draft'].includes(selected)) $('.artifact-content')?.insertAdjacentHTML('beforeend', renderWorkspaceKnowledgeContext(c.knowledgeContext));
   $('#back-overview').onclick = showOverview;
   $('#generate')?.addEventListener('click', () => generate(project.id)); $('#generate-empty')?.addEventListener('click', () => generate(project.id));
+  $('#agent-composer')?.addEventListener('submit', (event) => { event.preventDefault(); const input = $('#agent-prompt'); const prompt = input.value.trim(); if (!prompt) return showToast('Enter a request for Novi'); generate(project.id, { prompt, mode: $('#agent-mode').value }); });
+  $('#agent-prompt')?.addEventListener('input', (event) => { state.composerDraft = event.currentTarget.value; });
+  $('#agent-mode')?.addEventListener('change', (event) => { state.composerMode = event.currentTarget.value; });
+  $('#new-session')?.addEventListener('click', () => createAgentSessionUi(project.id));
+  $('#delete-session')?.addEventListener('click', () => deleteAgentSessionUi(project.id, state.activeSessionId));
+  $$('[data-session-id]').forEach((button) => button.addEventListener('click', () => selectAgentSession(project.id, button.dataset.sessionId)));
+  $$('[data-context-panel]').forEach((button) => button.addEventListener('click', () => { state.contextPanel = button.dataset.contextPanel; renderWorkspace(project, state.activeTab); }));
+  $$('[data-document-id]').forEach((button) => button.addEventListener('click', () => { state.activeDocumentId = button.dataset.documentId; state.contextPanel = 'document'; renderWorkspace(project, state.activeTab); }));
+  $$('[data-artifact-id]').forEach((button) => button.addEventListener('click', () => { state.activeArtifactId = button.dataset.artifactId; state.contextPanel = 'wiki'; state.compareVersions = false; renderWorkspace(project, state.activeTab); }));
   $('#pin-workspace')?.addEventListener('click', () => pin(project.id)); $('#copy-summary')?.addEventListener('click', async () => { if (!navigator.clipboard) return showToast('Clipboard is unavailable'); await navigator.clipboard.writeText(c.summary); showToast('Summary copied'); });
   $('#delete-workspace')?.addEventListener('click', () => deleteWorkspace(project));
   $('#export-md')?.addEventListener('click', () => exportArtifact(project.id, 'markdown', artifact.id));
@@ -205,6 +311,7 @@ function renderWorkspace(project, selected = state.activeTab) {
   $('#show-snapshots')?.addEventListener('click', () => showSnapshots(project.id));
   $('#toggle-watch')?.addEventListener('click', () => configureWatch(project.id));
   $$('[data-artifact-tab]').forEach((button) => button.addEventListener('click', () => { state.activeTab = button.dataset.artifactTab; renderWorkspace(state.activeProject, state.activeTab); }));
+  const messages = $('#conversation-messages'); if (messages) messages.scrollTop = messages.scrollHeight;
 }
 
 function renderWorkspaceKnowledgeContext(items) {
@@ -240,6 +347,7 @@ function renderEvidenceClaims(evidence) {
 }
 
 async function loadProjects() { state.projects = (await request('/api/projects')).projects; renderProjects(); }
+function resetAgentWorkspaceState() { state.sessions = []; state.activeSessionId = null; state.activeSession = null; state.sessionProjectId = null; state.workspaceKnowledge = null; state.activeDocumentId = null; state.monitoringJobId = null; state.composerDraft = ''; state.composerMode = 'auto'; }
 async function loadBilling() {
   try {
     const org = await request('/api/org');
@@ -258,7 +366,7 @@ async function loadBilling() {
     selector.hidden = (result.organizations || []).length < 2;
   } catch {}
 }
-async function logout() { try { await request('/api/auth/logout', { method: 'POST' }); } finally { state.projects = []; state.activeProject = null; state.role = 'viewer'; applyRoleCapabilities(); showOverview(); $('#auth-modal').classList.remove('hidden'); showToast('Signed out'); } }
+async function logout() { try { await request('/api/auth/logout', { method: 'POST' }); } finally { state.projects = []; state.activeProject = null; state.role = 'viewer'; resetAgentWorkspaceState(); applyRoleCapabilities(); showOverview(); $('#auth-modal').classList.remove('hidden'); showToast('Signed out'); } }
 function openBilling() { if (!canRole('admin')) return showToast('Admin access is required to manage billing'); $('#billing-error').textContent = ''; $('#billing-modal').classList.remove('hidden'); }
 function closeBilling() { $('#billing-modal').classList.add('hidden'); $('#billing-error').textContent = ''; }
 async function upgradePlan(plan) { try { const result = await request('/api/billing/checkout', { method: 'POST', body: JSON.stringify({ plan, returnUrl: window.location.href }) }); if (result.checkoutUrl) { const url = safeExternalUrl(result.checkoutUrl); if (url === '#') throw new Error('Payment provider returned an unsafe checkout URL'); window.open(url, '_blank', 'noopener,noreferrer'); } } catch (error) { $('#billing-error').textContent = error.message; showToast(error.message); } }
@@ -328,32 +436,56 @@ async function disableProvider() {
   try { await request('/api/llm/provider', { method: 'DELETE' }); for (const config of state.providerSettings.configs) config.active = false; state.providerSettings.activeProvider = null; renderProviderStatus(); showToast('Offline generation enabled'); }
   catch (error) { $('#provider-error').textContent = error.message; }
 }
-async function generate(id) {
+function updateConversationRun(job) {
+  const mode = $('#conversation-run-mode'); const stage = $('#conversation-run-stage'); const progress = $('#conversation-run-progress');
+  if (mode) mode.textContent = job.currentModeLabel || sessionModeLabel(job.currentMode);
+  if (stage) stage.textContent = job.currentStage || (job.status === 'queued' ? 'Queued' : 'Preparing');
+  if (progress) progress.textContent = `${Math.max(0, Math.min(100, Number(job.progress) || 0))}%`;
+  if (state.activeSession?.activeRun?.jobId === job.id) Object.assign(state.activeSession.activeRun, { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress });
+}
+
+async function monitorGeneration(id, initialJob, sessionId, notifyStages = true) {
+  if (state.monitoringJobId === initialJob.id) return;
+  state.monitoringJobId = initialJob.id;
+  let job = initialJob; let lastStage = '';
   try {
-    showToast('Generation queued…');
-    const sourceProject = state.projects.find((project) => project.id === id) || state.activeProject;
-    const prompt = [sourceProject?.topic, sourceProject?.description].filter(Boolean).join('\n');
-    const queued = await request(`/api/projects/${id}/generate?async=true`, { method: 'POST', body: JSON.stringify({ prompt, mode: 'auto' }) });
-    let job = queued.job; let lastStage = '';
-    state.activeJob = job;
-    state.projects = state.projects.map((project) => project.id === id ? { ...project, status: 'generating' } : project);
-    const generatingProject = state.projects.find((project) => project.id === id);
-    if (generatingProject) showWorkspace(generatingProject);
-    updateAgentRunStatus(job);
+    state.activeJob = job; updateAgentRunStatus(job); updateConversationRun(job);
     for (let attempt = 0; attempt < 1200; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 500));
       job = (await request(`/api/jobs/${job.id}`)).job;
-      state.activeJob = job; updateAgentRunStatus(job);
-      if (job.currentStage && job.currentStage !== lastStage) { lastStage = job.currentStage; showToast(`${job.currentModeLabel || job.currentMode} · ${job.currentStage}`); }
+      state.activeJob = job; updateAgentRunStatus(job); updateConversationRun(job);
+      if (notifyStages && job.currentStage && job.currentStage !== lastStage) { lastStage = job.currentStage; showToast(`${job.currentModeLabel || job.currentMode} · ${job.currentStage}`); }
       if (job.status === 'completed') break;
       if (job.status === 'failed') throw new Error(job.error || 'Generation failed');
     }
     if (job.status !== 'completed') throw new Error('Generation timed out');
     const result = await request(`/api/projects/${id}`);
-    state.projects = state.projects.map((p) => p.id === id ? result.project : p);
-    state.activeJob = null;
-    state.activeArtifactId = result.project.artifacts?.[0]?.id || null; state.compareVersions = false;
-    state.activeTab = 'overview'; showWorkspace(result.project); showToast('Knowledge asset generated');
+    state.projects = state.projects.map((project) => project.id === id ? result.project : project);
+    state.activeProject = result.project; state.activeJob = null;
+    state.activeArtifactId = result.project.artifacts?.[0]?.id || null; state.compareVersions = false; state.contextPanel = 'wiki'; state.activeTab = 'overview';
+    await loadAgentWorkspace(id, sessionId);
+    showToast('Knowledge asset generated');
+  } catch (error) {
+    state.activeJob = null; showToast(error.message);
+    await loadProjects().catch(() => {});
+    const project = state.projects.find((item) => item.id === id);
+    if (project) { state.activeProject = project; await loadAgentWorkspace(id, sessionId).catch(() => {}); }
+  } finally { if (state.monitoringJobId === initialJob.id) state.monitoringJobId = null; }
+}
+
+async function generate(id, input = {}) {
+  try {
+    showToast('Generation queued…');
+    const sourceProject = state.projects.find((project) => project.id === id) || state.activeProject;
+    const prompt = String(input.prompt || $('#agent-prompt')?.value || '').trim() || [sourceProject?.topic, sourceProject?.description].filter(Boolean).join('\n');
+    const mode = input.mode || $('#agent-mode')?.value || 'auto';
+    const queued = await request(`/api/projects/${id}/generate?async=true`, { method: 'POST', body: JSON.stringify({ prompt, mode, sessionId: state.activeSessionId }) });
+    const job = queued.job;
+    state.activeJob = job; state.activeSessionId = queued.sessionId || state.activeSessionId; state.composerDraft = '';
+    state.projects = state.projects.map((project) => project.id === id ? { ...project, status: 'generating' } : project);
+    const generatingProject = state.projects.find((project) => project.id === id);
+    if (generatingProject) { state.activeProject = generatingProject; renderWorkspace(generatingProject, state.activeTab); await loadAgentWorkspace(id, state.activeSessionId); }
+    await monitorGeneration(id, job, state.activeSessionId);
   } catch (error) { state.activeJob = null; showToast(error.message); await loadProjects().catch(() => {}); const project = state.projects.find((item) => item.id === id); if (project) showWorkspace(project); }
 }
 async function pin(id) { const result = await request(`/api/projects/${id}/pin`, { method: 'PATCH' }); state.projects = state.projects.map((p) => p.id === id ? result.project : p); showWorkspace(result.project); renderProjects(); }
@@ -361,14 +493,14 @@ async function deleteWorkspace(project) {
   if (!window.confirm(`Delete “${project.title}” and its indexed knowledge? This cannot be undone.`)) return;
   try {
     await request(`/api/projects/${project.id}`, { method: 'DELETE' });
-    state.projects = state.projects.filter((item) => item.id !== project.id); showOverview(); showToast('Workspace deleted');
+    state.projects = state.projects.filter((item) => item.id !== project.id); resetAgentWorkspaceState(); showOverview(); showToast('Workspace deleted');
   } catch (error) { showToast(error.message); }
 }
 async function switchOrganization(tenantId) {
   if (!tenantId) return;
   try {
     await request('/api/auth/switch', { method: 'POST', body: JSON.stringify({ tenantId }) });
-    state.activeProject = null; state.activeTab = 'overview'; await loadProjects(); await loadBilling(); showOverview(); showToast('Organization switched');
+    state.activeProject = null; state.activeTab = 'overview'; resetAgentWorkspaceState(); await loadProjects(); await loadBilling(); showOverview(); showToast('Organization switched');
   } catch (error) { showToast(error.message); await loadBilling(); }
 }
 async function exportArtifact(id, format = 'markdown', artifactId = null, template = 'article') { try { const requestedVersion = artifactId ? `&artifactId=${encodeURIComponent(artifactId)}` : ''; const requestedTemplate = format === 'latex' ? `&template=${encodeURIComponent(template)}` : ''; const content = await request(`/api/projects/${id}/export?format=${format}${requestedVersion}${requestedTemplate}`); const extension = format === 'latex' ? 'tex' : 'md'; const blob = new Blob([content], { type: format === 'latex' ? 'application/x-tex' : 'text/markdown' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); const project = state.projects.find((item) => item.id === id) || state.activeProject; const index = project?.artifacts?.findIndex((item) => item.id === artifactId) ?? -1; const number = index >= 0 ? project.artifacts.length - index : project?.artifacts?.length || 1; const safeName = String(project?.title || 'novi-workspace').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'novi-workspace'; link.href = url; link.download = `${safeName}-v${number}${format === 'latex' && template !== 'article' ? `-${template}` : ''}.${extension}`; link.click(); URL.revokeObjectURL(url); showToast(`${format === 'latex' ? template.toUpperCase() + ' LaTeX' : 'Markdown'} version ${number} downloaded`); } catch (error) { showToast(error.message); } }
@@ -376,13 +508,13 @@ async function ingestDocument(id) {
   const title = window.prompt('Notes title'); if (!title) return;
   const content = window.prompt('Paste notes or source text (up to 900 KB)'); if (!content) return;
   const sourceUrl = window.prompt('Optional source URL (https://…)') || '';
-  try { await request(`/api/projects/${id}/knowledge`, { method: 'POST', body: JSON.stringify({ title, content, sourceUrl }) }); showToast('Notes indexed into workspace'); } catch (error) { showToast(error.message); }
+  try { await request(`/api/projects/${id}/knowledge`, { method: 'POST', body: JSON.stringify({ title, content, sourceUrl }) }); await loadAgentWorkspace(id, state.activeSessionId); showToast('Notes indexed into workspace'); } catch (error) { showToast(error.message); }
 }
 async function importUrl(id) {
   const title = window.prompt('Document title'); if (!title) return;
   const sourceUrl = window.prompt('Public web page or PDF URL (https://…)'); if (!sourceUrl) return;
   const render = window.confirm('Does this page require JavaScript rendering? Choose OK only when your organization configured Browser Agent.') ? 'browser' : 'static';
-  try { await request(`/api/projects/${id}/knowledge/import`, { method: 'POST', body: JSON.stringify({ title, url: sourceUrl, render }) }); showToast(`${render === 'browser' ? 'Rendered page' : 'Remote document'} imported and indexed`); } catch (error) { showToast(error.message); }
+  try { await request(`/api/projects/${id}/knowledge/import`, { method: 'POST', body: JSON.stringify({ title, url: sourceUrl, render }) }); await loadAgentWorkspace(id, state.activeSessionId); showToast(`${render === 'browser' ? 'Rendered page' : 'Remote document'} imported and indexed`); } catch (error) { showToast(error.message); }
 }
 function closeKnowledgeLibrary() { $('#knowledge-modal').classList.add('hidden'); $('#knowledge-error').textContent = ''; }
 function renderKnowledgeDocuments(payload) {
@@ -407,10 +539,10 @@ async function showKnowledgeLibrary(id) {
 }
 async function deleteKnowledgeDocument(projectId, documentId, title) {
   if (!window.confirm(`Remove “${title}” from semantic memory? Existing immutable artifact versions may retain excerpts that were already used. Delete the workspace for a complete purge.`)) return;
-  try { await request(`/api/projects/${projectId}/knowledge/${documentId}`, { method: 'DELETE' }); showToast('Knowledge document removed'); await showKnowledgeLibrary(projectId); }
+  try { await request(`/api/projects/${projectId}/knowledge/${documentId}`, { method: 'DELETE' }); await loadAgentWorkspace(projectId, state.activeSessionId); showToast('Knowledge document removed'); await showKnowledgeLibrary(projectId); }
   catch (error) { showToast(error.message); }
 }
-async function refreshSources(id) { try { const result = await request(`/api/projects/${id}/refresh`, { method: 'POST' }); if (result.update?.status === 'completed') { await loadProjects(); const project = state.projects.find((item) => item.id === id); if (project) showWorkspace(project); } const update = result.update?.status === 'completed' ? ' · workspace updated' : result.update?.status === 'unchanged' ? ' · no source changes' : result.update?.status === 'quota-exceeded' ? ' · generation quota reached' : ''; showToast(`Sources refreshed: ${result.snapshot.sourceCount}${update}`); } catch (error) { showToast(error.message); } }
+async function refreshSources(id) { try { const result = await request(`/api/projects/${id}/refresh`, { method: 'POST' }); if (result.update?.status === 'completed') { await loadProjects(); const project = state.projects.find((item) => item.id === id); if (project) { state.activeProject = project; await loadAgentWorkspace(id, state.activeSessionId); } } const update = result.update?.status === 'completed' ? ' · workspace updated' : result.update?.status === 'unchanged' ? ' · no source changes' : result.update?.status === 'quota-exceeded' ? ' · generation quota reached' : ''; showToast(`Sources refreshed: ${result.snapshot.sourceCount}${update}`); } catch (error) { showToast(error.message); } }
 async function showSnapshots(id) { try { const result = await request(`/api/projects/${id}/snapshots?limit=10`); const labels = { completed: 'Workspace updated', unchanged: 'No source changes', disabled: 'Artifact update disabled', busy: 'Waiting for active generation', 'quota-exceeded': 'Generation quota reached', failed: 'Artifact update failed', running: 'Artifact update running' }; const list = $('#snapshot-list'); list.innerHTML = result.snapshots.length ? result.snapshots.map((snapshot) => { const changes = snapshot.changes || { added: 0, updated: 0, removed: 0 }; const changed = snapshot.changeStatus === 'changed'; const update = labels[snapshot.autoUpdateStatus] || (changed ? 'Change not yet applied' : 'No artifact update needed'); return `<article class="snapshot-item"><div class="snapshot-head"><b>${formatDateTime(snapshot.fetchedAt)}</b><span>${snapshot.sourceCount} sources</span></div><div class="snapshot-status"><span class="snapshot-change ${changed ? 'changed' : 'unchanged'}">${changed ? `Changed · +${changes.added || 0} ~${changes.updated || 0} −${changes.removed || 0}` : 'Unchanged'}</span><span>${escapeHtml(update)}</span></div><div class="snapshot-sources">${(snapshot.sources || []).slice(0, 8).map((source) => `<a href="${escapeHtml(safeExternalUrl(source.url))}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.name)} <small>${Number(source.relevanceScore || 0).toFixed(2)}</small></a>`).join('')}</div></article>`; }).join('') : '<p class="muted">No source snapshots yet.</p>'; $('#snapshot-modal').classList.remove('hidden'); } catch (error) { showToast(error.message); } }
 async function configureWatch(id) {
   const enabled = window.confirm('Enable source update reminders for this workspace?');

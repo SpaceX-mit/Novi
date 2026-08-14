@@ -63,7 +63,7 @@ Provider 管理接口只允许 owner/admin。保存时固定厂商忽略客户�
 
 ## 5. UI 设计
 
-信息架构固定为 Overview 与三种核心路径。创建弹窗只收集完成任务所需信息；项目卡片用于重复资产；工作空间通过标签承载不同成果视图，避免多级页面跳转。Workspace knowledge 弹窗展示文档/片段/概念数量、导入文档和语义匹配片段；成果主视图展示当次使用的个人知识及免责声明。Web 从 `/api/org` 获取当前实时角色：viewer 只显示浏览、搜索、历史和导出，editor 增加创建、生成、置顶、摄取、刷新和单文档删除，admin/owner 额外显示 Provider 设置、工作空间删除和付费升级；服务端仍逐请求重新计算 membership，UI 隐藏不是安全边界。Provider 弹窗从服务端目录渲染选择器，根据厂商切换 base URL/API version 字段，API Key 只允许覆盖而不能读取；保存、测试连接和 Offline mode 分别对应 PUT、POST test 和 DELETE。桌面端与 Web 共用 UI 和 API，避免功能分叉。
+信息架构固定为 Overview 与三种核心路径。创建弹窗只收集完成任务所需信息，成功后直接打开默认 Agent Session。工作区采用三栏：左栏列出 Session 摘要并提供新建/空闲删除；中栏按时间显示持久用户/助手消息、active mode/stage/progress、Artifact 链接，并由 composer 提交 prompt 和执行模式；右栏以 Files、LLM Wiki、Document 标签承载文件目录、成果版本/比较/导出和文档片段。宽屏为三栏，1100px 以下把 inspector 放到对话下方，760px 以下全部单列且 Session 列表横向滚动。Workspace knowledge 弹窗继续提供语义搜索和删除。Web 从 `/api/org` 获取当前实时角色：viewer 可读 Session、成果、知识和导出，但不显示 composer、新建/删除 Session 或其他写控件；editor 增加生成、置顶、摄取和刷新，admin/owner 额外显示 Provider 设置、工作空间删除和付费升级。服务端仍逐请求重新计算 membership，UI 隐藏不是安全边界。Provider 弹窗从服务端目录渲染选择器，根据厂商切换 base URL/API version 字段，API Key 只允许覆盖而不能读取。桌面端与 Web 共用 UI 和 API，避免功能分叉。
 
 ## 6. 生产适配接口
 
