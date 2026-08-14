@@ -66,6 +66,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder�
 
 ## 更新记录
 
+- 2026-08-14：将功能交付节奏固化到 `AGENTS.md`：每个可独立验收的完整功能或修复必须单独完成验证、进度更新、commit 与 push，推送成功后再开始下一项功能。
 - 2026-08-14：将 LangGraph 四阶段 Runtime、Web LLM Provider/MiniMax 配置及局域网监听改动提交并推送至 GitHub `origin/main`；变更文件未发现凭据形状的明文，本地运行数据和配置密钥保持忽略。托管 CI 运行与证据归档仍待完成。
 - 2026-08-14：修复 Provider 初次配置的测试顺序；`Save & test` 现在先保存当前 MiniMax/其他 Provider 表单再测试，避免尚无 active 配置时返回 409。验证：`npm test` 68 passed + 1 skip、`npm run browser-smoke`、`npm run check`、`npm run openapi-check` 通过。用户在对话中暴露的 Key 未写入代码或状态文件，必须撤销轮换。
 - 2026-08-14：记录认证式局域网启动方式；当前机器用 `HOST=0.0.0.0`、`NOVI_AUTH_REQUIRED=true` 监听 TCP 4173，并以 `http://10.0.90.51:4173` 作为局域网入口。`ss` 确认 `0.0.0.0:4173`，本机局域网地址与独立 Docker 网络命名空间访问 `/api/health` 均返回 200，未登录 `/api/projects` 返回 401。UFW 为 active，但当前账户无 sudo 权限读取具体规则；仍建议从目标物理主机验证，不将开发 HTTP 服务视为公网部署。
