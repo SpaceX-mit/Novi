@@ -302,14 +302,15 @@ function toolNode(executor, onTool) {
       const record = { id, tool: call.name, kind: definition?.kind || 'unknown', status: 'failed', input: boundedOutput(call.input), output: { error: 'Tool is unavailable' }, startedAt, completedAt: new Date().toISOString() };
       return { pendingToolCalls: state.pendingToolCalls.slice(1), toolCallCount: (state.toolCallCount || 0) + 1, toolCalls: [record], toolObservations: [record] };
     }
-    if (onTool && await onTool({ id, tool: call.name, kind: definition.kind, status: 'running', input: boundedOutput(call.input), startedAt }) === false) throw Object.assign(new Error('Generation was cancelled'), { code: 'AGENT_CANCELLED' });
+    const provenance = { id, tool: call.name, label: definition.label || call.name, kind: definition.kind, ...(definition.serverId ? { serverId: definition.serverId, serverName: definition.serverName } : {}) };
+    if (onTool && await onTool({ ...provenance, status: 'running', input: boundedOutput(call.input), startedAt }) === false) throw Object.assign(new Error('Generation was cancelled'), { code: 'AGENT_CANCELLED' });
     let record; let result = {};
     try {
       result = await executor(definition, call.input);
-      record = { id, tool: call.name, kind: definition.kind, status: 'completed', input: boundedOutput(call.input), output: boundedOutput(result.result), startedAt, completedAt: new Date().toISOString() };
+      record = { ...provenance, status: 'completed', input: boundedOutput(call.input), output: boundedOutput(result.result), startedAt, completedAt: new Date().toISOString() };
     } catch (error) {
       if (error.code === 'AGENT_CANCELLED') throw error;
-      record = { id, tool: call.name, kind: definition.kind, status: 'failed', input: boundedOutput(call.input), output: { error: safeError(error) }, startedAt, completedAt: new Date().toISOString() };
+      record = { ...provenance, status: 'failed', input: boundedOutput(call.input), output: { error: safeError(error) }, startedAt, completedAt: new Date().toISOString() };
     }
     if (onTool && await onTool(record) === false) throw Object.assign(new Error('Generation was cancelled'), { code: 'AGENT_CANCELLED' });
     return {

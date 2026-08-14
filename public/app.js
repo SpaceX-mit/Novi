@@ -1,6 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, toolSettings: null, activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, contextPanel: 'wiki', activeDocumentId: null, monitoringJobId: null, composerDraft: '', composerMode: 'auto' };
+const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, toolSettings: null, mcpSettings: null, customizeTab: 'tools', activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, contextPanel: 'wiki', activeDocumentId: null, monitoringJobId: null, composerDraft: '', composerMode: 'auto' };
 let authRegister = false;
 const roleRank = Object.freeze({ viewer: 10, editor: 20, admin: 30, owner: 40 });
 const canRole = (required) => (roleRank[state.role] || 0) >= roleRank[required];
@@ -240,7 +240,7 @@ function renderSessionRail(project) {
 function renderAgentMessage(message) {
   const isUser = message.role === 'user';
   const meta = [message.mode ? sessionModeLabel(message.mode) : '', message.status || '', formatDateTime(message.createdAt)].filter(Boolean).join(' · ');
-  const tools = (message.toolCalls || []).map((call) => `<span class="message-tool ${call.status}">${escapeHtml(call.tool)} · ${escapeHtml(call.status)}</span>`).join('');
+  const tools = (message.toolCalls || []).map((call) => `<span class="message-tool ${call.status}">${escapeHtml(call.label || call.tool)} · ${escapeHtml(call.status)}</span>`).join('');
   return `<article class="agent-message ${isUser ? 'user' : 'assistant'} ${message.kind || 'message'}"><div class="message-author"><b>${isUser ? 'You' : 'Novi'}</b><span>${escapeHtml(meta)}</span></div><p>${escapeHtml(message.content)}</p>${tools ? `<div class="message-tools">${tools}</div>` : ''}${message.artifactId ? `<button class="message-artifact" data-artifact-id="${escapeHtml(message.artifactId)}">Open generated artifact</button>` : ''}</article>`;
 }
 
@@ -269,7 +269,7 @@ function renderContextBody(project, artifact, artifactIndex, selected) {
   if (!artifact) return '<div class="context-empty"><b>No artifact yet</b><p>Send a request in this Session to create the first knowledge asset.</p></div>';
   const tabs = tabsFor(project.type); const c = artifact.content;
   const toolCalls = artifact.workflow?.runtime?.toolCalls || [];
-  const toolProvenance = toolCalls.length ? `<section class="tool-provenance"><h3>Tool activity</h3>${toolCalls.map((call) => `<div><b>${escapeHtml(call.tool)}</b><span class="${call.status}">${escapeHtml(call.status)}</span><small>${escapeHtml(formatDateTime(call.completedAt || call.startedAt))}</small></div>`).join('')}</section>` : '';
+  const toolProvenance = toolCalls.length ? `<section class="tool-provenance"><h3>Tool activity</h3>${toolCalls.map((call) => `<div><b>${escapeHtml(call.label || call.tool)}</b><span class="${call.status}">${escapeHtml(call.status)}</span><small>${escapeHtml(formatDateTime(call.completedAt || call.startedAt))}</small></div>`).join('')}</section>` : '';
   return `${renderVersionToolbar(project, artifactIndex)}${state.compareVersions && project.artifacts[artifactIndex + 1] ? renderVersionComparison(project, artifactIndex) : ''}<div class="artifact-panel"><div class="artifact-tabs">${tabs.map((tab) => `<button class="artifact-tab ${selected === tab.key ? 'active' : ''}" data-artifact-tab="${tab.key}">${tab.label}</button>`).join('')}</div><div class="artifact-content">${renderArtifact(project, selected, c)}</div></div>${toolProvenance}`;
 }
 
@@ -567,14 +567,43 @@ function customToolRow(tool, index) {
   return `<article class="custom-tool-row" data-custom-tool-index="${index}" data-custom-tool-id="${escapeHtml(tool.id || '')}"><div class="tool-row-heading"><label class="tool-enabled"><input type="checkbox" name="enabled" ${tool.enabled !== false ? 'checked' : ''} /> Enabled</label><button type="button" class="text-button tool-remove" data-remove-tool="${index}">Remove</button></div><div class="tool-form-grid"><label>Name<input name="name" value="${escapeHtml(tool.name || '')}" maxlength="48" placeholder="literature_lookup" /></label><label>Endpoint<input name="endpoint" type="url" value="${escapeHtml(tool.endpoint || '')}" maxlength="500" placeholder="https://tools.example.com/invoke" /></label><label class="tool-wide">Description<input name="description" value="${escapeHtml(tool.description || '')}" maxlength="500" placeholder="Describe when the Agent should use this tool" /></label><label class="tool-wide">Bearer token <span class="optional">${tool.hasBearerToken ? `Stored · ends ${escapeHtml(tool.bearerTokenLast4 || '')}` : 'Optional'}</span><input name="bearerToken" type="password" maxlength="2000" autocomplete="new-password" /></label><label class="tool-wide">Input JSON Schema<textarea name="inputSchema" rows="7" spellcheck="false">${escapeHtml(JSON.stringify(schema, null, 2))}</textarea></label></div></article>`;
 }
 
-function renderCustomize() {
+function customizeTabs() {
+  return `<div class="customize-tabs" role="tablist"><button class="${state.customizeTab === 'tools' ? 'active' : ''}" data-customize-tab="tools" role="tab">Tools</button><button class="${state.customizeTab === 'mcp' ? 'active' : ''}" data-customize-tab="mcp" role="tab">MCP</button><button disabled role="tab">Skills</button><button disabled role="tab">Plugins</button></div>`;
+}
+
+function bindCustomizeTabs() {
+  $$('[data-customize-tab]').forEach((button) => button.onclick = () => { state.customizeTab = button.dataset.customizeTab; renderCustomize(); });
+}
+
+function renderToolsCustomize() {
   const settings = state.toolSettings || { builtins: [], customTools: [] };
   const builtins = settings.builtins.map((tool) => `<label class="builtin-tool"><input type="checkbox" data-builtin-tool="${escapeHtml(tool.name)}" ${tool.enabled ? 'checked' : ''} /><span><b>${escapeHtml(tool.label)}</b><small>${escapeHtml(tool.description)}</small></span></label>`).join('');
   const customTools = settings.customTools.map(customToolRow).join('');
-  $('#customize-root').innerHTML = `<div class="customize-heading"><div><p class="eyebrow">AGENT RUNTIME</p><h1>Customize</h1><p>Control the tools available to Agent runs in this organization.</p></div><button class="primary-button" id="save-tools" ${canRole('admin') ? '' : 'disabled'}>Save tools</button></div><div class="customize-tabs" role="tablist"><button class="active" role="tab">Tools</button><button disabled role="tab">MCP</button><button disabled role="tab">Skills</button><button disabled role="tab">Plugins</button></div><section class="customize-section"><div class="section-head"><div><h2>Built-in tools</h2><p>Workspace access stays within the current tenant and project.</p></div></div><div class="builtin-tool-grid">${builtins || '<p class="muted">Loading built-in tools...</p>'}</div></section><section class="customize-section"><div class="section-head"><div><h2>Custom HTTP tools</h2><p>Endpoints must use an allowed HTTPS hostname and return no more than 32 KB.</p></div><button class="secondary-button" id="add-custom-tool" type="button">Add tool</button></div><div id="custom-tool-list" class="custom-tool-list">${customTools || '<div class="context-empty"><b>No custom tools</b><p>Add an allowlisted HTTP endpoint when this organization needs a domain-specific action.</p></div>'}</div><p class="form-error" id="tools-error"></p></section>`;
+  $('#customize-root').innerHTML = `<div class="customize-heading"><div><p class="eyebrow">AGENT RUNTIME</p><h1>Customize</h1><p>Control the tools available to Agent runs in this organization.</p></div><button class="primary-button" id="save-tools" ${canRole('admin') ? '' : 'disabled'}>Save tools</button></div>${customizeTabs()}<section class="customize-section"><div class="section-head"><div><h2>Built-in tools</h2><p>Workspace access stays within the current tenant and project.</p></div></div><div class="builtin-tool-grid">${builtins || '<p class="muted">Loading built-in tools...</p>'}</div></section><section class="customize-section"><div class="section-head"><div><h2>Custom HTTP tools</h2><p>Endpoints must use an allowed HTTPS hostname and return no more than 32 KB.</p></div><button class="secondary-button" id="add-custom-tool" type="button">Add tool</button></div><div id="custom-tool-list" class="custom-tool-list">${customTools || '<div class="context-empty"><b>No custom tools</b><p>Add an allowlisted HTTP endpoint when this organization needs a domain-specific action.</p></div>'}</div><p class="form-error" id="tools-error"></p></section>`;
   $('#add-custom-tool').onclick = () => { state.toolSettings.customTools.push({ enabled: true, name: '', description: '', endpoint: '', inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string', maxLength: 500 } }, required: ['query'] } }); renderCustomize(); };
   $$('[data-remove-tool]').forEach((button) => button.onclick = () => { state.toolSettings.customTools.splice(Number(button.dataset.removeTool), 1); renderCustomize(); });
   $('#save-tools').onclick = saveTools;
+  bindCustomizeTabs();
+}
+
+function mcpServerRow(server, index) {
+  const tools = (server.discoveredTools || []).map((tool) => `<label class="mcp-tool ${tool.supported === false ? 'unsupported' : ''}"><input type="checkbox" data-mcp-tool="${escapeHtml(tool.name)}" ${tool.enabled ? 'checked' : ''} ${tool.supported === false ? 'disabled' : ''} /><span><b>${escapeHtml(tool.title || tool.name)}</b><small>${escapeHtml(tool.description || tool.name)}</small><i>${tool.annotations?.destructiveHint ? 'Destructive' : tool.annotations?.readOnlyHint ? 'Read only' : 'No safety hint'}${tool.supported === false ? ` · ${escapeHtml(tool.unsupportedReason || 'Unsupported')}` : ''}</i></span></label>`).join('');
+  const syncStatus = server.lastSyncedAt ? `${server.discoveredTools?.length || 0} tools · ${formatDateTime(server.lastSyncedAt)}` : 'Not discovered';
+  return `<article class="custom-tool-row mcp-server-row" data-mcp-server-index="${index}" data-mcp-server-id="${escapeHtml(server.id || '')}"><div class="tool-row-heading"><label class="tool-enabled"><input type="checkbox" name="enabled" ${server.enabled !== false ? 'checked' : ''} /> Enabled</label><span class="mcp-sync-status">${escapeHtml(syncStatus)}</span><button type="button" class="text-button tool-remove" data-remove-mcp="${index}">Remove</button></div><div class="tool-form-grid"><label>Name<input name="name" value="${escapeHtml(server.name || '')}" maxlength="80" placeholder="Research services" /></label><label>Streamable HTTP endpoint<input name="endpoint" type="url" value="${escapeHtml(server.endpoint || '')}" maxlength="500" placeholder="https://mcp.example.com/mcp" /></label><label class="tool-wide">Bearer token <span class="optional">${server.hasBearerToken ? `Stored · ends ${escapeHtml(server.bearerTokenLast4 || '')}` : 'Optional'}</span><input name="bearerToken" type="password" maxlength="2000" autocomplete="new-password" /></label></div><div class="mcp-server-actions"><button class="secondary-button" type="button" data-sync-mcp="${index}">Save &amp; discover</button><span>${escapeHtml(server.serverInfo?.name || '')}${server.serverInfo?.version ? ` · ${escapeHtml(server.serverInfo.version)}` : ''}</span></div><div class="mcp-tools-grid">${tools || '<div class="context-empty"><b>No discovered tools</b><p>Save and discover this server, then explicitly enable the tools the Agent may call.</p></div>'}</div></article>`;
+}
+
+function renderMcpCustomize() {
+  const settings = state.mcpSettings || { servers: [] };
+  $('#customize-root').innerHTML = `<div class="customize-heading"><div><p class="eyebrow">AGENT RUNTIME</p><h1>Customize</h1><p>Connect governed MCP servers and authorize their tools.</p></div><button class="primary-button" id="save-mcp" ${canRole('admin') ? '' : 'disabled'}>Save MCP</button></div>${customizeTabs()}<section class="customize-section"><div class="section-head"><div><h2>MCP servers</h2><p>Streamable HTTP tools are namespaced and enter ReAct, Plan &amp; Execute, and Supervisor only after explicit approval.</p></div><button class="secondary-button" id="add-mcp-server" type="button">Add server</button></div><div id="mcp-server-list" class="custom-tool-list">${settings.servers.map(mcpServerRow).join('') || '<div class="context-empty"><b>No MCP servers</b><p>Add an allowlisted Streamable HTTP endpoint to discover its tools.</p></div>'}</div><p class="form-error" id="mcp-error"></p></section>`;
+  $('#add-mcp-server').onclick = () => { state.mcpSettings.servers.push({ enabled: true, name: '', endpoint: '', discoveredTools: [] }); renderCustomize(); };
+  $$('[data-remove-mcp]').forEach((button) => button.onclick = () => { state.mcpSettings.servers.splice(Number(button.dataset.removeMcp), 1); renderCustomize(); });
+  $$('[data-sync-mcp]').forEach((button) => button.onclick = () => saveMcp(Number(button.dataset.syncMcp)));
+  $('#save-mcp').onclick = () => saveMcp();
+  bindCustomizeTabs();
+}
+
+function renderCustomize() {
+  if (state.customizeTab === 'mcp') renderMcpCustomize(); else renderToolsCustomize();
 }
 
 async function openCustomize() {
@@ -584,7 +613,10 @@ async function openCustomize() {
   $('#page-label').textContent = 'Customize';
   $$('.nav-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.view === 'customize'));
   $('#customize-root').innerHTML = '<p class="muted">Loading Agent tools...</p>';
-  try { state.toolSettings = (await request('/api/agent/tools')).settings; renderCustomize(); }
+  try {
+    const [tools, mcp] = await Promise.all([request('/api/agent/tools'), request('/api/agent/mcp')]);
+    state.toolSettings = tools.settings; state.mcpSettings = mcp.settings; renderCustomize();
+  }
   catch (error) { $('#customize-root').innerHTML = `<p class="form-error">${escapeHtml(error.message)}</p>`; }
 }
 
@@ -600,6 +632,26 @@ async function saveTools() {
     const result = await request('/api/agent/tools', { method: 'PUT', body: JSON.stringify({ builtins, customTools }) });
     state.toolSettings = result.settings; renderCustomize(); showToast('Agent tools saved');
   } catch (saveError) { error.textContent = saveError.message; }
+}
+
+function mcpPayload() {
+  return { servers: $$('.mcp-server-row').map((row) => ({ id: row.dataset.mcpServerId || undefined, name: $('[name="name"]', row).value.trim(), endpoint: $('[name="endpoint"]', row).value.trim(), bearerToken: $('[name="bearerToken"]', row).value || undefined, enabled: $('[name="enabled"]', row).checked, enabledTools: $$('[data-mcp-tool]:checked', row).map((input) => input.dataset.mcpTool) })) };
+}
+
+async function saveMcp(discoverIndex = null) {
+  $('#mcp-error').textContent = '';
+  try {
+    const result = await request('/api/agent/mcp', { method: 'PUT', body: JSON.stringify(mcpPayload()) });
+    state.mcpSettings = result.settings;
+    if (discoverIndex !== null) {
+      const server = state.mcpSettings.servers[discoverIndex];
+      if (!server) throw new Error('MCP server was not saved');
+      renderCustomize();
+      state.mcpSettings = (await request(`/api/agent/mcp/servers/${encodeURIComponent(server.id)}/sync`, { method: 'POST' })).settings;
+      showToast('MCP tools discovered');
+    } else showToast('MCP settings saved');
+    renderCustomize();
+  } catch (saveError) { const error = $('#mcp-error'); if (error) error.textContent = saveError.message; }
 }
 
 $('#new-project').onclick = () => openModal(); $('#heading-new').onclick = () => openModal(); $('#empty-new').onclick = () => openModal(); $('#modal-close').onclick = closeModal; $('.modal-backdrop').onclick = closeModal; $('#snapshot-close').onclick = () => $('#snapshot-modal').classList.add('hidden'); $$('[data-close-snapshots]').forEach((node) => node.onclick = () => $('#snapshot-modal').classList.add('hidden'));

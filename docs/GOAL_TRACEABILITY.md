@@ -21,11 +21,11 @@
 | Continuous Update | 每日发现论文、技术和 GitHub 变化后自动更新 Wiki/成果 | snapshot diff → quota/Job → RAG → immutable artifact；busy/quota/failed 重试 | 已实现 |
 | 商业方案 | Personal $20–50、Pro Research 约 $100、Enterprise $1000+ | Personal $29、Pro $99、Enterprise $1000 起；额度目录、管理员定价 UI、真实 payment-provider checkout 边界 | 已实现；真实支付沙盒/对账待取证 |
 | Web UI + Desktop UI | 两个交付面共享完整产品能力 | `public/`、Electron 安全窗口、AppImage 打包态 smoke | Linux 已实现；Windows/macOS 签名安装升级待取证 |
-| 数据采集架构建议 | Crawler、API Connector、Browser Agent、MCP Connector | 安全 HTTP/PDF/GitHub crawler 与 API connectors；`src/source-adapters.mjs` 提供服务端隔离 JS-rendered Browser Agent 导入和通用 MCP Streamable HTTP source adapter，带 SSRF/HTTPS/凭据/超时/大小/字段白名单及 provider contract | 已实现适配边界；目标 Browser/MCP 服务仍需凭据与生产取证 |
+| 数据采集架构建议 | Crawler、API Connector、Browser Agent、MCP Connector | 安全 HTTP/PDF/GitHub crawler 与 API connectors；`src/source-adapters.mjs` 提供固定来源 MCP adapter，把 concrete URL 纳入统一 evidence 管线；`src/mcp-runtime.mjs` 另提供租户配置、逐工具授权的通用 Agent MCP Streamable HTTP runtime。两条路径均带 HTTPS/allowlist、凭据、超时、大小和不可信输入边界 | 源码与本地协议契约已实现；目标 Browser/MCP 服务仍需真实凭据与生产取证 |
 | 可正式收费商用 | 真实供应商、目标基础设施、容量、灾备、安全、签名与领域质量均有证据 | `docs/COMMERCIAL_READINESS.md` 第 3 节 | 未完成，外部门禁 |
 
 ## 判定原则
 
 - `goal.md` 中三条产品路径、Knowledge OS、持续更新、商业方案、Web/Desktop 是交付范围，必须由运行行为或自动化证明。
-- Browser Agent 与 MCP Connector 位于“技术架构建议”；当前已提供受控 worker HTTP contract、凭据隔离、MCP 协商和本地协议契约。只有在目标 Browser worker/MCP server 完成真实凭据、网络策略、容量和内容质量取证后，才能宣称对应供应商已在生产可用。
+- Browser Agent 与 MCP Connector 位于“技术架构建议”；当前 MCP 包含两种互不替代的能力：固定来源 adapter 只允许配置工具返回 concrete URL 并继续走 evidence verification，通用 Agent MCP runtime 则把管理员显式启用的普通 Tools 作为不可信 observation 交给自主模式。两者都已有本地协议契约；只有在目标 Browser worker/MCP server 完成真实凭据、网络策略、容量和内容质量取证后，才能宣称对应服务已在生产可用。
 - 本地 fake provider 只能验证协议和安全边界，不能替代真实 LLM、支付、OIDC、托管存储或领域质量验收。

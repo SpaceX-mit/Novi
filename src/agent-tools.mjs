@@ -4,6 +4,7 @@ import { ingestDocument } from './knowledge.mjs';
 import { decryptApiKey, encryptApiKey } from './llm-providers.mjs';
 import { searchKnowledgeSources } from './connectors.mjs';
 import { verifyEvidenceSources } from './evidence.mjs';
+import { invokeMcpTool } from './mcp-runtime.mjs';
 
 const BUILTIN_TOOLS = Object.freeze([
   { name: 'workspace_read', label: 'Workspace read', description: 'Retrieve relevant passages from documents in the current workspace.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 500 }, limit: { type: 'number' } } } },
@@ -81,7 +82,7 @@ export async function saveToolSettings(state, tenantId, userId, input = {}) {
   for (const candidate of input.customTools || []) {
     const id = clean(candidate.id, 100) || randomUUID();
     const name = clean(candidate.name, 48);
-    if (!customNamePattern.test(name) || names.has(name)) throw new Error(`Custom tool name ${name || '(empty)'} is invalid or duplicated`);
+    if (!customNamePattern.test(name) || name.startsWith('mcp__') || names.has(name)) throw new Error(`Custom tool name ${name || '(empty)'} is invalid, reserved, or duplicated`);
     names.add(name);
     const description = clean(candidate.description, 500);
     if (!description) throw new Error(`Custom tool ${name} requires a description`);
@@ -151,6 +152,7 @@ async function boundedResponse(response) {
 
 export function createToolExecutor({ store, project, principal, allowWebSearch = false, fetchImpl = globalThis.fetch }) {
   return async (definition, rawInput) => {
+    if (definition.kind === 'mcp') return { result: await invokeMcpTool(definition, rawInput, { fetchImpl }) };
     const input = validatedInput(definition.inputSchema, rawInput);
     if (definition.name === 'workspace_read') {
       const results = await store.searchKnowledge(project.id, principal.tenantId, input.query, Math.max(1, Math.min(10, Number(input.limit) || 5)));

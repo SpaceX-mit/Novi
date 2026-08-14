@@ -11,6 +11,7 @@ Novi Application Server
   |-- Project API
   |-- Agent Session API + conversation/run persistence
   |-- Tenant LLM Provider API + encrypted credential store
+  |-- Tenant Agent Tools/MCP API + encrypted credential store
   |-- LangGraph Agent Runtime (intent router / Workflow / ReAct / Plan & Execute / Supervisor)
   |-- Knowledge Intelligence Engine
   |-- Export Service
@@ -40,6 +41,8 @@ Query planning -> Connectors -> Parse/deduplicate -> Validate URL -> Rank eviden
 
 Agent Runtime 保留 Research、Knowledge、Writing、Review 四种受控职责，并在外层增加意图路由与四种执行模式。Workflow 按固定顺序执行；ReAct controller 每次根据当前观察决定下一职责或结束；Plan & Execute 先产生最多 8 步的受限计划再执行；Supervisor 可重新分派职责。Controller 可返回新模式，阶段 fallback 也会触发 Supervisor，因此运行中可重新调度；总 Specialist 执行次数上限为 8，单职责最多两次。每个 Specialist 仍只能修改字段白名单内、与离线草稿结构相同的数据。来源、个人知识上下文和 evidence 始终由 Novi 控制，不允许模型添加来源或执行检索片段中的指令。每个不可变成果固化 initial/final mode、mode history、plan、controller event、provider/model、职责状态和 token 使用；异步 Job 同步暴露当前模式、阶段和进度。未配置 Web Provider 时保留确定性离线流程。
 
+`src/agent-tools.mjs` 向自主模式提供统一的租户/项目工具注册表，包含内置工具、自定义 HTTP 工具和已授权 MCP 工具。`src/mcp-runtime.mjs` 使用官方 MCP SDK 连接租户配置的 Streamable HTTP server，发现后生成稳定的 `mcp__...` 命名空间别名；新发现工具默认关闭，只有 owner/admin 逐项启用后才会进入 ReAct、Plan & Execute、Supervisor 的 tool node。每次运行仍共享最多 6 次工具调用的硬上限，调用记录进入 Job、Session 和 Artifact。MCP 返回值是不可执行、不可信 observation，不直接进入 verified evidence；图片和音频不会送入模型上下文。MCP Tasks、OAuth browser flow、stdio、prompts/resources 直接注入暂不支持。
+
 `src/agent-sessions.mjs` 在 Project 之上提供持久对话边界。项目创建时生成默认 Session；同步/异步生成把用户消息、当前 mode/stage/progress、失败信息和 Artifact 引用写入同一个 Session，Job 保存 `sessionId` 和用户消息 ID。Session 同时约束 `tenantId + projectId`，跨项目或跨租户查询统一 404，运行中不可删除；项目/账户删除级联清理。服务重启不会恢复 LangGraph 节点，但会把中断 Job 对应 Session 写成失败并解除 active run，使会话可继续使用。Web 工作区以 Session rail、Conversation composer 和 Files/LLM Wiki/Document inspector 三个可响应区域呈现该状态；页面重开时若 active run 仍存在，会从 Job API 恢复轮询。
 
 `src/llm-providers.mjs` 提供主流厂商目录和 LangChain chat model 适配，包括国内 MiniMax（固定 `https://api.minimaxi.com/v1`）和 DeepSeek。Provider 配置按租户保存且只允许 owner/admin 访问；API Key 使用 AES-256-GCM 加密，响应和账户导出只暴露 `hasApiKey` 与末四位。固定厂商 endpoint 不允许改写，Ollama 仅回环，自定义远端 endpoint 必须是 HTTPS 且主机列入部署 allowlist。Web 配置优先于旧 `NOVI_LLM_*` 单次网关。当前 LangGraph 使用 `MemorySaver`，用于单次执行的 thread checkpoint；Job 和最终阶段状态由 Novi Repository 持久化，但图节点 checkpoint 尚不能跨服务重启恢复。
@@ -58,6 +61,7 @@ Agent Runtime 保留 Research、Knowledge、Writing、Review 四种受控职责�
 - Payment Adapter：checkout 只代理已配置 provider，webhook 在 HMAC 验证和事件去重后更新订阅；本地未配置时不模拟收费。
 - Browser Agent：主服务不加载远程脚本；目标 URL 先做 DNS/SSRF 校验，再交给隔离 HTTP worker。worker 使用独立 bearer credential、阻断高成本资源并返回有界纯文本；最终 URL 再次校验后才进入普通摄取流程。
 - MCP Source Adapter：主服务作为 MCP Streamable HTTP client 执行 initialize/list/call，只允许配置的已公布工具和固定 `{query,limit}` 参数；只采纳结构化无凭据 HTTP(S) URL，MCP 元数据不绕过 Novi 的排序与 evidence verification。
+- Agent MCP Runtime：每个租户最多保存 5 个 Streamable HTTP server，通过官方 SDK 发现最多 100 个工具/server，管理员逐工具授权后并入 Agent registry；Bearer token 加密保存，远端 endpoint 受 HTTPS/host allowlist 约束，调用受 schema、超时和响应大小限制。它不替代固定来源 MCP adapter，普通 tool observation 也不自动获得 evidence 身份。
 - External projection worker：对象存储和 Neo4j 的 upsert/delete intent 与文档事务同写 outbox；每次任务有状态、尝试次数、下一次执行时间和错误摘要，外部调用成功后回写 `objectProjection`/`graphProjection`，删除任务即使主数据已删除仍保留至完成；任务审计不包含原文内容。
 - Organization/RBAC：用户通过 membership 绑定 tenant，owner/admin/editor/viewer 由服务端在每次请求重新计算；移除 membership 立即使现有会话失效，生成 worker 提交成果前也复核 active membership；Web 根据同一角色矩阵隐藏越权写控件，但不把客户端判断当作安全边界。
 - OIDC SSO：服务端 discovery、code exchange 和 userinfo 均通过 HTTPS provider；state/nonce 哈希仅存服务端且一次性消费，回调不把 token 放入 URL。
@@ -66,7 +70,7 @@ Agent Runtime 保留 Research、Knowledge、Writing、Review 四种受控职责�
 
 ## 4. 安全架构
 
-当前 API 在强制认证模式下按 `tenantId` 隔离项目、Job、向量检索、导出和审计，支持用户数据导出与账户删除；生产版所有查询仍必须在数据库策略层强制隔离。连接器运行于网络和文件系统受限的 worker；Browser Agent/MCP endpoint 仅允许 HTTPS（回环开发例外），生产非回环服务必须使用独立 token，响应受超时与 1 MB 上限约束。远程/工作区/MCP 内容视为不可信输入，模型 system/user 消息明确禁止执行片段指令，且片段与 verified web evidence 分离；密钥进入 secret manager；成果保留来源、许可证、采集时间与内容哈希。
+当前 API 在强制认证模式下按 `tenantId` 隔离项目、Job、向量检索、导出和审计，支持用户数据导出与账户删除；生产版所有查询仍必须在数据库策略层强制隔离。连接器运行于网络和文件系统受限的 worker；Browser Agent/MCP endpoint 仅允许 HTTPS（回环开发例外），生产非回环服务必须使用独立 token。固定来源 adapter 响应受超时与 1 MB 上限约束，Agent MCP POST 响应上限为 256 KB、超时最多 30 秒。远程/工作区/MCP 内容视为不可信输入，模型 system/user 消息明确禁止执行片段指令，且片段与 verified web evidence 分离；密钥进入 secret manager；成果保留来源、许可证、采集时间与内容哈希。
 
 ## 5. 扩展与可靠性
 

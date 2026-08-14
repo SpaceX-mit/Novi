@@ -33,6 +33,10 @@ import { runAgentWorkflow } from '../src/agent-runtime.mjs';
 import { agentModeCatalog, selectAgentMode } from '../src/agent-modes.mjs';
 import { appendSessionMessage, beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, sessionSummary, updateSessionRun } from '../src/agent-sessions.mjs';
 import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings } from '../src/agent-tools.mjs';
+import { discoverMcpServer, invokeMcpTool, publicMcpSettings, resolvedMcpTools, saveMcpSettings, validateMcpEndpoint } from '../src/mcp-runtime.mjs';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import * as z from 'zod/v4';
 
 test('engine generates complete artifacts for all product paths', () => {
   const base = { id: 'p', title: 'Agent OS', topic: 'Agent OS security', description: 'Study threat models' };
@@ -188,6 +192,74 @@ test('Agent tools validate, encrypt, execute, and remain tenant/project scoped',
   await assert.rejects(() => oversizedExecutor(tools.find((tool) => tool.name === 'domain_lookup'), { query: 'runtime' }), /exceeds 32 KB/);
 });
 
+test('generic Agent MCP runtime discovers, namespaces, validates, and invokes official Streamable HTTP tools', async (t) => {
+  const previous = { encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY, allowed: process.env.NOVI_MCP_ALLOWED_HOSTS, timeout: process.env.NOVI_MCP_TIMEOUT_MS };
+  process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-agent-mcp-encryption-key-with-32-chars'; process.env.NOVI_MCP_TIMEOUT_MS = '5000';
+  let calls = 0; let authorization;
+  const mcpHttp = http.createServer(async (req, res) => {
+    authorization = req.headers.authorization;
+    if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
+    let body = ''; for await (const chunk of req) body += chunk;
+    const mcp = new McpServer({ name: 'test-agent-mcp', version: '1.2.3' });
+    mcp.registerTool('domain.lookup', { title: 'Domain lookup', description: 'Returns bounded domain evidence', inputSchema: { query: z.string().min(1).max(100) }, annotations: { readOnlyHint: true, destructiveHint: false } }, async ({ query }) => { calls += 1; return { structuredContent: { answer: `Evidence for ${query}` }, content: [{ type: 'text', text: `Result for ${query}` }] }; });
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    await mcp.connect(transport);
+    try { await transport.handleRequest(req, res, body ? JSON.parse(body) : undefined); }
+    finally { res.on('close', () => { transport.close(); mcp.close(); }); }
+  });
+  await new Promise((resolve) => mcpHttp.listen(0, '127.0.0.1', resolve)); t.after(() => mcpHttp.close());
+  const endpoint = `http://127.0.0.1:${mcpHttp.address().port}/mcp`;
+  const state = { mcpServerConfigs: [] };
+  try {
+    assert.throws(() => validateMcpEndpoint('https://unlisted.example/mcp'), /NOVI_MCP_ALLOWED_HOSTS/);
+    const saved = await saveMcpSettings(state, 'tenant', 'owner', { servers: [{ name: 'Research MCP', endpoint, bearerToken: 'mcp-runtime-secret', enabled: true, enabledTools: [] }] });
+    assert.equal(saved.servers[0].hasBearerToken, true); assert.equal('encryptedBearerToken' in saved.servers[0], false); assert.doesNotMatch(state.mcpServerConfigs[0].encryptedBearerToken, /mcp-runtime-secret/);
+    const discovered = await discoverMcpServer(state.mcpServerConfigs[0]);
+    assert.equal(discovered.serverInfo.name, 'test-agent-mcp'); assert.equal(discovered.tools.length, 1); assert.equal(discovered.tools[0].name, 'domain.lookup'); assert.equal(discovered.tools[0].annotations.readOnlyHint, true); assert.match(discovered.tools[0].alias, /^mcp__research_mcp__/);
+    state.mcpServerConfigs[0].discoveredTools = discovered.tools.map((tool) => ({ ...tool, enabled: true })); state.mcpServerConfigs[0].serverInfo = discovered.serverInfo;
+    const resolved = await resolvedMcpTools(state, 'tenant'); assert.equal(resolved.length, 1); assert.equal(resolved[0].kind, 'mcp'); assert.equal(resolved[0].bearerToken, 'mcp-runtime-secret');
+    const result = await invokeMcpTool(resolved[0], { query: 'sandbox' }); assert.equal(result.structuredContent.answer, 'Evidence for sandbox'); assert.equal(result.content[0].text, 'Result for sandbox'); assert.equal(calls, 1); assert.equal(authorization, 'Bearer mcp-runtime-secret');
+    await assert.rejects(() => invokeMcpTool(resolved[0], { query: '' }), /schema validation/);
+    const publicSettings = publicMcpSettings(state, 'tenant'); assert.equal('encryptedBearerToken' in publicSettings.servers[0], false); assert.equal(publicSettings.servers[0].hasBearerToken, true);
+    const originalId = state.mcpServerConfigs[0].id;
+    await assert.rejects(() => saveMcpSettings(state, 'tenant', 'owner', { servers: [{ id: originalId, name: 'First', endpoint, enabledTools: [] }, { id: originalId, name: 'Second', endpoint: new URL('/other', endpoint).toString(), enabledTools: [] }] }), /ID is duplicated/);
+    let renamed = await saveMcpSettings(state, 'tenant', 'owner', { servers: [{ id: originalId, name: 'Renamed MCP', endpoint, enabled: true, enabledTools: ['domain.lookup'] }] });
+    assert.equal(renamed.servers[0].hasBearerToken, true); assert.match(renamed.servers[0].discoveredTools[0].alias, /^mcp__renamed_mcp__/);
+    const changedEndpoint = new URL(endpoint); changedEndpoint.port = String(Number(changedEndpoint.port) + 1);
+    renamed = await saveMcpSettings(state, 'tenant', 'owner', { servers: [{ id: originalId, name: 'Renamed MCP', endpoint: changedEndpoint.toString(), enabled: true, enabledTools: ['domain.lookup'] }] });
+    assert.equal(renamed.servers[0].hasBearerToken, false); assert.equal(renamed.servers[0].discoveredTools.length, 0);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { const env = { encryption: 'NOVI_CONFIG_ENCRYPTION_KEY', allowed: 'NOVI_MCP_ALLOWED_HOSTS', timeout: 'NOVI_MCP_TIMEOUT_MS' }[key]; if (value === undefined) delete process.env[env]; else process.env[env] = value; }
+  }
+});
+
+test('MCP configuration API saves encrypted servers, discovers tools, and requires explicit enablement', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'novi-mcp-api-'));
+  const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY, timeout: process.env.NOVI_MCP_TIMEOUT_MS };
+  process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-mcp-api-encryption-key-with-32-chars'; process.env.NOVI_MCP_TIMEOUT_MS = '5000';
+  const mcpHttp = http.createServer(async (req, res) => {
+    if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
+    let body = ''; for await (const chunk of req) body += chunk;
+    const mcp = new McpServer({ name: 'api-mcp', version: '2.0.0' });
+    mcp.registerTool('search.docs', { description: 'Search internal documentation', inputSchema: { query: z.string() }, annotations: { readOnlyHint: true } }, async ({ query }) => ({ content: [{ type: 'text', text: query }] }));
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true }); await mcp.connect(transport);
+    try { await transport.handleRequest(req, res, JSON.parse(body)); } finally { res.on('close', () => { transport.close(); mcp.close(); }); }
+  });
+  await new Promise((resolve) => mcpHttp.listen(0, '127.0.0.1', resolve));
+  const novi = createServer(); await new Promise((resolve) => novi.listen(0, '127.0.0.1', resolve));
+  t.after(() => { mcpHttp.close(); novi.close(); for (const [key, value] of Object.entries(previous)) { const env = { file: 'NOVI_DATA_FILE', auth: 'NOVI_AUTH_REQUIRED', encryption: 'NOVI_CONFIG_ENCRYPTION_KEY', timeout: 'NOVI_MCP_TIMEOUT_MS' }[key]; if (value === undefined) delete process.env[env]; else process.env[env] = value; } });
+  const base = `http://127.0.0.1:${novi.address().port}`; const endpoint = `http://127.0.0.1:${mcpHttp.address().port}/mcp`;
+  let response = await fetch(`${base}/api/agent/mcp`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ servers: [{ name: 'Docs', endpoint, bearerToken: 'mcp-api-secret', enabled: true, enabledTools: [] }] }) });
+  assert.equal(response.status, 200); let settings = (await response.json()).settings; const serverId = settings.servers[0].id; assert.equal(settings.servers[0].hasBearerToken, true); assert.equal('encryptedBearerToken' in settings.servers[0], false);
+  response = await fetch(`${base}/api/agent/mcp/servers/${serverId}/sync`, { method: 'POST' }); assert.equal(response.status, 200); settings = (await response.json()).settings;
+  assert.equal(settings.servers[0].serverInfo.name, 'api-mcp'); assert.equal(settings.servers[0].discoveredTools.length, 1); assert.equal(settings.servers[0].discoveredTools[0].enabled, false);
+  response = await fetch(`${base}/api/agent/mcp`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ servers: [{ id: serverId, name: 'Docs', endpoint, enabled: true, enabledTools: ['search.docs'] }] }) }); assert.equal(response.status, 200);
+  settings = (await response.json()).settings; assert.equal(settings.servers[0].discoveredTools[0].enabled, true); assert.equal(settings.servers[0].hasBearerToken, true);
+  response = await fetch(`${base}/api/agent/mcp`); const fetched = await response.json(); assert.equal(fetched.configurable, true); assert.equal(fetched.settings.servers[0].discoveredTools[0].enabled, true);
+  const raw = await readFile(process.env.NOVI_DATA_FILE, 'utf8'); assert.doesNotMatch(raw, /mcp-api-secret/); assert.match(raw, /encryptedBearerToken/);
+  const exported = await (await fetch(`${base}/api/me/export`)).json(); assert.equal(exported.mcpSettings.servers[0].hasBearerToken, true); assert.equal('encryptedBearerToken' in exported.mcpSettings.servers[0], false);
+});
+
 test('ReAct, Plan and Supervisor execute bounded Agent tool observations', async (t) => {
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
@@ -198,7 +270,8 @@ test('ReAct, Plan and Supervisor execute bounded Agent tool observations', async
       const completed = JSON.parse(prompt.match(/Completed stages: (\[[^\]]*\])/u)?.[1] || '[]');
       const noObservation = prompt.includes('Tool observations: []'); const exhaust = prompt.includes('exhaust tools'); const toolAvailable = /Allowed next values: [^.]*\btool\b/u.test(prompt);
       const next = noObservation || (exhaust && toolAvailable) ? 'tool' : ['research', 'knowledge', 'writing', 'review'].find((stage) => !completed.includes(stage)) || 'finish';
-      content = JSON.stringify({ next, mode: system.includes('ReAct') ? 'react' : 'supervisor', reason: 'bounded decision', ...(next === 'tool' ? { tool: { name: 'workspace_read', input: { query: 'runtime evidence' } } } : {}) });
+      const selectedTool = prompt.match(/"name":"(mcp__[^"]+)"/u)?.[1] || 'workspace_read';
+      content = JSON.stringify({ next, mode: system.includes('ReAct') ? 'react' : 'supervisor', reason: 'bounded decision', ...(next === 'tool' ? { tool: { name: selectedTool, input: { query: 'runtime evidence' } } } : {}) });
     } else {
       const marker = 'Editable schema and current draft: '; const line = prompt.split('\n').find((value) => value.startsWith(marker)); const editable = line ? JSON.parse(line.slice(marker.length)) : {}; const key = Object.keys(editable)[0]; content = JSON.stringify(key ? { [key]: editable[key] } : {});
     }
@@ -216,6 +289,9 @@ test('ReAct, Plan and Supervisor execute bounded Agent tool observations', async
   }
   const bounded = await runAgentWorkflow(project, fallback, config, { mode: 'react', prompt: 'exhaust tools then finish', tools, toolExecutor: async () => ({ result: { ok: true } }) });
   assert.equal(bounded.runtime.toolCalls.length, 6); assert.ok(bounded.stages.length >= 4);
+  const mcpTools = [{ name: 'mcp__docs__lookup_1234abcd', label: 'Docs / Lookup', description: 'MCP documentation lookup', kind: 'mcp', serverId: 'mcp-server', serverName: 'Docs', inputSchema: tools[0].inputSchema }];
+  const mcpResult = await runAgentWorkflow(project, fallback, config, { mode: 'react', prompt: 'Use the MCP documentation tool', tools: mcpTools, toolExecutor: async () => ({ result: { answer: 'MCP observation' } }) });
+  assert.equal(mcpResult.runtime.toolCalls[0].kind, 'mcp'); assert.equal(mcpResult.runtime.toolCalls[0].label, 'Docs / Lookup'); assert.equal(mcpResult.runtime.toolCalls[0].serverName, 'Docs');
 });
 
 test('LLM provider configuration is encrypted, endpoint-restricted, and resolved without exposing the key', async () => {
@@ -1156,11 +1232,13 @@ test('backup and restore preserve only supported Novi state atomically', async (
   const restoredPath = join(dir, 'restored.json');
   const store = new JsonStore(storePath);
   await store.createProject({ title: 'Backup', topic: 'Recovery', type: 'knowledge' });
+  await store.update((state) => { state.mcpServerConfigs.push({ id: 'backup-mcp', tenantId: 'local', name: 'Backup MCP', endpoint: 'http://127.0.0.1:9000/mcp', transport: 'streamable-http', enabled: false, discoveredTools: [] }); });
   await backupStore(storePath, backupPath);
   await restoreStore(backupPath, restoredPath);
   const restored = JSON.parse(await readFile(restoredPath, 'utf8'));
   assert.equal(restored.version, 3);
   assert.equal(restored.projects[0].title, 'Backup');
+  assert.equal(restored.mcpServerConfigs[0].name, 'Backup MCP');
   assert.equal((await stat(backupPath)).mode & 0o777, 0o600);
   assert.equal((await stat(restoredPath)).mode & 0o777, 0o600);
 });
@@ -1540,6 +1618,10 @@ test('organization invitations enforce RBAC and isolate editor/viewer actions', 
   assert.equal(response.status, 200); assert.equal((await response.json()).configurable, false);
   response = await fetch(`${base}/api/agent/tools`, { method: 'PUT', headers: { authorization: `Bearer ${switched.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ builtins: { workspace_read: false }, customTools: [] }) });
   assert.equal(response.status, 403);
+  response = await fetch(`${base}/api/agent/mcp`, { headers: { authorization: `Bearer ${switched.token}` } });
+  assert.equal(response.status, 200); assert.equal((await response.json()).configurable, false);
+  response = await fetch(`${base}/api/agent/mcp`, { method: 'PUT', headers: { authorization: `Bearer ${switched.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ servers: [] }) });
+  assert.equal(response.status, 403);
   response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { authorization: `Bearer ${switched.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Nope', topic: 'Nope', type: 'knowledge' }) });
   assert.equal(response.status, 403);
   response = await fetch(`${base}/api/billing/checkout`, { method: 'POST', headers: { authorization: `Bearer ${switched.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ plan: 'pro' }) });
@@ -1605,9 +1687,10 @@ test('account deletion removes knowledge, watch and snapshot data', async (t) =>
   const project = (await response.json()).project;
   await fetch(`${base}/api/projects/${project.id}/knowledge`, { method: 'POST', headers: { authorization: `Bearer ${account.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Note', content: 'Security notes' }) });
   await fetch(`${base}/api/projects/${project.id}/watch`, { method: 'PUT', headers: { authorization: `Bearer ${account.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true, frequency: 'weekly' }) });
+  response = await fetch(`${base}/api/agent/mcp`, { method: 'PUT', headers: { authorization: `Bearer ${account.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ servers: [{ name: 'Delete with tenant', endpoint: 'http://127.0.0.1:65530/mcp', enabled: false, enabledTools: [] }] }) }); assert.equal(response.status, 200);
   response = await fetch(`${base}/api/me`, { method: 'DELETE', headers: { authorization: `Bearer ${account.token}` } }); assert.equal(response.status, 204);
   const raw = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'));
-  assert.equal(raw.projects.length, 0); assert.equal(raw.agentSessions.length, 0); assert.equal(raw.documents.length, 0); assert.equal(raw.watchConfigs.length, 0); assert.equal(raw.sourceSnapshots.length, 0); assert.equal(raw.users.length, 0);
+  assert.equal(raw.projects.length, 0); assert.equal(raw.agentSessions.length, 0); assert.equal(raw.mcpServerConfigs.length, 0); assert.equal(raw.documents.length, 0); assert.equal(raw.watchConfigs.length, 0); assert.equal(raw.sourceSnapshots.length, 0); assert.equal(raw.users.length, 0);
 });
 
 test('metrics endpoint is admin-only and exposes operational counters', async (t) => {

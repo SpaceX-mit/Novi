@@ -18,6 +18,7 @@ export async function restoreStore(source, destination) {
   parsed.externalProjectionJobs ||= [];
   parsed.agentSessions ||= [];
   parsed.agentToolConfigs ||= [];
+  parsed.mcpServerConfigs ||= [];
   await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
   const temporary = `${destination}.${process.pid}.tmp`;
   await writeFile(temporary, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
