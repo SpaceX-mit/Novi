@@ -350,6 +350,20 @@ paths:
         '200': { description: Agent Skills saved, content: { application/json: { schema: { type: object, required: [settings], properties: { settings: { $ref: '#/components/schemas/AgentSkillSettings' } } } } } }
         '403': { description: Admin role required }
         '422': { description: 'Invalid, duplicated, oversized, or unsupported Skill configuration' }
+  /api/agent/plugins:
+    get:
+      description: Lists declarative tenant Plugins and currently referenceable Skills/tools.
+      responses:
+        '200': { description: Tenant Plugin settings, content: { application/json: { schema: { type: object, required: [settings, configurable], properties: { settings: { $ref: '#/components/schemas/AgentPluginSettings' }, configurable: { type: boolean } } } } } }
+    put:
+      description: Replaces declarative Plugins. Plugins may reference only existing Skills and already-authorized tools and cannot load executable code.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AgentPluginSettingsInput' } } }
+      responses:
+        '200': { description: Agent Plugins saved }
+        '403': { description: Admin role required }
+        '422': { description: Invalid manifest or unavailable capability reference }
   /api/search:
     get:
       parameters:
@@ -498,6 +512,7 @@ components:
         status: { type: string, enum: [queued, running, completed, failed] }
         toolCalls: { type: array, maxItems: 20, items: { type: object }, description: Bounded tool invocation provenance retained with the completed assistant message }
         skills: { type: array, maxItems: 3, items: { $ref: '#/components/schemas/AppliedAgentSkill' }, description: Skills applied to the completed artifact run }
+        plugins: { type: array, maxItems: 2, items: { $ref: '#/components/schemas/AppliedAgentPlugin' }, description: Declarative Plugins applied to the completed artifact run }
         createdAt: { type: string, format: date-time }
     AgentSession:
       type: object
@@ -662,6 +677,48 @@ components:
         productTypes: { type: array, items: { type: string, enum: [knowledge, research, paper] } }
         updatedAt: { type: string, format: date-time }
         instructionHash: { type: string, pattern: '^[a-f0-9]{64}$' }
+    AgentPluginInput:
+      type: object
+      required: [name, version, title, description, activation, productTypes]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, pattern: '^[a-z][a-z0-9_-]{1,47}$' }
+        version: { type: string, maxLength: 32 }
+        title: { type: string, minLength: 1, maxLength: 80 }
+        description: { type: string, minLength: 1, maxLength: 500 }
+        instructions: { type: string, maxLength: 2000 }
+        activation: { type: string, enum: [auto, always] }
+        productTypes: { type: array, minItems: 1, maxItems: 3, uniqueItems: true, items: { type: string, enum: [knowledge, research, paper] } }
+        triggerTerms: { type: array, maxItems: 12, items: { type: string, minLength: 2, maxLength: 80 } }
+        skillNames: { type: array, maxItems: 5, items: { type: string } }
+        toolNames: { type: array, maxItems: 10, items: { type: string } }
+        enabled: { type: boolean, default: true }
+    AgentPluginSettingsInput:
+      type: object
+      required: [plugins]
+      properties: { plugins: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/AgentPluginInput' } } }
+    AgentPluginSettings:
+      type: object
+      required: [plugins, available]
+      properties:
+        plugins: { type: array, maxItems: 10, items: { type: object } }
+        available: { type: object, required: [skillNames, toolNames], properties: { skillNames: { type: array, items: { type: string } }, toolNames: { type: array, items: { type: string } } } }
+    AppliedAgentPlugin:
+      type: object
+      required: [id, name, title, version, description, activation, matchReason, productTypes, skillNames, recommendedTools, updatedAt, manifestHash]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        title: { type: string }
+        version: { type: string }
+        description: { type: string }
+        activation: { type: string, enum: [auto, always] }
+        matchReason: { type: string }
+        productTypes: { type: array, items: { type: string } }
+        skillNames: { type: array, items: { type: string } }
+        recommendedTools: { type: array, items: { type: string } }
+        updatedAt: { type: string, format: date-time }
+        manifestHash: { type: string, pattern: '^[a-f0-9]{64}$' }
     LlmProviderInput:
       type: object
       required: [provider, model]

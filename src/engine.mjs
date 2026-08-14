@@ -256,7 +256,7 @@ export async function generateArtifactAsync(project, options = {}) {
   let artifact;
   let execution = null;
   if (options.providerConfig) {
-    execution = await runAgentWorkflow(project, fallback, options.providerConfig, { sources: options.sources || fallback.content.sources || [], knowledgeContext: fallback.content.knowledgeContext || [], prompt: options.prompt, mode: options.mode, onStage: options.onStage, onMode: options.onMode, tools: options.tools, skills: options.skills, toolExecutor: options.toolExecutor, onTool: options.onTool, threadId: options.threadId });
+    execution = await runAgentWorkflow(project, fallback, options.providerConfig, { sources: options.sources || fallback.content.sources || [], knowledgeContext: fallback.content.knowledgeContext || [], prompt: options.prompt, mode: options.mode, onStage: options.onStage, onMode: options.onMode, tools: options.tools, skills: options.skills, plugins: options.plugins, toolExecutor: options.toolExecutor, onTool: options.onTool, threadId: options.threadId });
     artifact = { ...fallback, content: execution.content, model: options.providerConfig.model };
   } else artifact = await completeArtifact(project, fallback, options.sources || fallback.content.sources || [], fallback.content.knowledgeContext || []);
   const sources = artifact.content.sources || fallback.content.sources || [];

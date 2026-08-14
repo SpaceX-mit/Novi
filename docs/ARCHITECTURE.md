@@ -11,7 +11,7 @@ Novi Application Server
   |-- Project API
   |-- Agent Session API + conversation/run persistence
   |-- Tenant LLM Provider API + encrypted credential store
-  |-- Tenant Agent Tools/MCP/Skills API + encrypted credential store
+  |-- Tenant Agent Tools/MCP/Skills/Plugins API + encrypted credential store
   |-- LangGraph Agent Runtime (intent router / Workflow / ReAct / Plan & Execute / Supervisor)
   |-- Knowledge Intelligence Engine
   |-- Export Service
@@ -44,6 +44,8 @@ Agent Runtime 保留 Research、Knowledge、Writing、Review 四种受控职责�
 `src/agent-tools.mjs` 向自主模式提供统一的租户/项目工具注册表，包含内置工具、自定义 HTTP 工具和已授权 MCP 工具。`src/mcp-runtime.mjs` 使用官方 MCP SDK 连接租户配置的 Streamable HTTP server，发现后生成稳定的 `mcp__...` 命名空间别名；新发现工具默认关闭，只有 owner/admin 逐项启用后才会进入 ReAct、Plan & Execute、Supervisor 的 tool node。每次运行仍共享最多 6 次工具调用的硬上限，调用记录进入 Job、Session 和 Artifact。MCP 返回值是不可执行、不可信 observation，不直接进入 verified evidence；图片和音频不会送入模型上下文。MCP Tasks、OAuth browser flow、stdio、prompts/resources 直接注入暂不支持。
 
 `src/skill-runtime.mjs` 管理租户级受限 playbook。owner/admin 最多配置 20 个 Skill；运行开始时按产品范围，从显式 `/skill name`、always、触发词三种来源确定性选择最多 3 个。只有存在 Web LLM Provider 时才把指令注入 Planner、Controller 和 Specialist；Skill 不能改变工具注册表、来源集合、evidence 身份、字段 schema 或运行硬上限。Job 与 Session 保存当次选择，Artifact 只固化 Skill 元数据、匹配原因和指令 SHA-256，避免把可变配置误当作成果内容；完整指令仍保存在租户配置与备份中。
+
+`src/plugin-runtime.mjs` 提供声明式组合：每次最多选择两个 manifest，把引用 Skill 合入既有上限，并把推荐工具与当次 registry 取交集。它不加载代码、凭据或远程包，不能授予工具/来源权限；远程 marketplace 和签名可执行包需要独立供应链与沙箱架构。
 
 `src/agent-sessions.mjs` 在 Project 之上提供持久对话边界。项目创建时生成默认 Session；同步/异步生成把用户消息、当前 mode/stage/progress、失败信息和 Artifact 引用写入同一个 Session，Job 保存 `sessionId` 和用户消息 ID。Session 同时约束 `tenantId + projectId`，跨项目或跨租户查询统一 404，运行中不可删除；项目/账户删除级联清理。服务重启不会恢复 LangGraph 节点，但会把中断 Job 对应 Session 写成失败并解除 active run，使会话可继续使用。Web 工作区以 Session rail、Conversation composer 和 Files/LLM Wiki/Document inspector 三个可响应区域呈现该状态；页面重开时若 active run 仍存在，会从 Job API 恢复轮询。
 

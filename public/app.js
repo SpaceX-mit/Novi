@@ -1,6 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, toolSettings: null, mcpSettings: null, skillSettings: null, customizeTab: 'tools', activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, contextPanel: 'wiki', activeDocumentId: null, monitoringJobId: null, composerDraft: '', composerMode: 'auto' };
+const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, toolSettings: null, mcpSettings: null, skillSettings: null, pluginSettings: null, customizeTab: 'tools', activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, contextPanel: 'wiki', activeDocumentId: null, monitoringJobId: null, composerDraft: '', composerMode: 'auto' };
 let authRegister = false;
 const roleRank = Object.freeze({ viewer: 10, editor: 20, admin: 30, owner: 40 });
 const canRole = (required) => (roleRank[state.role] || 0) >= roleRank[required];
@@ -242,7 +242,8 @@ function renderAgentMessage(message) {
   const meta = [message.mode ? sessionModeLabel(message.mode) : '', message.status || '', formatDateTime(message.createdAt)].filter(Boolean).join(' · ');
   const tools = (message.toolCalls || []).map((call) => `<span class="message-tool ${call.status}">${escapeHtml(call.label || call.tool)} · ${escapeHtml(call.status)}</span>`).join('');
   const skills = (message.skills || []).map((skill) => `<span class="message-skill">${escapeHtml(skill.title || skill.name)}</span>`).join('');
-  return `<article class="agent-message ${isUser ? 'user' : 'assistant'} ${message.kind || 'message'}"><div class="message-author"><b>${isUser ? 'You' : 'Novi'}</b><span>${escapeHtml(meta)}</span></div><p>${escapeHtml(message.content)}</p>${skills ? `<div class="message-skills">${skills}</div>` : ''}${tools ? `<div class="message-tools">${tools}</div>` : ''}${message.artifactId ? `<button class="message-artifact" data-artifact-id="${escapeHtml(message.artifactId)}">Open generated artifact</button>` : ''}</article>`;
+  const plugins = (message.plugins || []).map((plugin) => `<span class="message-plugin">${escapeHtml(plugin.title || plugin.name)} ${escapeHtml(plugin.version || '')}</span>`).join('');
+  return `<article class="agent-message ${isUser ? 'user' : 'assistant'} ${message.kind || 'message'}"><div class="message-author"><b>${isUser ? 'You' : 'Novi'}</b><span>${escapeHtml(meta)}</span></div><p>${escapeHtml(message.content)}</p>${plugins ? `<div class="message-plugins">${plugins}</div>` : ''}${skills ? `<div class="message-skills">${skills}</div>` : ''}${tools ? `<div class="message-tools">${tools}</div>` : ''}${message.artifactId ? `<button class="message-artifact" data-artifact-id="${escapeHtml(message.artifactId)}">Open generated artifact</button>` : ''}</article>`;
 }
 
 function renderConversation(project) {
@@ -252,7 +253,7 @@ function renderConversation(project) {
   const busy = project.status === 'generating' || session?.status === 'running';
   const editor = canRole('editor');
   const modes = [['auto', 'Auto'], ['workflow', 'Workflow'], ['react', 'ReAct'], ['plan-execute', 'Plan & Execute'], ['supervisor', 'Supervisor']];
-  const runSkills = (run?.skills || []).map((skill) => skill.title || skill.name).join(', ');
+  const runSkills = [...(run?.plugins || []).map((plugin) => plugin.title || plugin.name), ...(run?.skills || []).map((skill) => skill.title || skill.name)].join(', ');
   return `<section class="conversation-panel"><header><div><p class="eyebrow">AGENT SESSION</p><h2>${escapeHtml(session?.title || 'Loading session')}</h2></div>${run ? `<div class="conversation-run" id="conversation-run"><b id="conversation-run-mode">${escapeHtml(sessionModeLabel(run.currentMode))}</b><span id="conversation-run-stage">${escapeHtml(run.currentStage || 'Preparing')}</span>${runSkills ? `<span class="conversation-run-skills">${escapeHtml(runSkills)}</span>` : ''}<small id="conversation-run-progress">${Number(run.progress || 0)}%</small></div>` : ''}</header><div class="conversation-messages" id="conversation-messages" aria-live="polite">${messages.map(renderAgentMessage).join('') || '<div class="conversation-loading">Loading conversation...</div>'}</div>${!project.artifacts?.length && editor ? `<button class="primary-button generate-now" id="generate-empty" ${busy ? 'disabled' : ''}>${busy ? 'Generating...' : 'Generate now'}</button>` : ''}${editor ? `<form class="agent-composer" id="agent-composer"><textarea id="agent-prompt" name="prompt" rows="2" maxlength="20000" placeholder="Ask Novi to research, build knowledge, or draft..." ${busy || !session ? 'disabled' : ''}>${escapeHtml(state.composerDraft)}</textarea><div><label>Execution mode<select id="agent-mode" name="mode" ${busy ? 'disabled' : ''}>${modes.map(([value, label]) => `<option value="${value}" ${state.composerMode === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button class="composer-send" type="submit" title="Send request" aria-label="Send request" ${busy || !session ? 'disabled' : ''}>↑</button></div></form>` : '<p class="conversation-readonly">Viewer access is read only.</p>'}</section>`;
 }
 
@@ -272,9 +273,11 @@ function renderContextBody(project, artifact, artifactIndex, selected) {
   const tabs = tabsFor(project.type); const c = artifact.content;
   const toolCalls = artifact.workflow?.runtime?.toolCalls || [];
   const skills = artifact.workflow?.runtime?.skills || [];
+  const plugins = artifact.workflow?.runtime?.plugins || [];
   const toolProvenance = toolCalls.length ? `<section class="tool-provenance"><h3>Tool activity</h3>${toolCalls.map((call) => `<div><b>${escapeHtml(call.label || call.tool)}</b><span class="${call.status}">${escapeHtml(call.status)}</span><small>${escapeHtml(formatDateTime(call.completedAt || call.startedAt))}</small></div>`).join('')}</section>` : '';
   const skillProvenance = skills.length ? `<section class="skill-provenance"><h3>Applied skills</h3>${skills.map((skill) => `<div><b>${escapeHtml(skill.title || skill.name)}</b><span>${escapeHtml(skill.matchReason || skill.activation)}</span><small>${escapeHtml(String(skill.instructionHash || '').slice(0, 12))}</small></div>`).join('')}</section>` : '';
-  return `${renderVersionToolbar(project, artifactIndex)}${state.compareVersions && project.artifacts[artifactIndex + 1] ? renderVersionComparison(project, artifactIndex) : ''}<div class="artifact-panel"><div class="artifact-tabs">${tabs.map((tab) => `<button class="artifact-tab ${selected === tab.key ? 'active' : ''}" data-artifact-tab="${tab.key}">${tab.label}</button>`).join('')}</div><div class="artifact-content">${renderArtifact(project, selected, c)}</div></div>${skillProvenance}${toolProvenance}`;
+  const pluginProvenance = plugins.length ? `<section class="skill-provenance plugin-provenance"><h3>Applied plugins</h3>${plugins.map((plugin) => `<div><b>${escapeHtml(plugin.title || plugin.name)} ${escapeHtml(plugin.version)}</b><span>${escapeHtml(plugin.matchReason || plugin.activation)}</span><small>${escapeHtml(String(plugin.manifestHash || '').slice(0, 12))}</small></div>`).join('')}</section>` : '';
+  return `${renderVersionToolbar(project, artifactIndex)}${state.compareVersions && project.artifacts[artifactIndex + 1] ? renderVersionComparison(project, artifactIndex) : ''}<div class="artifact-panel"><div class="artifact-tabs">${tabs.map((tab) => `<button class="artifact-tab ${selected === tab.key ? 'active' : ''}" data-artifact-tab="${tab.key}">${tab.label}</button>`).join('')}</div><div class="artifact-content">${renderArtifact(project, selected, c)}</div></div>${pluginProvenance}${skillProvenance}${toolProvenance}`;
 }
 
 function renderWorkspace(project, selected = state.activeTab) {
@@ -572,7 +575,7 @@ function customToolRow(tool, index) {
 }
 
 function customizeTabs() {
-  return `<div class="customize-tabs" role="tablist"><button class="${state.customizeTab === 'tools' ? 'active' : ''}" data-customize-tab="tools" role="tab">Tools</button><button class="${state.customizeTab === 'mcp' ? 'active' : ''}" data-customize-tab="mcp" role="tab">MCP</button><button class="${state.customizeTab === 'skills' ? 'active' : ''}" data-customize-tab="skills" role="tab">Skills</button><button disabled role="tab">Plugins</button></div>`;
+  return `<div class="customize-tabs" role="tablist"><button class="${state.customizeTab === 'tools' ? 'active' : ''}" data-customize-tab="tools" role="tab">Tools</button><button class="${state.customizeTab === 'mcp' ? 'active' : ''}" data-customize-tab="mcp" role="tab">MCP</button><button class="${state.customizeTab === 'skills' ? 'active' : ''}" data-customize-tab="skills" role="tab">Skills</button><button class="${state.customizeTab === 'plugins' ? 'active' : ''}" data-customize-tab="plugins" role="tab">Plugins</button></div>`;
 }
 
 function bindCustomizeTabs() {
@@ -621,8 +624,22 @@ function renderSkillsCustomize() {
   bindCustomizeTabs();
 }
 
+function pluginRow(plugin, index) {
+  const available = state.pluginSettings?.available || { skillNames: [], toolNames: [] }; const selectedProducts = plugin.productTypes || ['knowledge', 'research', 'paper'];
+  const options = (values, selected) => values.map((value) => `<option value="${escapeHtml(value)}" ${(selected || []).includes(value) ? 'selected' : ''}>${escapeHtml(value)}</option>`).join('');
+  return `<article class="custom-tool-row plugin-row" data-plugin-id="${escapeHtml(plugin.id || '')}"><div class="tool-row-heading"><label class="tool-enabled"><input type="checkbox" name="enabled" ${plugin.enabled !== false ? 'checked' : ''} /> Enabled</label><span class="skill-activation-label">Declarative manifest</span><button type="button" class="text-button tool-remove" data-remove-plugin="${index}">Remove</button></div><div class="tool-form-grid"><label>Name<input name="name" value="${escapeHtml(plugin.name || '')}" maxlength="48" placeholder="research_quality" /></label><label>Version<input name="version" value="${escapeHtml(plugin.version || '1.0.0')}" maxlength="32" /></label><label>Display title<input name="title" value="${escapeHtml(plugin.title || '')}" maxlength="80" /></label><label>Activation<select name="activation"><option value="auto" ${plugin.activation !== 'always' ? 'selected' : ''}>Trigger or /plugin name</option><option value="always" ${plugin.activation === 'always' ? 'selected' : ''}>Always for product scope</option></select></label><label class="tool-wide">Description<input name="description" value="${escapeHtml(plugin.description || '')}" maxlength="500" /></label><label class="tool-wide">Trigger terms<input name="triggerTerms" value="${escapeHtml((plugin.triggerTerms || []).join(', '))}" maxlength="980" /></label><fieldset class="tool-wide skill-products"><legend>Product scope</legend>${[['knowledge','Knowledge Builder'],['research','Deep Research'],['paper','Paper Author']].map(([value,label]) => `<label><input type="checkbox" data-plugin-product="${value}" ${selectedProducts.includes(value) ? 'checked' : ''} /> ${label}</label>`).join('')}</fieldset><label>Referenced Skills<select name="skillNames" multiple size="5">${options(available.skillNames, plugin.skillNames)}</select></label><label>Recommended authorized tools<select name="toolNames" multiple size="5">${options(available.toolNames, plugin.toolNames)}</select></label><label class="tool-wide">Composition instructions<textarea name="instructions" rows="7" maxlength="2000">${escapeHtml(plugin.instructions || '')}</textarea></label></div></article>`;
+}
+
+function renderPluginsCustomize() {
+  const settings = state.pluginSettings || { plugins: [], available: { skillNames: [], toolNames: [] } };
+  $('#customize-root').innerHTML = `<div class="customize-heading"><div><p class="eyebrow">AGENT RUNTIME</p><h1>Customize</h1><p>Compose approved Skills and tools without loading tenant code.</p></div><button class="primary-button" id="save-plugins">Save plugins</button></div>${customizeTabs()}<section class="customize-section"><div class="section-head"><div><h2>Declarative plugins</h2><p>Manifests recommend already-authorized capabilities; they never install code or grant permissions.</p></div><button class="secondary-button" id="add-plugin" type="button">Add plugin</button></div><div class="custom-tool-list">${settings.plugins.map(pluginRow).join('') || '<div class="context-empty"><b>No Plugins</b><p>Compose existing Skills and tools into a reusable manifest.</p></div>'}</div><p class="form-error" id="plugins-error"></p></section>`;
+  $('#add-plugin').onclick = () => { settings.plugins.push({ enabled: true, name: '', version: '1.0.0', title: '', description: '', activation: 'auto', triggerTerms: [], productTypes: ['knowledge','research','paper'], skillNames: [], toolNames: [], instructions: '' }); renderCustomize(); };
+  $$('[data-remove-plugin]').forEach((button) => button.onclick = () => { settings.plugins.splice(Number(button.dataset.removePlugin), 1); renderCustomize(); });
+  $('#save-plugins').onclick = savePlugins; bindCustomizeTabs();
+}
+
 function renderCustomize() {
-  if (state.customizeTab === 'mcp') renderMcpCustomize(); else if (state.customizeTab === 'skills') renderSkillsCustomize(); else renderToolsCustomize();
+  if (state.customizeTab === 'mcp') renderMcpCustomize(); else if (state.customizeTab === 'skills') renderSkillsCustomize(); else if (state.customizeTab === 'plugins') renderPluginsCustomize(); else renderToolsCustomize();
 }
 
 async function openCustomize() {
@@ -633,8 +650,8 @@ async function openCustomize() {
   $$('.nav-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.view === 'customize'));
   $('#customize-root').innerHTML = '<p class="muted">Loading Agent tools...</p>';
   try {
-    const [tools, mcp, skills] = await Promise.all([request('/api/agent/tools'), request('/api/agent/mcp'), request('/api/agent/skills')]);
-    state.toolSettings = tools.settings; state.mcpSettings = mcp.settings; state.skillSettings = skills.settings; renderCustomize();
+    const [tools, mcp, skills, plugins] = await Promise.all([request('/api/agent/tools'), request('/api/agent/mcp'), request('/api/agent/skills'), request('/api/agent/plugins')]);
+    state.toolSettings = tools.settings; state.mcpSettings = mcp.settings; state.skillSettings = skills.settings; state.pluginSettings = plugins.settings; renderCustomize();
   }
   catch (error) { $('#customize-root').innerHTML = `<p class="form-error">${escapeHtml(error.message)}</p>`; }
 }
@@ -649,7 +666,7 @@ async function saveTools() {
       return { id: row.dataset.customToolId || undefined, name: $('[name="name"]', row).value.trim(), endpoint: $('[name="endpoint"]', row).value.trim(), description: $('[name="description"]', row).value.trim(), bearerToken: $('[name="bearerToken"]', row).value || undefined, enabled: $('[name="enabled"]', row).checked, inputSchema };
     });
     const result = await request('/api/agent/tools', { method: 'PUT', body: JSON.stringify({ builtins, customTools }) });
-    state.toolSettings = result.settings; renderCustomize(); showToast('Agent tools saved');
+    state.toolSettings = result.settings; state.pluginSettings = (await request('/api/agent/plugins')).settings; renderCustomize(); showToast('Agent tools saved');
   } catch (saveError) { error.textContent = saveError.message; }
 }
 
@@ -669,6 +686,7 @@ async function saveMcp(discoverIndex = null) {
       state.mcpSettings = (await request(`/api/agent/mcp/servers/${encodeURIComponent(server.id)}/sync`, { method: 'POST' })).settings;
       showToast('MCP tools discovered');
     } else showToast('MCP settings saved');
+    state.pluginSettings = (await request('/api/agent/plugins')).settings;
     renderCustomize();
   } catch (saveError) { const error = $('#mcp-error'); if (error) error.textContent = saveError.message; }
 }
@@ -678,7 +696,16 @@ async function saveSkills() {
   try {
     const skills = $$('.skill-row').map((row) => ({ id: row.dataset.skillId || undefined, name: $('[name="name"]', row).value.trim(), title: $('[name="title"]', row).value.trim(), description: $('[name="description"]', row).value.trim(), activation: $('[name="activation"]', row).value, triggerTerms: $('[name="triggerTerms"]', row).value.split(',').map((term) => term.trim()).filter(Boolean), productTypes: $$('[data-skill-product]:checked', row).map((input) => input.dataset.skillProduct), instructions: $('[name="instructions"]', row).value.trim(), enabled: $('[name="enabled"]', row).checked }));
     state.skillSettings = (await request('/api/agent/skills', { method: 'PUT', body: JSON.stringify({ skills }) })).settings;
+    state.pluginSettings = (await request('/api/agent/plugins')).settings;
     renderCustomize(); showToast('Agent Skills saved');
+  } catch (saveError) { error.textContent = saveError.message; }
+}
+
+async function savePlugins() {
+  const error = $('#plugins-error'); error.textContent = '';
+  try {
+    const plugins = $$('.plugin-row').map((row) => ({ id: row.dataset.pluginId || undefined, name: $('[name="name"]', row).value.trim(), version: $('[name="version"]', row).value.trim(), title: $('[name="title"]', row).value.trim(), description: $('[name="description"]', row).value.trim(), activation: $('[name="activation"]', row).value, triggerTerms: $('[name="triggerTerms"]', row).value.split(',').map((term) => term.trim()).filter(Boolean), productTypes: $$('[data-plugin-product]:checked', row).map((input) => input.dataset.pluginProduct), skillNames: [...$('[name="skillNames"]', row).selectedOptions].map((option) => option.value), toolNames: [...$('[name="toolNames"]', row).selectedOptions].map((option) => option.value), instructions: $('[name="instructions"]', row).value.trim(), enabled: $('[name="enabled"]', row).checked }));
+    state.pluginSettings = (await request('/api/agent/plugins', { method: 'PUT', body: JSON.stringify({ plugins }) })).settings; renderCustomize(); showToast('Agent Plugins saved');
   } catch (saveError) { error.textContent = saveError.message; }
 }
 

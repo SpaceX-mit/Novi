@@ -49,7 +49,7 @@ Web 中保存的租户配置优先于 `NOVI_LLM_BASE_URL`、`NOVI_LLM_API_KEY`�
 
 组织 owner/admin 可在 `Customize → MCP` 添加最多 5 个 MCP Streamable HTTP 服务器。先执行 `Save & discover`，Novi 会通过官方 `@modelcontextprotocol/sdk` 完成 initialize 和分页 `tools/list`；新发现的工具默认关闭，管理员逐项勾选并保存后，才会以 `mcp__服务器__工具_哈希` 命名空间进入 ReAct、Plan & Execute 和 Supervisor。相同服务器最多接纳 100 个工具，输入 schema 限制为 16 KB/12 层且在调用前通过 JSON Schema 校验；每次协议请求默认超时 10 秒、最多 30 秒，POST 响应最多 256 KB，图像/音频结果不会进入模型上下文。
 
-远端 MCP endpoint 必须使用 HTTPS 且主机列入 `NOVI_MCP_ALLOWED_HOSTS`；本地非生产开发可使用回环 HTTP。可选 Bearer token 以 AES-256-GCM 加密，更改 endpoint 时不会沿用旧 token。调用结果按不可信 tool observation 处理，不会自动成为 claim evidence；调用名称、服务器、状态和截断结果沿用 Job/Session/Artifact provenance。当前支持 Streamable HTTP 的普通即时 Tools；需要 MCP task lifecycle 的工具会显示为不可启用，OAuth 浏览器授权、stdio、MCP prompts/resources 直接注入和 Plugins 仍待后续独立实现。配置 API 为 `GET/PUT /api/agent/mcp`，连接发现为 `POST /api/agent/mcp/servers/:serverId/sync`。
+远端 MCP endpoint 必须使用 HTTPS 且主机列入 `NOVI_MCP_ALLOWED_HOSTS`；本地非生产开发可使用回环 HTTP。可选 Bearer token 以 AES-256-GCM 加密，更改 endpoint 时不会沿用旧 token。调用结果按不可信 tool observation 处理，不会自动成为 claim evidence；调用名称、服务器、状态和截断结果沿用 Job/Session/Artifact provenance。当前支持 Streamable HTTP 的普通即时 Tools；需要 MCP task lifecycle 的工具会显示为不可启用，OAuth 浏览器授权、stdio 和 MCP prompts/resources 直接注入仍待后续实现。配置 API 为 `GET/PUT /api/agent/mcp`，连接发现为 `POST /api/agent/mcp/servers/:serverId/sync`。
 
 现有 `NOVI_MCP_SOURCE_*` 仍是来源检索管线中的固定 source adapter，用于将 concrete URL 纳入来源排序；它与上述可由 Agent 自主选择的通用 MCP tools 相互独立。
 
@@ -58,6 +58,10 @@ Web 中保存的租户配置优先于 `NOVI_LLM_BASE_URL`、`NOVI_LLM_API_KEY`�
 组织 owner/admin 可在 `Customize → Skills` 创建最多 20 个租户级 playbook。每个 Skill 包含稳定名称、用途说明、最多 4000 字符的指令、Knowledge Builder/Deep Research/Paper Author 产品范围，以及 `Always for product scope` 或按触发词匹配的激活方式；用户也可在生成提示中用 `/skill skill_name` 显式激活。每次运行最多应用 3 个 Skill，优先级为显式指令、always、触发词匹配。
 
 Skill 只在已配置 Web LLM Provider 的 LangGraph 运行中生效；完全离线的确定性生成不会伪装成已应用 Skill。Skill 指令会进入 Planner、ReAct/Supervisor controller 和 Research/Knowledge/Writing/Review prompt，但始终低于 Novi 的安全与数据边界：不能增加工具权限、添加来源、绕过字段 schema 或把 observation 变成 evidence。实际选择结果写入异步 Job、Session 和 Artifact，只固化 Skill 元数据、匹配原因与指令 SHA-256，不复制完整指令到成果 provenance。配置 API 为 `GET/PUT /api/agent/skills`；所有组织成员可审查会影响成果的指令，只有 owner/admin 可修改。
+
+### 配置 Agent Plugins
+
+`Customize → Plugins` 提供声明式组合层：每租户最多 10 个版本化 manifest，每次最多激活 2 个，可按 `/plugin plugin_name`、always 或触发词选择，并引用现有 Skill 与当前已授权 Tool/MCP。引用 Skill 进入同一 3-Skill 上限；推荐工具在运行时再次与实际 registry 取交集。Plugin 不下载 npm 包、不执行租户 JavaScript、不保存密钥，也不能启用被关闭的工具。Job、Session、Artifact 只固化 manifest 元数据、实际推荐工具和 SHA-256。远程 marketplace、第三方签名包和可执行沙箱不属于当前实现。配置 API 为 `GET/PUT /api/agent/plugins`。
 
 API Key 以 AES-256-GCM 加密保存在租户状态中，API、账户导出和浏览器都不会收到明文或密文。生产必须通过 Secret Manager 设置稳定的 `NOVI_CONFIG_ENCRYPTION_KEY`（至少 32 字符）；本地开发会在数据文件旁生成权限为 0600 的 `data/.novi-config-key`。已知 Provider 使用固定官方 endpoint；Ollama 只允许回环地址；远端自定义 OpenAI-compatible 主机必须使用 HTTPS 并列入逗号分隔的 `NOVI_LLM_ALLOWED_HOSTS`。每阶段超时由 `NOVI_LLM_TIMEOUT_MS` 控制，最大输出 token 由 `NOVI_LLM_MAX_OUTPUT_TOKENS` 控制，完整示例见 `.env.example`。
 
@@ -183,7 +187,7 @@ docker run --rm -p 4173:4173 -v novi-data:/app/data novi
 - [商用就绪审计](docs/COMMERCIAL_READINESS.md)：逐项验证证据与仍需目标环境完成的正式发布门禁。
 - [发布手册](docs/RELEASE.md)：三平台打包、签名/公证 Secret、SBOM、校验和及发布后验收。
 
-当前生成器默认是离线确定性实现，目的是让完整产品流程可演示、可测试；实时连接器仅补充来源，不替代生产级引用核验。Knowledge Builder 输出 Wiki/路线/Practice Lab/图谱；Deep Research 分别输出 Report/Wiki/Graph/SOTA/机会；Paper Author 输出完整章节、research gap、novelty、方法、实验、图表和审稿，并可导出 IEEE/ACM LaTeX。每个不可变成果保存 Research/Knowledge/Writing/Review 职责、模式切换、Skill 与工具调用 provenance；配置 Web Provider 后由 LangGraph.js 的 Workflow/ReAct/Plan & Execute/Supervisor 控制图调度这些职责，自主模式可使用管理员启用的内置、自定义 HTTP 和通用 MCP 工具，四种模式都可应用匹配的组织 Skills。设置 `NOVI_AUTH_REQUIRED=true` 可强制注册/登录和租户隔离；生成接口添加 `?async=true` 可返回 Job 并通过 `/api/jobs/:id` 轮询，生成消息同时写入对应 Agent Session。`provider-contract-check` 已覆盖 LLM、支付、OIDC、Browser Agent 和固定来源 MCP 的本地真实 HTTP 协议形态，通用 Agent MCP 另由官方 SDK server/client 集成测试覆盖；生产基线适配器和 outbox 已通过本地契约/集成验证。本地依赖/镜像扫描、Linux AppImage 和窗口 smoke 也已通过。当前 LangGraph checkpoint 仅在单次进程内存中使用，不能跨进程重启恢复图节点；环境变量旧 LLM 网关仍是单次调用；Plugins runtime 尚未实现。正式商业发布仍必须完成真实供应商/目标服务验收、引用级人工核验、备份恢复演练、公网压力测试、托管 CI 记录，以及 Windows/macOS 签名、公证、安装和升级 E2E，详见商用就绪审计。
+当前生成器默认是离线确定性实现，目的是让完整产品流程可演示、可测试；实时连接器仅补充来源，不替代生产级引用核验。Knowledge Builder 输出 Wiki/路线/Practice Lab/图谱；Deep Research 分别输出 Report/Wiki/Graph/SOTA/机会；Paper Author 输出完整章节、research gap、novelty、方法、实验、图表和审稿，并可导出 IEEE/ACM LaTeX。每个不可变成果保存 Research/Knowledge/Writing/Review 职责、模式切换、Skill/Plugin 与工具调用 provenance；配置 Web Provider 后由 LangGraph.js 的 Workflow/ReAct/Plan & Execute/Supervisor 调度职责，自主模式可使用管理员启用的工具，四种模式都可应用匹配的组织 Skills 和声明式 Plugins。当前 LangGraph checkpoint 不能跨进程重启恢复图节点；Plugin 不加载第三方可执行包。正式商业发布仍必须完成真实供应商/目标服务验收和其他外部门禁，详见商用就绪审计。
 
 Web 操作与组织角色对齐：viewer 可浏览、搜索、查看历史和导出；editor 可创建、生成、置顶、导入知识、刷新来源、删除单个知识文档并在生成中使用已启用工具与匹配 Skills；admin/owner 还可配置组织 LLM Provider、Agent Tools/MCP/Skills、删除工作空间并发起付费 checkout。服务端会对每个写请求重新校验 membership。删除工作空间或发起任务的成员账户会取消关联未完成 Job、按原计费周期只退款一次，并阻止运行中的 worker 在删除后提交成果。
 

@@ -16,6 +16,7 @@
 - `src/agent-tools.mjs`：把内置 workspace read/write/web search、自定义 HTTP 和已启用 MCP 工具合并为当次运行的受控注册表；执行输入校验、租户/项目边界、取消检查和最多 6 次调用的硬上限，并把有界 observation/provenance 返回 LangGraph tool node。
 - `src/mcp-runtime.mjs`：使用官方 `@modelcontextprotocol/sdk` 的 Client、StreamableHTTPClientTransport 和 AJV validator；规范化租户 MCP server 配置、加密 Bearer token、验证 endpoint allowlist，执行工具发现/命名空间化/显式授权和有界调用结果转换。
 - `src/skill-runtime.mjs`：校验最多 20 个租户 Skill 的名称、说明、4000 字符指令、产品范围、always/auto 激活和最多 12 个触发词；运行开始时按显式 `/skill name`、always、触发词优先级选出最多 3 个，并产生不含完整指令的哈希 provenance。
+- `src/plugin-runtime.mjs`：校验最多 10 个声明式 manifest、语义版本、2000 字符编排指令及现有 Skill/已授权工具引用；每次最多激活 2 个，运行时丢弃已失效工具引用，不执行租户代码。
 - `src/agent-sessions.mjs`：创建/查找租户项目 Session，追加最多 500 条、单条最多 20000 字符的消息，并维护 queued/running/completed/failed run 生命周期。助手成果消息保存 Artifact ID；失败写入有界错误摘要且幂等，公开响应复制消息数组，避免传输层直接修改持久对象。
 - `src/oidc.mjs`：OIDC discovery、PKCE S256、授权码交换、JWKS/RS256 ID Token 校验；HTTP start/callback 还用短时 HttpOnly 状态 Cookie 将授权响应绑定到发起浏览器。
 - `src/payments.mjs`：checkout provider 边界与 HMAC webhook；事件类型和 active plan 均白名单校验后才改变订阅。
@@ -41,6 +42,7 @@ LlmProviderConfig { tenantId, provider, model, baseUrl, apiVersion?, encryptedAp
 McpServerConfig { id, tenantId, name, endpoint, encryptedBearerToken?, bearerTokenLast4?, discoveredTools[<=100], updatedAt }
 McpDiscoveredTool { name, alias, title?, description?, inputSchema, enabled, readOnly?, destructive?, unsupportedReason? }
 AgentSkillConfig { id, tenantId, name, title, description, instructions, activation: auto | always, productTypes[], triggerTerms[<=12], enabled, updatedAt }
+AgentPluginConfig { id, tenantId, name, version, title, description, instructions, activation, productTypes[], triggerTerms[], skillNames[], toolNames[], enabled, updatedAt }
 SourceSnapshot { id, projectId, tenantId, sources[], changeStatus, changes, autoUpdateStatus?, artifactId? }
 AgentSession { id, tenantId, projectId, createdBy, title, status: idle | running, activeRun?, messages[<=500], createdAt, updatedAt }
 AgentMessage { id, role: user | assistant, kind, content, jobId?, artifactId?, mode?, status?, createdAt }

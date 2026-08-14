@@ -54,6 +54,10 @@ try {
   if (skillUi.products !== 3 || skillUi.activation !== 'auto' || !skillUi.instructions || skillUi.overflow) throw new Error(`Customize Skills UI is incorrect: ${JSON.stringify(skillUi)}`);
   await evaluate(`document.querySelector('#save-skills').click()`);
   await waitFor(`document.querySelector('#toast').textContent === 'Agent Skills saved' && document.querySelector('.skill-row [name="name"]').value === 'browser_review'`);
+  await evaluate(`document.querySelector('[data-customize-tab="plugins"]').click()`); await waitFor(`document.querySelector('#add-plugin') !== null`); await evaluate(`document.querySelector('#add-plugin').click()`); await waitFor(`document.querySelector('.plugin-row') !== null`);
+  const pluginUi = await evaluate(`(() => { const row = document.querySelector('.plugin-row'); const set = (name,value) => row.querySelector('[name="' + name + '"]').value = value; set('name','browser_suite'); set('title','Browser suite'); set('description','Compose browser review checks.'); set('triggerTerms','browser suite'); set('instructions','Use only approved review guidance and tools.'); row.querySelector('[name="skillNames"] option[value="browser_review"]').selected = true; row.querySelector('[name="toolNames"] option[value="workspace_read"]').selected = true; return { skills: row.querySelector('[name="skillNames"]').selectedOptions.length, tools: row.querySelector('[name="toolNames"]').selectedOptions.length, overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth }; })()`);
+  if (pluginUi.skills !== 1 || pluginUi.tools !== 1 || pluginUi.overflow) throw new Error(`Customize Plugins UI is incorrect: ${JSON.stringify(pluginUi)}`);
+  await evaluate(`document.querySelector('#save-plugins').click()`); await waitFor(`document.querySelector('#toast').textContent === 'Agent Plugins saved' && document.querySelector('.plugin-row [name="name"]').value === 'browser_suite'`);
   await evaluate(`document.querySelector('[data-view="overview"]').click()`);
   await waitFor(`document.querySelector('#view-overview').classList.contains('active-view')`);
   await evaluate(`document.querySelector('#billing-upgrade').click()`);
@@ -179,7 +183,7 @@ try {
   await waitFor(`document.querySelector('.artifact-content').textContent.includes('Interview preparation') && document.querySelector('.artifact-content').textContent.includes('Capstone project')`);
   await evaluate(`document.querySelector('[data-artifact-tab="graph"]').click()`);
   await waitFor(`document.querySelectorAll('.artifact-content .node').length >= 10`);
-  console.log(`browser-smoke: created=${result.title}, status=${result.status}, pricing=ready, agent-session=ready, agent-mode=${activeMode}, agent-skills=ready, viewer-ui=ready, knowledge-search=ready, rag-context=ready, versions=${versionResult.count}, comparison=ready, continuous-update=ready, knowledge-delete=ready, markdown-export=${result.exportStatus}, paper-svg=ready, paper-gap=ready, publication-templates=ready, research-suite=ready`);
+  console.log(`browser-smoke: created=${result.title}, status=${result.status}, pricing=ready, agent-session=ready, agent-mode=${activeMode}, agent-skills=ready, agent-plugins=ready, viewer-ui=ready, knowledge-search=ready, rag-context=ready, versions=${versionResult.count}, comparison=ready, continuous-update=ready, knowledge-delete=ready, markdown-export=${result.exportStatus}, paper-svg=ready, paper-gap=ready, publication-templates=ready, research-suite=ready`);
 } finally {
   socket.close(); chrome.kill('SIGTERM'); await new Promise((resolve) => server.close(resolve));
   for (const [key, value] of Object.entries(previous)) { const name = { auth: 'NOVI_AUTH_REQUIRED', worker: 'NOVI_JOB_WORKER', refresh: 'NOVI_REFRESH_WORKER', verify: 'NOVI_VERIFY_SOURCES', file: 'NOVI_DATA_FILE' }[key]; if (value === undefined) delete process.env[name]; else process.env[name] = value; }

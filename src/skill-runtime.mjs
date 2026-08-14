@@ -70,11 +70,13 @@ export function skillProvenance(skills) {
   return (skills || []).map(({ id, name, title, description, activation, matchReason, productTypes, updatedAt, instructionHash }) => ({ id, name, title, description, activation, matchReason, productTypes: [...productTypes], updatedAt, instructionHash }));
 }
 
-export function resolveSkills(state, tenantId, project, prompt) {
+export function resolveSkills(state, tenantId, project, prompt, { pluginSkillNames = [] } = {}) {
   const text = String(prompt || '').toLocaleLowerCase();
   const explicit = explicitSkillNames(prompt); const explicitOrder = new Map(explicit.map((name, index) => [name, index]));
+  const preferred = new Set(pluginSkillNames);
   const candidates = (state.agentSkillConfigs || []).filter((skill) => skill.tenantId === tenantId && skill.enabled !== false && (skill.productTypes || []).includes(project.type)).map((skill, index) => {
     if (explicitOrder.has(skill.name)) return { skill, index, rank: 3_000 - explicitOrder.get(skill.name), matchReason: 'explicit' };
+    if (preferred.has(skill.name)) return { skill, index, rank: 2_500, matchReason: `plugin:${skill.name}` };
     if (skill.activation === 'always') return { skill, index, rank: 2_000, matchReason: 'always' };
     const matches = (skill.triggerTerms || []).filter((term) => text.includes(term.toLocaleLowerCase()));
     return matches.length ? { skill, index, rank: 1_000 + matches.length, matchReason: `trigger:${matches[0]}` } : null;
