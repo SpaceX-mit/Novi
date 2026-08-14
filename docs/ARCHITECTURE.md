@@ -9,6 +9,8 @@ HTTP + REST
         |
 Novi Application Server
   |-- Project API
+  |-- Tenant LLM Provider API + encrypted credential store
+  |-- LangGraph Agent Runtime (Research -> Knowledge -> Writing -> Review)
   |-- Knowledge Intelligence Engine
   |-- Export Service
   |-- Knowledge Ingestion + Retrieval (chunk/embed/HNSW/entity/graph)
@@ -35,7 +37,9 @@ Query planning -> Connectors -> Parse/deduplicate -> Validate URL -> Rank eviden
 -> Citation verification -> Artifact snapshot
 ```
 
-Agent 数量遵循目标文档限制：Research、Knowledge、Writing、Review 四种顺序职责。它们通过同一受控内容/证据对象协作，不进行无边界 Agent 间对话；每个不可变成果的 `workflow` 固化四阶段责任、完成状态和实际输出计数，Markdown 可导出 provenance。
+Agent 数量遵循目标文档限制：Research、Knowledge、Writing、Review 四种顺序职责。未配置 Web Provider 时保留确定性离线流程；配置后 `src/agent-runtime.mjs` 使用 LangGraph.js `StateGraph` 顺序执行四个节点，每个节点单独调用当前租户模型并只可修改字段白名单内、与离线草稿结构相同的数据。来源、个人知识上下文和 evidence 始终由 Novi 控制，不允许模型添加来源或执行检索片段中的指令；阶段失败保留输入草稿并记录 `fallback`。它们不进行无边界 Agent 间对话；每个不可变成果的 `workflow` 固化 runtime/provider/model、四阶段责任、状态、token 使用和实际输出计数，Markdown 可导出 provenance。
+
+`src/llm-providers.mjs` 提供主流厂商目录和 LangChain chat model 适配，包括国内 MiniMax（固定 `https://api.minimaxi.com/v1`）和 DeepSeek。Provider 配置按租户保存且只允许 owner/admin 访问；API Key 使用 AES-256-GCM 加密，响应和账户导出只暴露 `hasApiKey` 与末四位。固定厂商 endpoint 不允许改写，Ollama 仅回环，自定义远端 endpoint 必须是 HTTPS 且主机列入部署 allowlist。Web 配置优先于旧 `NOVI_LLM_*` 单次网关。当前 LangGraph 使用 `MemorySaver`，用于单次执行的 thread checkpoint；Job 和最终阶段状态由 Novi Repository 持久化，但图节点 checkpoint 尚不能跨服务重启恢复。
 
 ## 3. 生产存储映射
 

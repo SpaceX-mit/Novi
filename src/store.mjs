@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { searchProjectKnowledge } from './knowledge.mjs';
 
-const initialState = () => ({ version: 3, projects: [], jobs: [], users: [], sessions: [], audit: [], usage: [], subscriptions: [], paymentEvents: [], organizations: [], memberships: [], invitations: [], oidcStates: [], documents: [], chunks: [], knowledgeEntities: [], knowledgeEdges: [], watchConfigs: [], sourceSnapshots: [], externalProjectionJobs: [] });
+const initialState = () => ({ version: 3, projects: [], jobs: [], users: [], sessions: [], audit: [], usage: [], subscriptions: [], paymentEvents: [], organizations: [], memberships: [], invitations: [], oidcStates: [], llmProviderConfigs: [], documents: [], chunks: [], knowledgeEntities: [], knowledgeEdges: [], watchConfigs: [], sourceSnapshots: [], externalProjectionJobs: [] });
 
 export class JsonStore {
   constructor(file) {
@@ -19,6 +19,7 @@ export class JsonStore {
       state.usage ||= []; state.subscriptions ||= []; state.paymentEvents ||= [];
       state.organizations ||= []; state.memberships ||= []; state.invitations ||= [];
       state.oidcStates ||= [];
+      state.llmProviderConfigs ||= [];
       state.documents ||= []; state.chunks ||= []; state.knowledgeEntities ||= []; state.knowledgeEdges ||= [];
       state.watchConfigs ||= []; state.sourceSnapshots ||= []; state.externalProjectionJobs ||= [];
       return state;

@@ -292,6 +292,42 @@ paths:
   /api/org:
     get:
       responses: { '200': { description: Current organization and role } }
+  /api/llm/providers:
+    get:
+      description: Lists supported providers and tenant configurations without returning API keys or encrypted credentials.
+      responses:
+        '200':
+          description: Provider catalog and sanitized tenant configurations
+          content: { application/json: { schema: { $ref: '#/components/schemas/LlmProviderSettings' } } }
+        '403': { description: Admin role required }
+  /api/llm/provider:
+    put:
+      description: Saves and activates a tenant LLM provider. A blank API key preserves an existing encrypted credential for that provider.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/LlmProviderInput' } } }
+      responses:
+        '200':
+          description: Provider encrypted and activated
+          content: { application/json: { schema: { type: object, required: [config], properties: { config: { $ref: '#/components/schemas/LlmProviderConfig' } } } } }
+        '403': { description: Admin role required }
+        '422': { description: 'Provider, model, endpoint, or credential is invalid' }
+        '503': { description: Production credential encryption is not configured }
+    delete:
+      description: Disables the active tenant provider and returns generation to deterministic offline mode without deleting stored encrypted credentials.
+      responses:
+        '204': { description: Provider disabled }
+        '403': { description: Admin role required }
+  /api/llm/provider/test:
+    post:
+      description: Performs a minimal request against the active provider. The operation can consume provider tokens.
+      responses:
+        '200':
+          description: Provider connection succeeded
+          content: { application/json: { schema: { $ref: '#/components/schemas/LlmProviderTestResult' } } }
+        '403': { description: Admin role required }
+        '409': { description: No active provider is configured }
+        '502': { description: Provider request failed }
   /api/orgs:
     get:
       responses:
@@ -338,6 +374,56 @@ components:
     JobId: { in: path, name: id, required: true, schema: { type: string, format: uuid } }
     MemberId: { in: path, name: id, required: true, schema: { type: string, format: uuid } }
   schemas:
+    LlmProviderInput:
+      type: object
+      required: [provider, model]
+      properties:
+        provider: { type: string, enum: [openai, anthropic, google, deepseek, openrouter, mistral, xai, groq, minimax, azure-openai, ollama, custom] }
+        model: { type: string, minLength: 1, maxLength: 160 }
+        baseUrl: { type: string, format: uri, maxLength: 500, description: Accepted only for Azure OpenAI, loopback Ollama, and allowlisted OpenAI-compatible providers }
+        apiVersion: { type: string, maxLength: 40, description: Azure OpenAI API version }
+        apiKey: { type: string, maxLength: 2000, writeOnly: true }
+    LlmProviderConfig:
+      type: object
+      required: [id, tenantId, provider, model, active, hasApiKey, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        provider: { type: string }
+        model: { type: string }
+        baseUrl: { type: string, format: uri }
+        apiVersion: { type: string }
+        active: { type: boolean }
+        hasApiKey: { type: boolean }
+        apiKeyLast4: { type: [string, 'null'], maxLength: 4 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    LlmProviderDefinition:
+      type: object
+      required: [id, name, defaultModel, apiKeyRequired]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        defaultModel: { type: string }
+        baseUrl: { type: string, format: uri }
+        configurableBaseUrl: { type: boolean }
+        apiVersion: { type: string }
+        apiKeyRequired: { type: boolean }
+    LlmProviderSettings:
+      type: object
+      required: [providers, configs]
+      properties:
+        providers: { type: array, items: { $ref: '#/components/schemas/LlmProviderDefinition' } }
+        configs: { type: array, items: { $ref: '#/components/schemas/LlmProviderConfig' } }
+        activeProvider: { type: [string, 'null'] }
+    LlmProviderTestResult:
+      type: object
+      required: [ok, provider, model, latencyMs]
+      properties:
+        ok: { type: boolean, const: true }
+        provider: { type: string }
+        model: { type: string }
+        latencyMs: { type: integer, minimum: 0 }
     Credentials:
       type: object
       required: [email, password]

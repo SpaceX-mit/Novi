@@ -1,5 +1,6 @@
 data/*.json
 data/*.backup.json
+data/.novi-config-key
 node_modules/
 dist/
 coverage/

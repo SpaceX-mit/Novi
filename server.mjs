@@ -21,6 +21,7 @@ import { verifyEvidenceSources } from './src/evidence.mjs';
 import { objectStoreConfigured, validateObjectStoreConfiguration } from './src/object-store.mjs';
 import { graphStoreConfigured, validateGraphConfiguration } from './src/graph-store.mjs';
 import { enqueueDocumentDeletion, enqueueDocumentProjection, externalProjectionPending, flushExternalProjectionJobs } from './src/external-projection.mjs';
+import { providerCatalog, publicProviderConfig, resolvedProviderConfig, saveProviderConfig, testProviderConnection } from './src/llm-providers.mjs';
 import { browserAgentConfigured, mcpSourceConfigured, renderWithBrowserAgent, validateSourceAdapterConfiguration } from './src/source-adapters.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
@@ -408,6 +409,43 @@ async function api(req, res, url, store, auth, metrics) {
     const organization = state.organizations.find((item) => item.id === user.tenantId) || { id: user.tenantId, name: 'Personal workspace' };
     return send(res, 200, { organization, role: roleFor(state, user) });
   }
+  if (req.method === 'GET' && url.pathname === '/api/llm/providers') {
+    if (!await requireRole(store, res, user, 'admin')) return true;
+    const state = await store.read();
+    const configs = (state.llmProviderConfigs || []).filter((config) => config.tenantId === user.tenantId).map(publicProviderConfig);
+    return send(res, 200, { providers: providerCatalog(), configs, activeProvider: configs.find((config) => config.active)?.provider || null });
+  }
+  if (req.method === 'PUT' && url.pathname === '/api/llm/provider') {
+    if (!await requireRole(store, res, user, 'admin')) return true;
+    const input = await jsonBody(req);
+    try {
+      const config = await store.update((state) => saveProviderConfig(state, user.tenantId, user.id, input));
+      await store.audit({ action: 'llm.provider.updated', userId: user.id, tenantId: user.tenantId, resourceId: config.provider, model: config.model });
+      return send(res, 200, { config });
+    } catch (error) {
+      const unavailable = /NOVI_CONFIG_ENCRYPTION_KEY/.test(error.message);
+      return send(res, unavailable ? 503 : 422, { error: error.message, code: unavailable ? 'SECRET_STORAGE_UNAVAILABLE' : 'LLM_PROVIDER_INVALID' });
+    }
+  }
+  if (req.method === 'DELETE' && url.pathname === '/api/llm/provider') {
+    if (!await requireRole(store, res, user, 'admin')) return true;
+    await store.update((state) => { for (const config of (state.llmProviderConfigs || [])) if (config.tenantId === user.tenantId) config.active = false; });
+    await store.audit({ action: 'llm.provider.disabled', userId: user.id, tenantId: user.tenantId, resourceId: user.tenantId });
+    return send(res, 204, '');
+  }
+  if (req.method === 'POST' && url.pathname === '/api/llm/provider/test') {
+    if (!await requireRole(store, res, user, 'admin')) return true;
+    try {
+      const config = await resolvedProviderConfig(await store.read(), user.tenantId);
+      if (!config) return send(res, 409, { error: 'No active LLM provider is configured', code: 'LLM_PROVIDER_NOT_CONFIGURED' });
+      const result = await testProviderConnection(config);
+      await store.audit({ action: 'llm.provider.tested', userId: user.id, tenantId: user.tenantId, resourceId: config.provider, model: config.model });
+      return send(res, 200, result);
+    } catch (error) {
+      console.warn(`LLM provider connection test failed for tenant ${user.tenantId}: ${String(error.message || '').slice(0, 200)}`);
+      return send(res, 502, { error: 'The configured LLM provider could not complete the connection test', code: 'LLM_PROVIDER_UNAVAILABLE' });
+    }
+  }
   if (req.method === 'GET' && url.pathname === '/api/orgs') {
     const state = await store.read();
     if (user.id === 'local') return send(res, 200, { organizations: [{ id: 'local', name: 'Personal workspace', role: 'owner', current: true }] });
@@ -658,7 +696,7 @@ async function api(req, res, url, store, auth, metrics) {
   }
   if (req.method === 'GET' && url.pathname === '/api/me/export') {
     const state = await store.read();
-    const payload = { user: { id: user.id, tenantId: user.tenantId, email: user.email, plan: user.plan, role: user.role }, organizations: state.organizations.filter((item) => item.id === user.tenantId), memberships: state.memberships.filter((item) => item.tenantId === user.tenantId), invitations: state.invitations.filter((item) => item.tenantId === user.tenantId).map(({ token, ...safe }) => safe), subscriptions: state.subscriptions.filter((item) => item.tenantId === user.tenantId), paymentEvents: state.paymentEvents.filter((item) => item.tenantId === user.tenantId), projects: state.projects.filter((item) => owned(item, user)), jobs: state.jobs.filter((item) => item.tenantId === user.tenantId), documents: state.documents.filter((item) => item.tenantId === user.tenantId), chunks: state.chunks.filter((item) => item.tenantId === user.tenantId), knowledgeEntities: state.knowledgeEntities.filter((item) => item.tenantId === user.tenantId), knowledgeEdges: state.knowledgeEdges.filter((item) => item.tenantId === user.tenantId), watchConfigs: state.watchConfigs.filter((item) => item.tenantId === user.tenantId).map(publicWatch), sourceSnapshots: state.sourceSnapshots.filter((item) => item.tenantId === user.tenantId), externalProjectionJobs: (state.externalProjectionJobs || []).filter((item) => item.tenantId === user.tenantId).map(({ content: _content, ...safe }) => safe), usage: state.usage.filter((item) => item.tenantId === user.tenantId), audit: state.audit.filter((item) => item.tenantId === user.tenantId) };
+    const payload = { user: { id: user.id, tenantId: user.tenantId, email: user.email, plan: user.plan, role: user.role }, organizations: state.organizations.filter((item) => item.id === user.tenantId), memberships: state.memberships.filter((item) => item.tenantId === user.tenantId), invitations: state.invitations.filter((item) => item.tenantId === user.tenantId).map(({ token, ...safe }) => safe), subscriptions: state.subscriptions.filter((item) => item.tenantId === user.tenantId), paymentEvents: state.paymentEvents.filter((item) => item.tenantId === user.tenantId), llmProviderConfigs: (state.llmProviderConfigs || []).filter((item) => item.tenantId === user.tenantId).map(publicProviderConfig), projects: state.projects.filter((item) => owned(item, user)), jobs: state.jobs.filter((item) => item.tenantId === user.tenantId), documents: state.documents.filter((item) => item.tenantId === user.tenantId), chunks: state.chunks.filter((item) => item.tenantId === user.tenantId), knowledgeEntities: state.knowledgeEntities.filter((item) => item.tenantId === user.tenantId), knowledgeEdges: state.knowledgeEdges.filter((item) => item.tenantId === user.tenantId), watchConfigs: state.watchConfigs.filter((item) => item.tenantId === user.tenantId).map(publicWatch), sourceSnapshots: state.sourceSnapshots.filter((item) => item.tenantId === user.tenantId), externalProjectionJobs: (state.externalProjectionJobs || []).filter((item) => item.tenantId === user.tenantId).map(({ content: _content, ...safe }) => safe), usage: state.usage.filter((item) => item.tenantId === user.tenantId), audit: state.audit.filter((item) => item.tenantId === user.tenantId) };
     return send(res, 200, payload, { 'Content-Disposition': 'attachment; filename="novi-data.json"' });
   }
   if (req.method === 'GET' && (url.pathname === '/api/billing' || url.pathname === '/api/usage')) {
@@ -701,6 +739,7 @@ async function api(req, res, url, store, auth, metrics) {
       state.invitations = state.invitations.filter((item) => !ownedTenants.has(item.tenantId) && item.inviterId !== user.id);
       state.subscriptions = state.subscriptions.filter((item) => !ownedTenants.has(item.tenantId));
       state.paymentEvents = state.paymentEvents.filter((item) => !ownedTenants.has(item.tenantId));
+      state.llmProviderConfigs = (state.llmProviderConfigs || []).filter((item) => !ownedTenants.has(item.tenantId));
       state.memberships = state.memberships.filter((item) => !ownedTenants.has(item.tenantId) && item.userId !== user.id);
       state.sessions = state.sessions.filter((item) => item.userId !== user.id);
       state.users = state.users.filter((item) => item.id !== user.id);
@@ -819,7 +858,8 @@ async function api(req, res, url, store, auth, metrics) {
     }
     let artifact;
     try {
-      artifact = await generateArtifactAsync(marked, { sources: liveSources, knowledgeContext });
+      const providerConfig = await resolvedProviderConfig(await store.read(), user.tenantId);
+      artifact = await generateArtifactAsync(marked, { sources: liveSources, knowledgeContext, providerConfig, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
     } catch (error) {
       await store.update((state) => {
         refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod);
@@ -922,8 +962,19 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       }
     }
     const knowledgeContext = await retrieveWorkspaceKnowledge(store, project, user);
-    if (!await store.updateJob(jobId, { progress: 60 })) throw new Error('Generation was cancelled');
-    const artifact = await generateArtifactAsync(project, { sources: liveSources, knowledgeContext });
+    if (!await store.updateJob(jobId, { progress: 20, currentStage: 'Preparing agent workflow' })) throw new Error('Generation was cancelled');
+    const providerConfig = await resolvedProviderConfig(await store.read(), user.tenantId);
+    const onStage = async (stage) => store.update((state) => {
+      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
+      if (!job) return false;
+      job.agentStages ||= [];
+      const index = job.agentStages.findIndex((item) => item.id === stage.id);
+      const publicStage = { id: stage.id, name: stage.name, status: stage.status, ...(stage.startedAt ? { startedAt: stage.startedAt } : {}), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}) };
+      if (index >= 0) job.agentStages[index] = publicStage; else job.agentStages.push(publicStage);
+      job.progress = Math.max(job.progress || 0, stage.progress || 0); job.currentStage = stage.name; job.updatedAt = new Date().toISOString();
+      return true;
+    });
+    const artifact = await generateArtifactAsync(project, { sources: liveSources, knowledgeContext, providerConfig, onStage, threadId: `${user.tenantId}:${jobId}` });
     const result = await store.update((state) => {
       const item = state.projects.find((entry) => entry.id === project.id && owned(entry, user));
       const job = (state.jobs || []).find((entry) => entry.id === jobId && entry.status === 'running');
@@ -932,7 +983,7 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
     });
     if (!result) throw new Error('Project was deleted');
     committed = true;
-    await store.updateJob(jobId, { status: 'completed', progress: 100, resultId: project.id });
+    await store.updateJob(jobId, { status: 'completed', progress: 100, resultId: project.id, currentStage: null });
     await store.audit({ action: 'job.completed', userId: project.ownerId, tenantId: project.tenantId, resourceId: jobId });
   } catch (error) {
     if (metrics) metrics.generationFailed += 1;

@@ -18,6 +18,7 @@ test('web smoke: health, shell and security headers', async (t) => {
   const shellHtml = await shell.text();
   assert.match(shellHtml, /Novi AI Knowledge Scientist/);
   assert.match(shellHtml, /snapshot-modal/);
+  assert.match(shellHtml, /provider-modal/);
   const health = await fetch(`${base}/api/health`);
   assert.equal(health.status, 200);
   assert.match(health.headers.get('x-request-id'), /^[0-9a-f-]{36}$/);

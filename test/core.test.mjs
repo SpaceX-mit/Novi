@@ -28,6 +28,7 @@ import { renderWithBrowserAgent, searchMcpSources, validateSourceAdapterConfigur
 import { getDocumentObject, putDocumentObject } from '../src/object-store.mjs';
 import { syncKnowledgeGraph } from '../src/graph-store.mjs';
 import { enqueueDocumentProjection, flushExternalProjectionJobs } from '../src/external-projection.mjs';
+import { normalizeProviderInput, resolvedProviderConfig, saveProviderConfig } from '../src/llm-providers.mjs';
 
 test('engine generates complete artifacts for all product paths', () => {
   const base = { id: 'p', title: 'Agent OS', topic: 'Agent OS security', description: 'Study threat models' };
@@ -74,6 +75,64 @@ test('engine generates complete artifacts for all product paths', () => {
   assert.match(artifactToLatex(base, paper), /Workspace knowledge used/);
   assert.match(artifactToLatex(base, paper, 'ieee'), /^\\documentclass\[conference\]\{IEEEtran\}/);
   assert.match(artifactToLatex(base, paper, 'acm'), /^\\documentclass\[sigconf\]\{acmart\}/);
+});
+
+test('LLM provider configuration is encrypted, endpoint-restricted, and resolved without exposing the key', async () => {
+  const previous = { encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY, allowed: process.env.NOVI_LLM_ALLOWED_HOSTS };
+  process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-provider-encryption-key-with-32-characters';
+  delete process.env.NOVI_LLM_ALLOWED_HOSTS;
+  const state = { llmProviderConfigs: [] };
+  try {
+    assert.throws(() => normalizeProviderInput({ provider: 'custom', model: 'model', baseUrl: 'https://unlisted.example/v1' }), /NOVI_LLM_ALLOWED_HOSTS/);
+    const minimax = normalizeProviderInput({ provider: 'minimax', apiKey: 'minimax-test-key' });
+    assert.equal(minimax.baseUrl, 'https://api.minimaxi.com/v1'); assert.equal(minimax.model, 'MiniMax-M3'); assert.equal(minimax.apiKeyRequired, true);
+    const saved = await saveProviderConfig(state, 'tenant', 'owner', { provider: 'custom', model: 'model', baseUrl: 'http://127.0.0.1:9000/v1', apiKey: 'provider-secret-value' });
+    assert.equal(saved.hasApiKey, true); assert.equal(saved.apiKeyLast4, 'alue'); assert.equal('encryptedApiKey' in saved, false);
+    assert.doesNotMatch(state.llmProviderConfigs[0].encryptedApiKey, /provider-secret-value/);
+    const resolved = await resolvedProviderConfig(state, 'tenant');
+    assert.equal(resolved.apiKey, 'provider-secret-value'); assert.equal(resolved.model, 'model');
+  } finally {
+    if (previous.encryption === undefined) delete process.env.NOVI_CONFIG_ENCRYPTION_KEY; else process.env.NOVI_CONFIG_ENCRYPTION_KEY = previous.encryption;
+    if (previous.allowed === undefined) delete process.env.NOVI_LLM_ALLOWED_HOSTS; else process.env.NOVI_LLM_ALLOWED_HOSTS = previous.allowed;
+  }
+});
+
+test('Web-configured provider runs the four-stage LangGraph workflow', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'novi-langgraph-'));
+  const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY };
+  process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_JOB_WORKER = 'false'; process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-langgraph-encryption-key-32-chars';
+  let modelCalls = 0;
+  const modelServer = http.createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
+    let content = 'OK';
+    const marker = 'Editable schema and current draft: ';
+    const line = prompt.split('\n').find((value) => value.startsWith(marker));
+    if (line) { const editable = JSON.parse(line.slice(marker.length)); const key = Object.keys(editable)[0]; content = JSON.stringify({ [key]: editable[key] }); modelCalls += 1; }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: `call-${modelCalls}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 } }));
+  });
+  await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
+  const server = createServer(); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    server.close(); modelServer.close();
+    for (const [key, value] of Object.entries(previous)) { const env = { file: 'NOVI_DATA_FILE', auth: 'NOVI_AUTH_REQUIRED', worker: 'NOVI_JOB_WORKER', encryption: 'NOVI_CONFIG_ENCRYPTION_KEY' }[key]; if (value === undefined) delete process.env[env]; else process.env[env] = value; }
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let response = await fetch(`${base}/api/llm/provider`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'custom', model: 'test-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'test-provider-key' }) });
+  assert.equal(response.status, 200); const saved = (await response.json()).config; assert.equal(saved.hasApiKey, true); assert.equal('encryptedApiKey' in saved, false);
+  response = await fetch(`${base}/api/llm/providers`); const settings = await response.json(); assert.equal(settings.activeProvider, 'custom'); assert.equal('encryptedApiKey' in settings.configs[0], false);
+  response = await fetch(`${base}/api/llm/provider/test`, { method: 'POST' }); assert.equal(response.status, 200);
+  response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'LangGraph', topic: 'Agent runtime', type: 'paper' }) });
+  const project = (await response.json()).project;
+  response = await fetch(`${base}/api/projects/${project.id}/generate?async=true`, { method: 'POST' }); assert.equal(response.status, 202); const jobId = (await response.json()).job.id;
+  let job;
+  for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 30)); job = (await (await fetch(`${base}/api/jobs/${jobId}`)).json()).job; if (job.status !== 'queued' && job.status !== 'running') break; }
+  assert.equal(job.status, 'completed'); assert.equal(job.agentStages.length, 4); assert.ok(job.agentStages.every((stage) => stage.status === 'completed'));
+  const generated = await (await fetch(`${base}/api/projects/${project.id}`)).json(); const artifact = generated.project.artifacts[0];
+  assert.equal(modelCalls, 4); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.deepEqual(artifact.workflow.agents.map((agent) => agent.status), ['completed', 'completed', 'completed', 'completed']);
+  const raw = await readFile(join(dir, 'state.json'), 'utf8'); assert.doesNotMatch(raw, /test-provider-key/);
+  const exported = await (await fetch(`${base}/api/me/export`)).json(); assert.equal(exported.llmProviderConfigs[0].hasApiKey, true); assert.equal('encryptedApiKey' in exported.llmProviderConfigs[0], false);
 });
 
 test('evidence exports preserve claim-level source links and disclaimers', () => {
@@ -1239,6 +1298,8 @@ test('organization invitations enforce RBAC and isolate editor/viewer actions', 
   const switched = { token: response.headers.get('set-cookie').match(/novi_session=([^;]+)/)[1] };
   response = await fetch(`${base}/api/projects`, { headers: { authorization: `Bearer ${viewer.token}` } });
   assert.equal(response.status, 401);
+  response = await fetch(`${base}/api/llm/providers`, { headers: { authorization: `Bearer ${switched.token}` } });
+  assert.equal(response.status, 403);
   response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { authorization: `Bearer ${switched.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Nope', topic: 'Nope', type: 'knowledge' }) });
   assert.equal(response.status, 403);
   response = await fetch(`${base}/api/billing/checkout`, { method: 'POST', headers: { authorization: `Bearer ${switched.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ plan: 'pro' }) });

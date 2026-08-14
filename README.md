@@ -19,6 +19,24 @@ npm start
 npm run dev
 ```
 
+### 局域网访问 Web
+
+需要让同一网络中的其他主机通过服务器 IP 访问时，监听所有网卡并强制启用账户认证：
+
+```bash
+HOST=0.0.0.0 PORT=4173 NOVI_AUTH_REQUIRED=true NOVI_APP_ORIGIN=http://<服务器局域网IP>:4173 npm start
+```
+
+例如当前机器可使用 `NOVI_APP_ORIGIN=http://10.0.90.51:4173`，其他主机打开 `http://10.0.90.51:4173`。不要在未启用认证时将端口暴露给其他主机；`0.0.0.0` 只是监听地址，浏览器必须使用机器的实际 IP。若远程连接失败，还需要在主机防火墙或云安全组中仅向可信网段放行 TCP 4173。公网部署必须使用反向代理 HTTPS，并按生产部署章节启用 Secure Cookie 和生产存储，不能直接暴露此开发 HTTP 服务。
+
+### 在 Web 配置 LLM Provider
+
+以组织 owner/admin 登录后，点击顶部的模型设置按钮即可选择 OpenAI、Anthropic、Google Gemini、DeepSeek、MiniMax、OpenRouter、Mistral、xAI、Groq、Azure OpenAI、Ollama 或自定义 OpenAI-compatible 服务，填写模型和 API Key 后点击 `Save & test`；该操作会先加密保存当前表单，再测试已经激活的配置，避免测试未保存表单时出现 `No active LLM provider`。MiniMax 使用国内官方 OpenAI-compatible endpoint `https://api.minimaxi.com/v1`，默认模型为 `MiniMax-M3`，也可以在 Web 中改成账号可用的模型。viewer/editor 看不到设置入口，服务端也会对 Provider API 返回 403。选择 Offline mode 会停用当前 Web Provider，并恢复离线生成或下述旧环境变量网关。
+
+Web 中保存的租户配置优先于 `NOVI_LLM_BASE_URL`、`NOVI_LLM_API_KEY`、`NOVI_LLM_MODEL` 旧配置。启用 Web Provider 后，每次成果生成由 LangGraph.js 顺序执行 Research、Knowledge、Writing、Review 四个模型阶段，异步 Job 会显示当前阶段、进度和 token 使用；单阶段调用或响应校验失败时保留受控离线草稿，并把该阶段记录为 `fallback`。未保存 Web Provider 时，旧环境变量仍走原有单次 OpenAI-compatible 网关；两者都未配置时完全离线运行。
+
+API Key 以 AES-256-GCM 加密保存在租户状态中，API、账户导出和浏览器都不会收到明文或密文。生产必须通过 Secret Manager 设置稳定的 `NOVI_CONFIG_ENCRYPTION_KEY`（至少 32 字符）；本地开发会在数据文件旁生成权限为 0600 的 `data/.novi-config-key`。已知 Provider 使用固定官方 endpoint；Ollama 只允许回环地址；远端自定义 OpenAI-compatible 主机必须使用 HTTPS 并列入逗号分隔的 `NOVI_LLM_ALLOWED_HOSTS`。每阶段超时由 `NOVI_LLM_TIMEOUT_MS` 控制，最大输出 token 由 `NOVI_LLM_MAX_OUTPUT_TOKENS` 控制，完整示例见 `.env.example`。
+
 ### Electron 桌面端
 
 启动开发态桌面应用：
@@ -141,9 +159,9 @@ docker run --rm -p 4173:4173 -v novi-data:/app/data novi
 - [商用就绪审计](docs/COMMERCIAL_READINESS.md)：逐项验证证据与仍需目标环境完成的正式发布门禁。
 - [发布手册](docs/RELEASE.md)：三平台打包、签名/公证 Secret、SBOM、校验和及发布后验收。
 
-当前生成器默认是离线确定性实现，目的是让完整产品流程可演示、可测试；实时连接器仅补充来源，不替代生产级引用核验。Knowledge Builder 输出 Wiki/路线/Practice Lab/图谱；Deep Research 分别输出 Report/Wiki/Graph/SOTA/机会；Paper Author 输出完整章节、research gap、novelty、方法、实验、图表和审稿，并可导出 IEEE/ACM LaTeX。每个不可变成果保存 Research/Knowledge/Writing/Review 四阶段 provenance。设置 `NOVI_AUTH_REQUIRED=true` 可强制注册/登录和租户隔离；生成接口添加 `?async=true` 可返回 Job 并通过 `/api/jobs/:id` 轮询；配置模型网关后可使用真实 OpenAI-compatible LLM。`provider-contract-check` 已覆盖 LLM、支付、OIDC、Browser Agent 和 MCP 的本地真实 HTTP 协议形态，生产基线适配器和 outbox 已通过本地契约/集成验证；本地依赖/镜像扫描、Linux AppImage 和窗口 smoke 也已通过。正式商业发布仍必须完成真实供应商/目标服务验收、引用级人工核验、备份恢复演练、公网压力测试、托管 CI 记录，以及 Windows/macOS 签名、公证、安装和升级 E2E，详见商用就绪审计。
+当前生成器默认是离线确定性实现，目的是让完整产品流程可演示、可测试；实时连接器仅补充来源，不替代生产级引用核验。Knowledge Builder 输出 Wiki/路线/Practice Lab/图谱；Deep Research 分别输出 Report/Wiki/Graph/SOTA/机会；Paper Author 输出完整章节、research gap、novelty、方法、实验、图表和审稿，并可导出 IEEE/ACM LaTeX。每个不可变成果保存 Research/Knowledge/Writing/Review 四阶段 provenance；配置 Web Provider 后这四阶段由 LangGraph.js 分别调用模型。设置 `NOVI_AUTH_REQUIRED=true` 可强制注册/登录和租户隔离；生成接口添加 `?async=true` 可返回 Job 并通过 `/api/jobs/:id` 轮询。`provider-contract-check` 已覆盖 LLM、支付、OIDC、Browser Agent 和 MCP 的本地真实 HTTP 协议形态，生产基线适配器和 outbox 已通过本地契约/集成验证；本地依赖/镜像扫描、Linux AppImage 和窗口 smoke 也已通过。当前 LangGraph checkpoint 仅在单次进程内存中使用，不能跨进程重启恢复图节点；环境变量旧 LLM 网关仍是单次调用，阶段内也尚未提供模型自主工具循环。正式商业发布仍必须完成真实供应商/目标服务验收、引用级人工核验、备份恢复演练、公网压力测试、托管 CI 记录，以及 Windows/macOS 签名、公证、安装和升级 E2E，详见商用就绪审计。
 
-Web 操作与组织角色对齐：viewer 可浏览、搜索、查看历史和导出；editor 可创建、生成、置顶、导入知识、刷新来源和删除单个知识文档；admin/owner 还可删除工作空间并发起付费 checkout。服务端会对每个写请求重新校验 membership。删除工作空间或发起任务的成员账户会取消关联未完成 Job、按原计费周期只退款一次，并阻止运行中的 worker 在删除后提交成果。
+Web 操作与组织角色对齐：viewer 可浏览、搜索、查看历史和导出；editor 可创建、生成、置顶、导入知识、刷新来源和删除单个知识文档；admin/owner 还可配置组织 LLM Provider、删除工作空间并发起付费 checkout。服务端会对每个写请求重新校验 membership。删除工作空间或发起任务的成员账户会取消关联未完成 Job、按原计费周期只退款一次，并阻止运行中的 worker 在删除后提交成果。
 
 浏览器 Cookie 会话的写请求（POST/PUT/PATCH/DELETE）执行同源 `Origin`/Fetch Metadata 校验；跨站请求返回 403。显式 `Authorization: Bearer` 的 API 客户端不依赖浏览器 Cookie，因此不受该 CSRF 检查影响。
 

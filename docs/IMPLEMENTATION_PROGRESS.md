@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder、Deep Research、Paper Author 三条核心产品路径已经实现并具有本地自动化验证证据。正式收费商用发布尚未完成，剩余工作主要是目标环境、真实供应商、跨平台签名安装、容量与安全验收等外部门禁。
+Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder、Deep Research、Paper Author 三条核心产品路径已经实现并具有本地自动化验证证据。Web 已支持按组织配置主流 LLM Provider；配置后使用 LangGraph.js 依次运行 Research、Knowledge、Writing、Review 四个真实模型阶段。正式收费商用发布尚未完成，剩余工作主要是持久 Agent checkpoint、目标环境、真实供应商、跨平台签名安装、容量与安全验收等门禁。
 
 当前开发机上的源码位于 NTFS/FUSE 挂载的 `/data`。该文件系统无法保存 Electron `chrome-sandbox` 所需的 `root:root 4755` 权限，因此直接执行 `npm run desktop` 仍不能显示 UI；需要将项目迁移到 ext4，或把 Electron runtime 安装到 `/opt` 后再完成一次真实窗口验收。这是当前环境问题，不是 UI 功能缺失。
 
@@ -13,14 +13,16 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder�
 | 范围 | 已实现内容 | 当前证据 |
 | --- | --- | --- |
 | 核心产品 | Knowledge Builder、Deep Research、Paper Author；成果版本、导出、Research/Knowledge/Writing/Review provenance | 默认测试与浏览器核心旅程覆盖 |
-| Web 与 API | 共享 REST API/UI、工作区、知识导入与检索、异步 Job、来源刷新、成果历史、指标 | OpenAPI 3.1 契约共 35 paths / 40 operations；语法检查覆盖 38 modules |
+| Web 与 API | 共享 REST API/UI、工作区、知识导入与检索、异步 Job/Agent 阶段、来源刷新、成果历史、Provider 设置、指标 | OpenAPI 3.1 契约共 38 paths / 44 operations；语法检查覆盖 40 modules |
 | 账户与商业边界 | Cookie-only Web 会话、OIDC 边界、组织与 RBAC、配额、支付 provider 边界、审计与生命周期取消 | 本地 HTTP/provider 契约和领域测试通过；未配置真实支付 provider 时明确返回 503，不创建模拟订单 |
 | 知识与生成 | 文本/Web/PDF/GitHub 导入、离线向量、RAG 上下文、来源连接器、Browser Agent/MCP 接口、连续更新 | 本地契约、集成和浏览器 smoke 已覆盖；真实来源仍需生产级人工核验 |
+| Agent Runtime | LangGraph.js 有界四阶段 StateGraph；每阶段独立模型调用、字段/形状校验、fallback、token 与 Job 进度；Novi RBAC/evidence/配额/持久化保持权威 | 本地 OpenAI-compatible HTTP 集成验证 4 次阶段调用；68 tests passed + 1 PostgreSQL 条件跳过 |
+| LLM Provider Web 配置 | OpenAI、Anthropic、Google、DeepSeek、MiniMax、OpenRouter、Mistral、xAI、Groq、Azure OpenAI、Ollama、自定义兼容服务；租户隔离、owner/admin RBAC、连接测试、Offline mode | Chromium smoke 与 API/RBAC 测试通过；API Key AES-256-GCM 加密且不进入 API/导出响应 |
 | 存储接口 | JSON 文件、PostgreSQL/pgvector、对象存储、Neo4j、持久 outbox | 本地 PostgreSQL/MinIO/Neo4j 路径已验证；目标托管实例仍待验收 |
 | Web/容器交付 | Web 本地运行、Docker 多阶段非 root 运行、健康与就绪检查 | Docker 镜像已构建并检查；最近记录的镜像为 `sha256:5af027f80df589bc4f7fe746e3464669576e6c5bf28a3b8fd3b9300f7f0e0cb1` |
 | Electron 构建兼容 | Node.js 商业开发基线设为 22.12+，`.nvmrc` 固定 22.22.2，desktop lifecycle 增加版本预检 | 已消除旧 Node 加载 `@noble/hashes` 时的 `ERR_REQUIRE_ESM` |
 | Linux 桌面制品 | electron-builder 配置、安全 BrowserWindow、Linux unpacked/AppImage 构建与打包态 smoke | AppImage 已生成；最近记录 SHA-256 为 `b956734a2233861e8feb160ae7941142bb87a80559217f33efd715f5a403016d` |
-| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、SBOM、依赖与镜像扫描、release-check | 最近记录：66 passed + 1 PostgreSQL 条件跳过；npm audit/Grype 0 vulnerabilities；SBOM 144 components；release-check 13 artifacts |
+| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 最近记录：68 passed + 1 PostgreSQL 条件跳过；npm 官方 audit 0 vulnerabilities；锁文件 SBOM 352 components / 59 runtime；浏览器与 Provider 契约通过 |
 
 ## 未完成
 
@@ -29,13 +31,19 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder�
 - [ ] 将源码/`node_modules` 迁移到支持 Unix 权限的 ext4，或按 README 将 Electron 43.4.0 runtime 安装到 `/opt/novi-electron-43.4.0`。
 - [ ] 在当前真实桌面会话运行 `npm run desktop`，确认窗口、内置服务和核心 UI 可见。自动化 Xvfb smoke 已通过，但不能代替这次人工桌面验收。
 
+### Agent Runtime 后续
+
+- [ ] 将 LangGraph `MemorySaver` 换成生产数据库持久 checkpoint，并验证服务重启后的安全节点级恢复；当前只持久化 Novi Job/阶段状态，中断任务仍按失败退款处理。
+- [ ] 根据真实账号质量评测决定是否加入阶段内模型工具循环；当前 sources/RAG 由 Novi 受控 adapter 预先提供，不允许模型自行改变 evidence。
+- [ ] 旧 `NOVI_LLM_BASE_URL/API_KEY/MODEL` 环境变量路径仍使用原有单次模型网关；需要迁移为统一 LangGraph 配置或在后续版本弃用。
+
 ### 正式收费商用发布门禁
 
 - [ ] 使用真实 LLM、支付、OIDC、Browser Agent、MCP 账号或目标服务完成端到端验收，归档供应商环境和回调证据。
 - [ ] 在目标托管 PostgreSQL/pgvector、S3-compatible 对象存储和 Neo4j 上验证 TLS、IAM/最小权限、容量、生命周期、备份与恢复。
 - [ ] 完成引用级领域专家抽检、失败来源处置规则和正式内容质量验收。
 - [ ] 完成目标规模并发、向量/图检索、长时间 worker 和公网压力测试。
-- [ ] 在托管 Git 仓库运行 CI，归档测试、SBOM、依赖/镜像扫描和发布证明；当前仅建立本地 Git 仓库，尚无远程托管和 CI 运行记录。
+- [ ] 在已配置的 GitHub 远程仓库运行 CI，归档测试、SBOM、依赖/镜像扫描和发布证明；源码已提交至远程，但尚无托管 CI 运行记录。
 - [ ] 构建并验证 Windows NSIS 与 macOS DMG/ZIP 的真实签名、公证、安装、启动和升级 E2E。
 - [ ] 为 Linux AppImage 采用组织批准的签名策略，并在干净的受支持发行版完成安装/启动验收。
 - [ ] 完成外部渗透测试、许可证法律审核、生产监控告警和正式灾难恢复演练。
@@ -47,14 +55,20 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder�
 | electron-builder 报 `ERR_REQUIRE_ESM`，无法加载 `@noble/hashes/blake2.js` | Node 20.18.1/22.11.0 等旧版本不支持该依赖组合所需的同步 ESM 加载边界 | 已修复：要求 Node 22.12+，使用 `.nvmrc` 的 22.22.2，并在 desktop 命令前预检 |
 | `npm run desktop:dist` 后没有出现 UI | `desktop:dist` 是制品构建命令，只生成安装包，不负责启动应用 | 已澄清：开发启动使用 `npm run desktop`，构建后需单独运行产物 |
 | `chrome-sandbox` 即使执行 `chmod 4755` 仍显示 `777` | `/data` 为 `fuseblk`/NTFS，不保存 Linux setuid 权限；Ubuntu AppArmor 同时限制非特权 user namespace | 环境待处理：推荐迁移到 ext4；或使用 README 中 root 管理的 `/opt` runtime。不得把正式启动默认改成 `--no-sandbox` |
+| MiniMax 表单填写后测试显示 `No active LLM provider configured` | 原 UI 的 Test 只测试已激活配置，不保存刚填写的表单；状态文件确认 `llmProviderConfigs` 为空 | 已修复：按钮改为 `Save & test`，先 PUT 加密保存/激活当前表单，再 POST 测试连接；已暴露的旧 Key 必须在供应商侧轮换 |
 
 ## 下一步优先级
 
 1. 完成当前机器 ext4 或 `/opt` Electron runtime 设置并人工确认桌面 UI。
-2. 把源码置于真实 Git 托管仓库，运行已经配置的持续集成门禁并归档结果。
+2. 在已配置的 GitHub 远程仓库运行持续集成门禁并归档结果。
 3. 接入真实供应商和目标基础设施，按 `docs/COMMERCIAL_READINESS.md` 第 3 节逐项关闭外部门禁。
 4. 在 Windows、macOS 和干净 Linux 环境完成签名制品的安装、启动和升级验收。
 
 ## 更新记录
 
+- 2026-08-14：将 LangGraph 四阶段 Runtime、Web LLM Provider/MiniMax 配置及局域网监听改动提交并推送至 GitHub `origin/main`；变更文件未发现凭据形状的明文，本地运行数据和配置密钥保持忽略。托管 CI 运行与证据归档仍待完成。
+- 2026-08-14：修复 Provider 初次配置的测试顺序；`Save & test` 现在先保存当前 MiniMax/其他 Provider 表单再测试，避免尚无 active 配置时返回 409。验证：`npm test` 68 passed + 1 skip、`npm run browser-smoke`、`npm run check`、`npm run openapi-check` 通过。用户在对话中暴露的 Key 未写入代码或状态文件，必须撤销轮换。
+- 2026-08-14：记录认证式局域网启动方式；当前机器用 `HOST=0.0.0.0`、`NOVI_AUTH_REQUIRED=true` 监听 TCP 4173，并以 `http://10.0.90.51:4173` 作为局域网入口。`ss` 确认 `0.0.0.0:4173`，本机局域网地址与独立 Docker 网络命名空间访问 `/api/health` 均返回 200，未登录 `/api/projects` 返回 401。UFW 为 active，但当前账户无 sudo 权限读取具体规则；仍建议从目标物理主机验证，不将开发 HTTP 服务视为公网部署。
+- 2026-08-14：增加国内 MiniMax Provider（`https://api.minimaxi.com/v1`，默认 `MiniMax-M3`）并接入 Web 目录、OpenAPI、浏览器 smoke 和加密配置验证。Provider 总数为 12 类；`npm test` 68 passed + 1 skip、`npm run browser-smoke`、`npm run check`、`npm run openapi-check`、`npm run release-check` 通过。真实 MiniMax 账号连接和模型质量仍属于正式商用外部门禁。
+- 2026-08-14：采用 LangGraph.js 完成 Web Provider 驱动的 Research → Knowledge → Writing → Review 四阶段运行时；增加 12 类 Provider 的租户级 Web 配置、AES-GCM 密钥保护、endpoint allowlist、连接测试、RBAC 和 Job 阶段进度。验证：`npm test` 68 passed + 1 skip、`npm run browser-smoke`、`npm run check`、`npm run openapi-check`、`npm run provider-contract-check`、`npm run sbom-check`、`npm run release-check` 和 npm 官方 registry audit 通过。仍缺真实厂商账号 E2E、跨重启 LangGraph checkpoint 和阶段内工具循环。
 - 2026-08-14：建立实现进度文档；记录 Node/electron-builder 兼容修复、Linux AppImage 构建证据、当前 NTFS sandbox 阻塞和正式商用发布门禁；已建立本地 Git 初始提交，远程托管与 CI 仍未完成。

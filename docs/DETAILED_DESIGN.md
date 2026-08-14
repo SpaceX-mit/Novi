@@ -10,6 +10,8 @@
 - `desktop/main.cjs`：默认选择空闲回环端口，使用单实例锁，管理服务子进程，将默认状态写入 Electron OS `userData`，等待 200 健康响应，创建 sandbox/contextIsolation 安全窗口并限制导航/外链，在窗口或应用退出时终止子进程。electron-builder 从同一代码生成 Windows NSIS、macOS DMG/ZIP 和 Linux AppImage；`desktop-package-smoke` 从真实 `app.asar`/AppImage 验证服务、userData、窗口和 UI。
 - `src/auth.mjs`：账户注册、scrypt 密码哈希、可撤销 Bearer/HttpOnly 会话和租户身份解析；组织切换原子轮换 token，Web 客户端只接收新 HttpOnly Cookie。
 - `src/model.mjs`：OpenAI-compatible 结构化 JSON 网关，超时、未知字段、类型/数组边界或 schema 错误时回退离线生成；模型不能改写来源、工作区检索上下文和证据。最多 6 个、每个 700 字符的检索片段以明确的 UNTRUSTED DATA 边界传入，system message 禁止执行片段指令。
+- `src/llm-providers.mjs`：租户 Provider 目录、输入规范化、endpoint allowlist、AES-256-GCM API Key 加解密、LangChain 模型构造和连接测试。支持 OpenAI、Anthropic、Google、DeepSeek、MiniMax、OpenRouter、Mistral、xAI、Groq、Azure OpenAI、Ollama 与自定义 OpenAI-compatible 服务；MiniMax 使用国内官方 `https://api.minimaxi.com/v1`。
+- `src/agent-runtime.mjs`：LangGraph.js 四节点有向图；每阶段建立有界 prompt、单独调用模型、校验 JSON 和现有字段形状，记录状态/时间/token。阶段错误保留上一版内容并记录 `fallback`，取消信号终止整条工作流。
 - `src/oidc.mjs`：OIDC discovery、PKCE S256、授权码交换、JWKS/RS256 ID Token 校验；HTTP start/callback 还用短时 HttpOnly 状态 Cookie 将授权响应绑定到发起浏览器。
 - `src/payments.mjs`：checkout provider 边界与 HMAC webhook；事件类型和 active plan 均白名单校验后才改变订阅。
 - `src/postgres-store.mjs`：可选 PostgreSQL JSONB Repository 迁移适配器，使用事务和连接池；pgvector 可用时维护 24 维原生向量表、HNSW cosine 索引，并通过租户/项目过滤的 `<=>` 查询实现 `searchKnowledge`。
@@ -29,7 +31,8 @@ Project {
   artifacts: Artifact[]
 }
 Artifact { id, type, title, createdAt, content: { ..., knowledgeContext[] } }
-Workflow { strategy, product, completedAt, agents[4]: { order, name, responsibility, status, outputs } }
+Workflow { strategy, product, completedAt, runtime?, agents[4]: { order, name, responsibility, status, usage?, outputs } }
+LlmProviderConfig { tenantId, provider, model, baseUrl, apiVersion?, encryptedApiKey?, active, createdBy, updatedBy }
 SourceSnapshot { id, projectId, tenantId, sources[], changeStatus, changes, autoUpdateStatus?, artifactId? }
 ```
 
@@ -37,7 +40,9 @@ SourceSnapshot { id, projectId, tenantId, sources[], changeStatus, changes, auto
 
 ## 3. 任务与模型调用
 
-Web 端生成使用 `POST /api/projects/:id/generate?async=true`，先取得 Job，再轮询 `/api/jobs/:id`；任务阶段为 queued → running → completed/failed。项目状态在任务创建前原子切换到 `generating`，同一项目重复请求返回 409；额度扣减与任务创建在同一串行存储队列中完成，Job 保存 generation/source 计费周期，失败或服务重启时按原周期退款且只执行一次。成果提交成功后即使 Job 状态更新失败也不会重复退款。服务启动时会把遗留 queued/running Job 标记失败并恢复项目状态。每个消费者先通过 Repository 的事务性 `claimJob` 将 queued 原子变为 running 并写入 workerId，多个 HTTP 实例不会重复执行同一 Job。删除工作空间或发起任务的成员账户时，删除事务按 Job 的 charged/refunded 标记退款并移除 Job；运行中的 worker 在模型调用前确认 Job 仍存在，并在成果提交事务再次确认 running Job、项目和 active membership，删除竞态不会重复退款或把成果写回共享项目。同步/异步执行都会以项目 topic + description 查询 `Repository.searchKnowledge`，再把经过字段白名单和长度限制的结果交给领域层。领域层先生成离线结构，再由可选 OpenAI-compatible `ModelGateway` 补全；网关超时、非 2xx 或 schema 不合法时回退到离线结构，避免外部服务故障破坏工作区。
+Web 端生成使用 `POST /api/projects/:id/generate?async=true`，先取得 Job，再轮询 `/api/jobs/:id`；任务阶段为 queued → running → completed/failed。配置 Web Provider 后，Job 还持久化 `agentStages`、`currentStage` 和 20–100 的实际进度；每个阶段状态为 running → completed/fallback，并保存有界错误摘要与 token usage。项目状态在任务创建前原子切换到 `generating`，同一项目重复请求返回 409；额度扣减与任务创建在同一串行存储队列中完成，Job 保存 generation/source 计费周期，失败或服务重启时按原周期退款且只执行一次。成果提交成功后即使 Job 状态更新失败也不会重复退款。服务启动时会把遗留 queued/running Job 标记失败并恢复项目状态。每个消费者先通过 Repository 的事务性 `claimJob` 将 queued 原子变为 running 并写入 workerId，多个 HTTP 实例不会重复执行同一 Job。删除工作空间或发起任务的成员账户时，删除事务按 Job 的 charged/refunded 标记退款并移除 Job；运行中的 worker 在每个 LangGraph 节点前确认 Job 仍存在，并在成果提交事务再次确认 running Job、项目和 active membership，删除竞态不会重复退款或把成果写回共享项目。同步/异步执行都会以项目 topic + description 查询 `Repository.searchKnowledge`，再把经过字段白名单和长度限制的结果交给领域层。领域层先生成离线结构；租户存在 Web Provider 时优先用 LangGraph 四阶段补全，否则由旧 OpenAI-compatible `ModelGateway` 单次补全。外部调用超时、非 2xx 或 schema 不合法时回退到受控离线结构，避免外部服务故障破坏工作区。
+
+Provider 管理接口只允许 owner/admin。保存时固定厂商忽略客户端 base URL；Azure 只接受批准的 Azure AI hostname，Ollama 只接受回环，自定义非回环 hostname 必须出现在 `NOVI_LLM_ALLOWED_HOSTS` 且使用 HTTPS。API Key 使用 `NOVI_CONFIG_ENCRYPTION_KEY` 派生的 256 位 key 做 AES-GCM；生产缺少稳定密钥时拒绝保存，本地生成数据目录下 0600 key 文件。连接测试只返回 provider/model/latency，不返回凭据。当前 `MemorySaver` 不提供跨进程图恢复；服务重启仍按现有 Job 恢复规则将中断任务失败并退款，而不是从某个 Agent 节点继续。
 
 ## 4. 错误处理
 
@@ -50,7 +55,7 @@ Web 端生成使用 `POST /api/projects/:id/generate?async=true`，先取得 Job
 
 ## 5. UI 设计
 
-信息架构固定为 Overview 与三种核心路径。创建弹窗只收集完成任务所需信息；项目卡片用于重复资产；工作空间通过标签承载不同成果视图，避免多级页面跳转。Workspace knowledge 弹窗展示文档/片段/概念数量、导入文档和语义匹配片段；成果主视图展示当次使用的个人知识及免责声明。Web 从 `/api/org` 获取当前实时角色：viewer 只显示浏览、搜索、历史和导出，editor 增加创建、生成、置顶、摄取、刷新和单文档删除，admin/owner 额外显示工作空间删除和付费升级；服务端仍逐请求重新计算 membership，UI 隐藏不是安全边界。桌面端与 Web 共用 UI 和 API，避免功能分叉。
+信息架构固定为 Overview 与三种核心路径。创建弹窗只收集完成任务所需信息；项目卡片用于重复资产；工作空间通过标签承载不同成果视图，避免多级页面跳转。Workspace knowledge 弹窗展示文档/片段/概念数量、导入文档和语义匹配片段；成果主视图展示当次使用的个人知识及免责声明。Web 从 `/api/org` 获取当前实时角色：viewer 只显示浏览、搜索、历史和导出，editor 增加创建、生成、置顶、摄取、刷新和单文档删除，admin/owner 额外显示 Provider 设置、工作空间删除和付费升级；服务端仍逐请求重新计算 membership，UI 隐藏不是安全边界。Provider 弹窗从服务端目录渲染选择器，根据厂商切换 base URL/API version 字段，API Key 只允许覆盖而不能读取；保存、测试连接和 Offline mode 分别对应 PUT、POST test 和 DELETE。桌面端与 Web 共用 UI 和 API，避免功能分叉。
 
 ## 6. 生产适配接口
 

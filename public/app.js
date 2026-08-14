@@ -1,6 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer' };
+const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null };
 let authRegister = false;
 const roleRank = Object.freeze({ viewer: 10, editor: 20, admin: 30, owner: 40 });
 const canRole = (required) => (roleRank[state.role] || 0) >= roleRank[required];
@@ -10,7 +10,9 @@ function applyRoleCapabilities() {
   for (const id of ['new-project', 'heading-new', 'empty-new']) { const node = $(`#${id}`); if (node) node.hidden = !editor; }
   $$('.nav-tab').filter((tab) => tab.dataset.view !== 'overview').forEach((tab) => { tab.hidden = !editor; });
   $('#billing-upgrade').hidden = !canRole('admin');
+  $('#model-settings').hidden = !canRole('admin');
   if (!canRole('admin')) $('#billing-modal')?.classList.add('hidden');
+  if (!canRole('admin')) $('#provider-modal')?.classList.add('hidden');
 }
 
 const typeMeta = {
@@ -251,14 +253,81 @@ async function logout() { try { await request('/api/auth/logout', { method: 'POS
 function openBilling() { if (!canRole('admin')) return showToast('Admin access is required to manage billing'); $('#billing-error').textContent = ''; $('#billing-modal').classList.remove('hidden'); }
 function closeBilling() { $('#billing-modal').classList.add('hidden'); $('#billing-error').textContent = ''; }
 async function upgradePlan(plan) { try { const result = await request('/api/billing/checkout', { method: 'POST', body: JSON.stringify({ plan, returnUrl: window.location.href }) }); if (result.checkoutUrl) { const url = safeExternalUrl(result.checkoutUrl); if (url === '#') throw new Error('Payment provider returned an unsafe checkout URL'); window.open(url, '_blank', 'noopener,noreferrer'); } } catch (error) { $('#billing-error').textContent = error.message; showToast(error.message); } }
+function closeProviderSettings() { $('#provider-modal').classList.add('hidden'); $('#provider-error').textContent = ''; }
+function providerDefinition(id) { return state.providerSettings?.providers?.find((provider) => provider.id === id); }
+function renderProviderStatus() {
+  const active = state.providerSettings?.configs?.find((config) => config.active);
+  const status = $('#provider-status');
+  status.textContent = active ? `${providerDefinition(active.provider)?.name || active.provider} · ${active.model}` : 'Offline';
+  status.classList.toggle('offline', !active);
+  $('#provider-disable').hidden = !active;
+}
+function populateProviderForm(providerId) {
+  const definition = providerDefinition(providerId); if (!definition) return;
+  const saved = state.providerSettings.configs.find((config) => config.provider === providerId);
+  const form = $('#provider-form');
+  form.elements.model.value = saved?.model || definition.defaultModel || '';
+  form.elements.baseUrl.value = saved?.baseUrl || definition.baseUrl || '';
+  form.elements.apiVersion.value = saved?.apiVersion || definition.apiVersion || '';
+  form.elements.apiKey.value = '';
+  form.elements.apiKey.required = Boolean(definition.apiKeyRequired && !saved?.hasApiKey);
+  form.elements.apiKey.placeholder = saved?.hasApiKey ? `Stored key ending ${saved.apiKeyLast4 || '••••'}` : definition.apiKeyRequired ? 'Required' : 'Optional';
+  $('#provider-key-hint').textContent = saved?.hasApiKey ? 'Leave blank to keep the stored key' : definition.apiKeyRequired ? 'Required' : 'Optional';
+  $('#provider-base-field').hidden = !definition.configurableBaseUrl;
+  $('#provider-version-field').hidden = definition.id !== 'azure-openai';
+}
+async function openProviderSettings() {
+  if (!canRole('admin')) return showToast('Admin access is required to manage model providers');
+  $('#provider-error').textContent = ''; $('#provider-modal').classList.remove('hidden');
+  try {
+    state.providerSettings = await request('/api/llm/providers');
+    const select = $('#provider-form [name="provider"]');
+    select.innerHTML = state.providerSettings.providers.map((provider) => `<option value="${escapeHtml(provider.id)}">${escapeHtml(provider.name)}</option>`).join('');
+    select.value = state.providerSettings.activeProvider || state.providerSettings.providers[0]?.id || '';
+    populateProviderForm(select.value); renderProviderStatus();
+  } catch (error) { $('#provider-error').textContent = error.message; }
+}
+async function saveProviderSettings(event) {
+  event.preventDefault(); const form = event.currentTarget; const payload = Object.fromEntries(new FormData(form).entries());
+  if (!payload.apiKey) delete payload.apiKey;
+  $('#provider-error').textContent = '';
+  try {
+    const result = await request('/api/llm/provider', { method: 'PUT', body: JSON.stringify(payload) });
+    for (const config of state.providerSettings.configs) config.active = false;
+    const index = state.providerSettings.configs.findIndex((config) => config.provider === result.config.provider);
+    if (index >= 0) state.providerSettings.configs[index] = result.config; else state.providerSettings.configs.push(result.config);
+    state.providerSettings.activeProvider = result.config.provider; populateProviderForm(result.config.provider); renderProviderStatus(); showToast('Model provider saved');
+  } catch (error) { $('#provider-error').textContent = error.message; }
+}
+async function testConfiguredProvider() {
+  const button = $('#provider-test'); button.disabled = true; $('#provider-error').textContent = '';
+  try {
+    const form = $('#provider-form'); const payload = Object.fromEntries(new FormData(form).entries());
+    if (!payload.apiKey) delete payload.apiKey;
+    const saved = await request('/api/llm/provider', { method: 'PUT', body: JSON.stringify(payload) });
+    for (const config of state.providerSettings.configs) config.active = false;
+    const index = state.providerSettings.configs.findIndex((config) => config.provider === saved.config.provider);
+    if (index >= 0) state.providerSettings.configs[index] = saved.config; else state.providerSettings.configs.push(saved.config);
+    state.providerSettings.activeProvider = saved.config.provider; populateProviderForm(saved.config.provider); renderProviderStatus();
+    const result = await request('/api/llm/provider/test', { method: 'POST' }); showToast(`${result.provider} connected · ${result.latencyMs} ms`);
+  }
+  catch (error) { $('#provider-error').textContent = error.message; }
+  finally { button.disabled = false; }
+}
+async function disableProvider() {
+  $('#provider-error').textContent = '';
+  try { await request('/api/llm/provider', { method: 'DELETE' }); for (const config of state.providerSettings.configs) config.active = false; state.providerSettings.activeProvider = null; renderProviderStatus(); showToast('Offline generation enabled'); }
+  catch (error) { $('#provider-error').textContent = error.message; }
+}
 async function generate(id) {
   try {
     showToast('Generation queued…');
     const queued = await request(`/api/projects/${id}/generate?async=true`, { method: 'POST' });
-    let job = queued.job;
-    for (let attempt = 0; attempt < 120; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
+    let job = queued.job; let lastStage = '';
+    for (let attempt = 0; attempt < 1200; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
       job = (await request(`/api/jobs/${job.id}`)).job;
+      if (job.currentStage && job.currentStage !== lastStage) { lastStage = job.currentStage; showToast(`${job.currentStage} · ${job.progress}%`); }
       if (job.status === 'completed') break;
       if (job.status === 'failed') throw new Error(job.error || 'Generation failed');
     }
@@ -341,6 +410,7 @@ function closeSearch() { $('#search-modal').classList.add('hidden'); $('#search-
 
 $('#new-project').onclick = () => openModal(); $('#heading-new').onclick = () => openModal(); $('#empty-new').onclick = () => openModal(); $('#modal-close').onclick = closeModal; $('.modal-backdrop').onclick = closeModal; $('#snapshot-close').onclick = () => $('#snapshot-modal').classList.add('hidden'); $$('[data-close-snapshots]').forEach((node) => node.onclick = () => $('#snapshot-modal').classList.add('hidden'));
 $('#billing-upgrade').onclick = openBilling; $('#billing-close').onclick = closeBilling; $$('[data-close-billing]').forEach((node) => node.onclick = closeBilling); $$('[data-checkout-plan]').forEach((node) => node.onclick = () => upgradePlan(node.dataset.checkoutPlan));
+$('#model-settings').onclick = openProviderSettings; $('#provider-close').onclick = closeProviderSettings; $$('[data-close-provider]').forEach((node) => node.onclick = closeProviderSettings); $('#provider-form').addEventListener('submit', saveProviderSettings); $('#provider-form [name="provider"]').addEventListener('change', (event) => populateProviderForm(event.currentTarget.value)); $('#provider-test').onclick = testConfiguredProvider; $('#provider-disable').onclick = disableProvider;
 $('#org-switch').onchange = (event) => switchOrganization(event.currentTarget.value);
 $('#logout').onclick = logout;
 $('#source-search').onclick = openSearch;
@@ -372,7 +442,7 @@ $('#knowledge-results').addEventListener('click', (event) => {
   deleteKnowledgeDocument($('#knowledge-search-form').dataset.projectId, button.dataset.deleteDocument, button.dataset.documentTitle || 'this document');
 });
 $$('.nav-tab').forEach((tab) => tab.addEventListener('click', () => { if (tab.dataset.view === 'overview') showOverview(); else openModal(tab.dataset.view); })); $('#view-all').onclick = showOverview;
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeModal(); closeSearch(); closeKnowledgeLibrary(); closeBilling(); } if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); } if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); openModal(); } });
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeModal(); closeSearch(); closeKnowledgeLibrary(); closeBilling(); closeProviderSettings(); } if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); } if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); openModal(); } });
 applyRoleCapabilities(); loadProjects().then(loadBilling).catch((error) => showToast(error.message));
 
 export { state, applyRoleCapabilities, renderWorkspace, renderKnowledgeDocuments };

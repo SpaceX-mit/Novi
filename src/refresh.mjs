@@ -4,6 +4,7 @@ import { consumeGeneration, consumeSourceQuery, refundGeneration, refundSourceQu
 import { verifyEvidenceSources } from './evidence.mjs';
 import { generateArtifactAsync } from './engine.mjs';
 import { searchProjectKnowledge } from './knowledge.mjs';
+import { resolvedProviderConfig } from './llm-providers.mjs';
 
 const DAY = 24 * 60 * 60 * 1000;
 const CLAIM_TTL = 15 * 60 * 1000;
@@ -74,7 +75,18 @@ export async function updateProjectFromSnapshot(store, snapshot, user) {
       && updaterActive(state, user, marked.project.tenantId)
     ));
     if (!stillActive) throw new Error('Continuous update was cancelled');
-    const artifact = await generateArtifactAsync(marked.project, { sources: snapshot.sources || [], knowledgeContext });
+    const providerConfig = await resolvedProviderConfig(await store.read(), marked.project.tenantId);
+    const onStage = async (stage) => store.update((state) => {
+      const job = (state.jobs || []).find((item) => item.id === marked.job.id && item.status === 'running');
+      if (!job || !updaterActive(state, user, marked.project.tenantId)) return false;
+      job.agentStages ||= [];
+      const index = job.agentStages.findIndex((item) => item.id === stage.id);
+      const publicStage = { id: stage.id, name: stage.name, status: stage.status, ...(stage.startedAt ? { startedAt: stage.startedAt } : {}), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}) };
+      if (index >= 0) job.agentStages[index] = publicStage; else job.agentStages.push(publicStage);
+      job.progress = Math.max(job.progress || 0, stage.progress || 0); job.currentStage = stage.name; job.updatedAt = new Date().toISOString();
+      return true;
+    });
+    const artifact = await generateArtifactAsync(marked.project, { sources: snapshot.sources || [], knowledgeContext, providerConfig, onStage, threadId: `${marked.project.tenantId}:${marked.job.id}` });
     artifact.trigger = 'continuous-update'; artifact.snapshotId = snapshot.id;
     const committed = await store.update((state) => {
       const project = (state.projects || []).find((item) => item.id === marked.project.id && item.tenantId === marked.project.tenantId);

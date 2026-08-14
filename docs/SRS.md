@@ -42,6 +42,8 @@ Web 浏览器或 Electron 客户端通过 HTTP REST API 访问 Novi 服务。服
 | FR-32 | 商业计划目录 | Billing API 与管理员 Web 显示 Free、Personal $29、Pro $99、Enterprise $1000 起的额度和目标用户；Personal/Pro/Enterprise 可提交真实 provider checkout，未配置 provider 明确 503，不模拟收费 | `PLANS`, `/api/billing`, `/api/billing/checkout`, `#billing-modal` |
 | FR-33 | JavaScript 渲染 Browser Agent | editor 可对公开 HTTP(S) 页面显式选择 `render=browser`；服务端先对目标 URL 执行 DNS/SSRF 校验，再通过配置的隔离 HTTP worker 执行 JS 渲染，阻断图片/媒体/字体，限制超时、worker 响应 1 MB 和提取文本 880 KB，并对 worker 返回的最终 URL 再校验；未配置时返回 503，不在主服务执行远程脚本 | `src/source-adapters.mjs`, `POST /api/projects/:id/knowledge/import`, `public/app.js` |
 | FR-34 | 通用 MCP 来源适配 | 配置 MCP Streamable HTTP endpoint 后执行 `initialize`、`notifications/initialized`、`tools/list`、`tools/call`；只调用管理员配置且服务端实际公布的 source tool，输入固定为 `{query,limit}`，只接纳 structured sources 中的无凭据 HTTP(S) URL，限制响应大小、超时和 authority 上限，再进入统一去重、排序与 concrete URL 证据核验 | `src/source-adapters.mjs`, `src/connectors.mjs`, `GET /api/search` |
+| FR-35 | Web LLM Provider 配置 | owner/admin 可按组织选择主流 Provider（含国内 MiniMax）、模型和允许的 endpoint，保存/覆盖 API Key、测试连接或切回 Offline mode；viewer/editor 的 UI 隐藏且 API 返回 403，响应与数据导出不暴露明文或密文 API Key | `src/llm-providers.mjs`, `/api/llm/provider*`, `#provider-modal` |
+| FR-36 | LangGraph Agent Runtime | 存在租户 Web Provider 时，Research、Knowledge、Writing、Review 四个 LangGraph 节点依次单独调用模型，只修改字段白名单内同形数据；Job 暴露阶段、进度和 token，阶段失败记录 fallback 并保留离线草稿 | `src/agent-runtime.mjs`, `generateArtifactAsync()`, `agentStages` |
 
 ## 3. 外部接口
 
@@ -53,6 +55,10 @@ Web 浏览器或 Electron 客户端通过 HTTP REST API 访问 Novi 服务。服
 - `GET /api/billing` / `GET /api/usage`：返回当前租户计划、自然月用量和额度。
 - `GET /api/me/export` / `DELETE /api/me`：数据可携带和账户删除。
 - `GET /api/jobs/:id`：查询异步任务状态。
+- `GET /api/llm/providers`：owner/admin 获取 Provider 目录、脱敏租户配置和当前选择。
+- `PUT /api/llm/provider`：owner/admin 保存并启用一个租户 Provider；API Key 只写。
+- `DELETE /api/llm/provider`：owner/admin 停用当前 Web Provider，切回离线/旧环境变量路径。
+- `POST /api/llm/provider/test`：owner/admin 测试当前 Provider 连接，不返回凭据。
 - `GET /api/projects/:id/knowledge[?q=<query>&limit=1..50]`：列出工作区知识，或执行租户隔离的语义片段检索。
 - `POST /api/projects/:id/knowledge/import`：`{title,url,render?: static|browser}`；browser 模式要求管理员已配置隔离 Browser Agent。
 - `DELETE /api/projects/:id/knowledge/:documentId`：删除单个活跃知识文档及其检索/外部投影；历史成果 excerpt 保留。
@@ -85,6 +91,8 @@ Web 浏览器或 Electron 客户端通过 HTTP REST API 访问 Novi 服务。服
 | NFR-16 | 检索与模型安全 | 工作区片段限制为最多 6 条、每条最多 700 字符；模型 system/user 提示将片段标记为不可信数据并禁止遵循其中指令；模型不能改写检索上下文、来源或证据，工作区片段与 verified web evidence 明确分离 |
 | NFR-17 | 数据生命周期与可审计性 | 单文档删除必须原子移除活跃关系/向量检索数据并持久重试外部清理；成果版本作为不可变生成记录保留当时已使用 excerpt，删除确认明确提示该边界；需要完全清除时使用工作空间或账户删除 |
 | NFR-18 | 外部采集适配器安全 | Browser Agent/MCP 远端 endpoint 必须为 HTTPS（仅回环开发允许 HTTP），生产非回环 endpoint 必须使用独立 bearer token；endpoint 禁止 URL 凭据/fragment，供应商调用禁止自动重定向并设置 1–30 秒有界超时和 1 MB 响应上限；适配器内容始终视为不可信输入，MCP 返回 URL仍须经过统一 evidence verification |
+| NFR-19 | LLM 凭据与网络安全 | 租户 API Key 使用 AES-256-GCM；生产必须提供至少 32 字符的稳定配置密钥；API/导出不得返回密文；固定厂商使用批准 endpoint，Ollama 仅回环，自定义远端主机必须 HTTPS 且在 allowlist |
+| NFR-20 | Agent 有界与恢复语义 | LangGraph recursion limit 为 8，不允许模型增加来源/字段/工具调用；单阶段错误显式标记 fallback。当前 checkpoint 为进程内存，服务重启按 Job 失败退款恢复，不宣称节点级续跑 |
 
 ## 5. 数据约束
 
