@@ -1,6 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, contextPanel: 'wiki', activeDocumentId: null, monitoringJobId: null, composerDraft: '', composerMode: 'auto' };
+const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, toolSettings: null, activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, contextPanel: 'wiki', activeDocumentId: null, monitoringJobId: null, composerDraft: '', composerMode: 'auto' };
 let authRegister = false;
 const roleRank = Object.freeze({ viewer: 10, editor: 20, admin: 30, owner: 40 });
 const canRole = (required) => (roleRank[state.role] || 0) >= roleRank[required];
@@ -11,6 +11,7 @@ function applyRoleCapabilities() {
   $$('.nav-tab').filter((tab) => tab.dataset.view !== 'overview').forEach((tab) => { tab.hidden = !editor; });
   $('#billing-upgrade').hidden = !canRole('admin');
   $('#model-settings').hidden = !canRole('admin');
+  $('#customize-nav').hidden = !canRole('admin');
   if (!canRole('admin')) $('#billing-modal')?.classList.add('hidden');
   if (!canRole('admin')) $('#provider-modal')?.classList.add('hidden');
 }
@@ -152,7 +153,7 @@ function renderVersionComparison(project, artifactIndex) {
 
 function showOverview() {
   state.activeProject = null;
-  $('#view-overview').classList.add('active-view'); $('#view-workspace').classList.remove('active-view');
+  $('#view-overview').classList.add('active-view'); $('#view-workspace').classList.remove('active-view'); $('#view-customize').classList.remove('active-view');
   $('#page-label').textContent = 'Overview';
   $$('.nav-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.view === 'overview'));
   renderProjects();
@@ -165,7 +166,7 @@ function showWorkspace(project) {
     state.compareVersions = false;
   }
   state.activeProject = project;
-  $('#view-overview').classList.remove('active-view'); $('#view-workspace').classList.add('active-view');
+  $('#view-overview').classList.remove('active-view'); $('#view-customize').classList.remove('active-view'); $('#view-workspace').classList.add('active-view');
   $('#page-label').textContent = project.title;
   $$('.nav-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.view === project.type));
   if (state.sessionProjectId !== project.id) {
@@ -239,7 +240,8 @@ function renderSessionRail(project) {
 function renderAgentMessage(message) {
   const isUser = message.role === 'user';
   const meta = [message.mode ? sessionModeLabel(message.mode) : '', message.status || '', formatDateTime(message.createdAt)].filter(Boolean).join(' · ');
-  return `<article class="agent-message ${isUser ? 'user' : 'assistant'} ${message.kind || 'message'}"><div class="message-author"><b>${isUser ? 'You' : 'Novi'}</b><span>${escapeHtml(meta)}</span></div><p>${escapeHtml(message.content)}</p>${message.artifactId ? `<button class="message-artifact" data-artifact-id="${escapeHtml(message.artifactId)}">Open generated artifact</button>` : ''}</article>`;
+  const tools = (message.toolCalls || []).map((call) => `<span class="message-tool ${call.status}">${escapeHtml(call.tool)} · ${escapeHtml(call.status)}</span>`).join('');
+  return `<article class="agent-message ${isUser ? 'user' : 'assistant'} ${message.kind || 'message'}"><div class="message-author"><b>${isUser ? 'You' : 'Novi'}</b><span>${escapeHtml(meta)}</span></div><p>${escapeHtml(message.content)}</p>${tools ? `<div class="message-tools">${tools}</div>` : ''}${message.artifactId ? `<button class="message-artifact" data-artifact-id="${escapeHtml(message.artifactId)}">Open generated artifact</button>` : ''}</article>`;
 }
 
 function renderConversation(project) {
@@ -266,7 +268,9 @@ function renderContextBody(project, artifact, artifactIndex, selected) {
   if (state.contextPanel === 'document') return renderDocumentViewer();
   if (!artifact) return '<div class="context-empty"><b>No artifact yet</b><p>Send a request in this Session to create the first knowledge asset.</p></div>';
   const tabs = tabsFor(project.type); const c = artifact.content;
-  return `${renderVersionToolbar(project, artifactIndex)}${state.compareVersions && project.artifacts[artifactIndex + 1] ? renderVersionComparison(project, artifactIndex) : ''}<div class="artifact-panel"><div class="artifact-tabs">${tabs.map((tab) => `<button class="artifact-tab ${selected === tab.key ? 'active' : ''}" data-artifact-tab="${tab.key}">${tab.label}</button>`).join('')}</div><div class="artifact-content">${renderArtifact(project, selected, c)}</div></div>`;
+  const toolCalls = artifact.workflow?.runtime?.toolCalls || [];
+  const toolProvenance = toolCalls.length ? `<section class="tool-provenance"><h3>Tool activity</h3>${toolCalls.map((call) => `<div><b>${escapeHtml(call.tool)}</b><span class="${call.status}">${escapeHtml(call.status)}</span><small>${escapeHtml(formatDateTime(call.completedAt || call.startedAt))}</small></div>`).join('')}</section>` : '';
+  return `${renderVersionToolbar(project, artifactIndex)}${state.compareVersions && project.artifacts[artifactIndex + 1] ? renderVersionComparison(project, artifactIndex) : ''}<div class="artifact-panel"><div class="artifact-tabs">${tabs.map((tab) => `<button class="artifact-tab ${selected === tab.key ? 'active' : ''}" data-artifact-tab="${tab.key}">${tab.label}</button>`).join('')}</div><div class="artifact-content">${renderArtifact(project, selected, c)}</div></div>${toolProvenance}`;
 }
 
 function renderWorkspace(project, selected = state.activeTab) {
@@ -558,6 +562,46 @@ function openSearch() {
 }
 function closeSearch() { $('#search-modal').classList.add('hidden'); $('#search-error').textContent = ''; }
 
+function customToolRow(tool, index) {
+  const schema = tool.inputSchema || { type: 'object', additionalProperties: false, properties: { query: { type: 'string', maxLength: 500 } }, required: ['query'] };
+  return `<article class="custom-tool-row" data-custom-tool-index="${index}" data-custom-tool-id="${escapeHtml(tool.id || '')}"><div class="tool-row-heading"><label class="tool-enabled"><input type="checkbox" name="enabled" ${tool.enabled !== false ? 'checked' : ''} /> Enabled</label><button type="button" class="text-button tool-remove" data-remove-tool="${index}">Remove</button></div><div class="tool-form-grid"><label>Name<input name="name" value="${escapeHtml(tool.name || '')}" maxlength="48" placeholder="literature_lookup" /></label><label>Endpoint<input name="endpoint" type="url" value="${escapeHtml(tool.endpoint || '')}" maxlength="500" placeholder="https://tools.example.com/invoke" /></label><label class="tool-wide">Description<input name="description" value="${escapeHtml(tool.description || '')}" maxlength="500" placeholder="Describe when the Agent should use this tool" /></label><label class="tool-wide">Bearer token <span class="optional">${tool.hasBearerToken ? `Stored · ends ${escapeHtml(tool.bearerTokenLast4 || '')}` : 'Optional'}</span><input name="bearerToken" type="password" maxlength="2000" autocomplete="new-password" /></label><label class="tool-wide">Input JSON Schema<textarea name="inputSchema" rows="7" spellcheck="false">${escapeHtml(JSON.stringify(schema, null, 2))}</textarea></label></div></article>`;
+}
+
+function renderCustomize() {
+  const settings = state.toolSettings || { builtins: [], customTools: [] };
+  const builtins = settings.builtins.map((tool) => `<label class="builtin-tool"><input type="checkbox" data-builtin-tool="${escapeHtml(tool.name)}" ${tool.enabled ? 'checked' : ''} /><span><b>${escapeHtml(tool.label)}</b><small>${escapeHtml(tool.description)}</small></span></label>`).join('');
+  const customTools = settings.customTools.map(customToolRow).join('');
+  $('#customize-root').innerHTML = `<div class="customize-heading"><div><p class="eyebrow">AGENT RUNTIME</p><h1>Customize</h1><p>Control the tools available to Agent runs in this organization.</p></div><button class="primary-button" id="save-tools" ${canRole('admin') ? '' : 'disabled'}>Save tools</button></div><div class="customize-tabs" role="tablist"><button class="active" role="tab">Tools</button><button disabled role="tab">MCP</button><button disabled role="tab">Skills</button><button disabled role="tab">Plugins</button></div><section class="customize-section"><div class="section-head"><div><h2>Built-in tools</h2><p>Workspace access stays within the current tenant and project.</p></div></div><div class="builtin-tool-grid">${builtins || '<p class="muted">Loading built-in tools...</p>'}</div></section><section class="customize-section"><div class="section-head"><div><h2>Custom HTTP tools</h2><p>Endpoints must use an allowed HTTPS hostname and return no more than 32 KB.</p></div><button class="secondary-button" id="add-custom-tool" type="button">Add tool</button></div><div id="custom-tool-list" class="custom-tool-list">${customTools || '<div class="context-empty"><b>No custom tools</b><p>Add an allowlisted HTTP endpoint when this organization needs a domain-specific action.</p></div>'}</div><p class="form-error" id="tools-error"></p></section>`;
+  $('#add-custom-tool').onclick = () => { state.toolSettings.customTools.push({ enabled: true, name: '', description: '', endpoint: '', inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string', maxLength: 500 } }, required: ['query'] } }); renderCustomize(); };
+  $$('[data-remove-tool]').forEach((button) => button.onclick = () => { state.toolSettings.customTools.splice(Number(button.dataset.removeTool), 1); renderCustomize(); });
+  $('#save-tools').onclick = saveTools;
+}
+
+async function openCustomize() {
+  if (!canRole('admin')) return showToast('Admin access is required to configure Agent tools');
+  state.activeProject = null;
+  $('#view-overview').classList.remove('active-view'); $('#view-workspace').classList.remove('active-view'); $('#view-customize').classList.add('active-view');
+  $('#page-label').textContent = 'Customize';
+  $$('.nav-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.view === 'customize'));
+  $('#customize-root').innerHTML = '<p class="muted">Loading Agent tools...</p>';
+  try { state.toolSettings = (await request('/api/agent/tools')).settings; renderCustomize(); }
+  catch (error) { $('#customize-root').innerHTML = `<p class="form-error">${escapeHtml(error.message)}</p>`; }
+}
+
+async function saveTools() {
+  const error = $('#tools-error'); error.textContent = '';
+  try {
+    const builtins = Object.fromEntries($$('[data-builtin-tool]').map((input) => [input.dataset.builtinTool, input.checked]));
+    const customTools = $$('.custom-tool-row').map((row) => {
+      let inputSchema;
+      try { inputSchema = JSON.parse($('[name="inputSchema"]', row).value); } catch { throw new Error(`Input schema for ${$('[name="name"]', row).value || 'custom tool'} is not valid JSON`); }
+      return { id: row.dataset.customToolId || undefined, name: $('[name="name"]', row).value.trim(), endpoint: $('[name="endpoint"]', row).value.trim(), description: $('[name="description"]', row).value.trim(), bearerToken: $('[name="bearerToken"]', row).value || undefined, enabled: $('[name="enabled"]', row).checked, inputSchema };
+    });
+    const result = await request('/api/agent/tools', { method: 'PUT', body: JSON.stringify({ builtins, customTools }) });
+    state.toolSettings = result.settings; renderCustomize(); showToast('Agent tools saved');
+  } catch (saveError) { error.textContent = saveError.message; }
+}
+
 $('#new-project').onclick = () => openModal(); $('#heading-new').onclick = () => openModal(); $('#empty-new').onclick = () => openModal(); $('#modal-close').onclick = closeModal; $('.modal-backdrop').onclick = closeModal; $('#snapshot-close').onclick = () => $('#snapshot-modal').classList.add('hidden'); $$('[data-close-snapshots]').forEach((node) => node.onclick = () => $('#snapshot-modal').classList.add('hidden'));
 $('#billing-upgrade').onclick = openBilling; $('#billing-close').onclick = closeBilling; $$('[data-close-billing]').forEach((node) => node.onclick = closeBilling); $$('[data-checkout-plan]').forEach((node) => node.onclick = () => upgradePlan(node.dataset.checkoutPlan));
 $('#model-settings').onclick = openProviderSettings; $('#provider-close').onclick = closeProviderSettings; $$('[data-close-provider]').forEach((node) => node.onclick = closeProviderSettings); $('#provider-form').addEventListener('submit', saveProviderSettings); $('#provider-form [name="provider"]').addEventListener('change', (event) => populateProviderForm(event.currentTarget.value)); $('#provider-test').onclick = testConfiguredProvider; $('#provider-disable').onclick = disableProvider;
@@ -591,7 +635,7 @@ $('#knowledge-results').addEventListener('click', (event) => {
   const button = event.target.closest('[data-delete-document]'); if (!button) return;
   deleteKnowledgeDocument($('#knowledge-search-form').dataset.projectId, button.dataset.deleteDocument, button.dataset.documentTitle || 'this document');
 });
-$$('.nav-tab').forEach((tab) => tab.addEventListener('click', () => { if (tab.dataset.view === 'overview') showOverview(); else openModal(tab.dataset.view); })); $('#view-all').onclick = showOverview;
+$$('.nav-tab').forEach((tab) => tab.addEventListener('click', () => { if (tab.dataset.view === 'overview') showOverview(); else if (tab.dataset.view === 'customize') openCustomize(); else openModal(tab.dataset.view); })); $('#view-all').onclick = showOverview;
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeModal(); closeSearch(); closeKnowledgeLibrary(); closeBilling(); closeProviderSettings(); } if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); } if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); openModal(); } });
 applyRoleCapabilities(); loadProjects().then(loadBilling).catch((error) => showToast(error.message));
 

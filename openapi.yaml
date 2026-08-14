@@ -290,6 +290,23 @@ paths:
                   modes:
                     type: array
                     items: { $ref: '#/components/schemas/AgentMode' }
+  /api/agent/tools:
+    get:
+      description: Lists tenant Agent tools without returning stored bearer tokens. All members may inspect the tools available to runs.
+      responses:
+        '200':
+          description: Sanitized built-in and custom tool settings
+          content: { application/json: { schema: { type: object, required: [settings, configurable], properties: { settings: { $ref: '#/components/schemas/AgentToolSettings' }, configurable: { type: boolean } } } } }
+    put:
+      description: Replaces tenant tool settings. Custom endpoints require an allowlisted HTTPS hostname; blank bearer tokens preserve an existing encrypted token.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AgentToolSettingsInput' } } }
+      responses:
+        '200': { description: Agent tools saved, content: { application/json: { schema: { type: object, required: [settings], properties: { settings: { $ref: '#/components/schemas/AgentToolSettings' } } } } } }
+        '403': { description: Admin role required }
+        '422': { description: 'Invalid tool name, schema, duplicate, or endpoint' }
+        '503': { description: Production credential encryption is not configured }
   /api/search:
     get:
       parameters:
@@ -435,6 +452,7 @@ components:
         artifactId: { type: string, format: uuid }
         mode: { type: string }
         status: { type: string, enum: [queued, running, completed, failed] }
+        toolCalls: { type: array, maxItems: 20, items: { type: object }, description: Bounded tool invocation provenance retained with the completed assistant message }
         createdAt: { type: string, format: date-time }
     AgentSession:
       type: object
@@ -456,6 +474,51 @@ components:
         id: { type: string, enum: [workflow, react, plan-execute, supervisor] }
         name: { type: string }
         description: { type: string }
+    AgentToolInputSchema:
+      type: object
+      required: [type, additionalProperties, properties, required]
+      properties:
+        type: { type: string, const: object }
+        additionalProperties: { type: boolean, const: false }
+        properties:
+          type: object
+          maxProperties: 12
+          additionalProperties:
+            type: object
+            required: [type]
+            properties:
+              type: { type: string, enum: [string, number, boolean] }
+              description: { type: string, maxLength: 200 }
+              maxLength: { type: integer, minimum: 1, maximum: 20000 }
+        required: { type: array, items: { type: string } }
+    CustomAgentToolInput:
+      type: object
+      required: [name, description, endpoint, inputSchema]
+      properties:
+        id: { type: string }
+        name: { type: string, pattern: '^[a-z][a-z0-9_]{1,47}$' }
+        description: { type: string, minLength: 1, maxLength: 500 }
+        endpoint: { type: string, format: uri, maxLength: 500 }
+        enabled: { type: boolean, default: true }
+        bearerToken: { type: string, maxLength: 2000, writeOnly: true }
+        inputSchema: { $ref: '#/components/schemas/AgentToolInputSchema' }
+    AgentToolSettingsInput:
+      type: object
+      properties:
+        builtins:
+          type: object
+          properties:
+            workspace_read: { type: boolean }
+            workspace_write: { type: boolean }
+            web_search: { type: boolean }
+        customTools: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/CustomAgentToolInput' } }
+    AgentToolSettings:
+      type: object
+      required: [builtins, customTools]
+      properties:
+        builtins: { type: array, items: { type: object } }
+        customTools: { type: array, maxItems: 10, items: { type: object } }
+        updatedAt: { type: [string, 'null'], format: date-time }
     LlmProviderInput:
       type: object
       required: [provider, model]

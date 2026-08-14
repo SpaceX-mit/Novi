@@ -60,6 +60,7 @@ export function appendSessionMessage(session, input) {
     ...(input.artifactId ? { artifactId: input.artifactId } : {}),
     ...(input.mode ? { mode: input.mode } : {}),
     ...(input.status ? { status: input.status } : {}),
+    ...(input.toolCalls?.length ? { toolCalls: input.toolCalls.slice(-20).map((call) => ({ ...call })) } : {}),
   };
   session.messages.push(message);
   session.messages = session.messages.slice(-500);
@@ -84,12 +85,24 @@ export function updateSessionRun(session, patch) {
   return session.activeRun;
 }
 
+export function updateSessionToolCall(session, call) {
+  if (!session?.activeRun) return null;
+  session.activeRun.toolCalls ||= [];
+  const existing = session.activeRun.toolCalls.find((item) => item.id === call.id);
+  if (existing) Object.assign(existing, call); else session.activeRun.toolCalls.push(call);
+  session.activeRun.toolCalls = session.activeRun.toolCalls.slice(-20);
+  session.activeRun.currentStage = call.status === 'running' ? `Using ${call.tool}` : `${call.tool} ${call.status}`;
+  session.activeRun.updatedAt = now(); session.updatedAt = session.activeRun.updatedAt;
+  return existing || session.activeRun.toolCalls.at(-1);
+}
+
 export function completeSessionRun(session, { jobId, artifact, mode }) {
   if (!session) return null;
   const userMessage = (session.messages || []).find((item) => item.jobId === jobId && item.role === 'user');
   if (userMessage) { userMessage.status = 'completed'; userMessage.mode = mode || userMessage.mode; }
   const summary = String(artifact?.content?.summary || artifact?.title || 'Artifact generated.').trim().slice(0, 12_000);
-  const message = appendSessionMessage(session, { role: 'assistant', kind: 'artifact', content: summary, runId: jobId, jobId, artifactId: artifact?.id, mode, status: 'completed' });
+  const toolCalls = session.activeRun?.jobId === jobId ? session.activeRun.toolCalls || [] : [];
+  const message = appendSessionMessage(session, { role: 'assistant', kind: 'artifact', content: summary, runId: jobId, jobId, artifactId: artifact?.id, mode, status: 'completed', toolCalls });
   session.status = 'idle'; session.activeRun = null; session.updatedAt = message.createdAt;
   return message;
 }

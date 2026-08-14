@@ -37,6 +37,14 @@ Web 中保存的租户配置优先于 `NOVI_LLM_BASE_URL`、`NOVI_LLM_API_KEY`�
 
 每个新项目同时创建一个持久 Agent Session，并直接打开对话式工作区。左栏可新建、切换和删除空闲 Session；中栏保存用户/助手消息，composer 可选择 Auto、Workflow、ReAct、Plan & Execute 或 Supervisor；`Generate now` 和 composer 都在当前 Session 启动任务。右栏通过 Files、LLM Wiki、Document 切换工作区文件、不可变成果与文档片段，原有版本比较、导出、知识导入和来源更新仍可使用。`GET/POST /api/projects/:id/sessions` 可列出或新建会话，`GET/DELETE /api/projects/:id/sessions/:sessionId` 可读取或删除空闲会话；运行中的会话返回 409。同步和异步生成都可传 `{prompt,mode,sessionId}`，并把运行模式/阶段/进度、失败信息以及最终 Artifact 链接写回 Session。Session 按项目和租户双重隔离，随工作空间或账户删除，并包含在账户导出和 v3 备份中；服务重启会把中断 Session 置回 idle、写入失败消息并按原规则退款。
 
+### 配置 Agent Tools
+
+组织 owner/admin 可从左侧 `Customize` 进入 Tools，启停 `workspace_read`、`workspace_write`、`web_search`，或增加自定义 HTTP 工具。ReAct、Plan & Execute 和 Supervisor 会在控制循环中决定是否调用工具，把观察结果作为不可信数据交给后续 Specialist；Workflow 保持固定四阶段，不自主调用工具。每次运行最多调用 6 次工具，自定义响应最多 32 KB，默认超时 10 秒且最多 30 秒。调用状态和截断后的输入/结果会保存在 Job、完成 Session 消息和 Artifact runtime provenance 中。
+
+`workspace_read` 只能检索当前租户、当前工作空间的文档；`workspace_write` 默认关闭，启用后只能向当前工作空间写入受限文本知识；`web_search` 只在 `NOVI_LIVE_SOURCES=true` 且本次来源额度已取得时向模型公布。editor 可以在生成任务中调用管理员已启用的工具，viewer 只读，只有 owner/admin 可以修改配置。配置 API 为 `GET/PUT /api/agent/tools`。
+
+远端自定义工具固定使用 `POST application/json`，必须使用 HTTPS，主机必须列入逗号分隔的 `NOVI_TOOL_ALLOWED_HOSTS`；本地非生产开发可使用回环 HTTP。输入 schema 必须是 `type: object`、`additionalProperties: false`，属性只允许 string/number/boolean。可选 Bearer token 使用与 Provider 相同的 AES-256-GCM 密钥加密，API、账户导出和浏览器均不返回明文或密文。超时可通过 `NOVI_TOOL_TIMEOUT_MS` 调整。当前 Customize 中的 MCP、Skills、Plugins 仍是后续入口；现有 `NOVI_MCP_SOURCE_*` 只是固定来源 adapter，不等同于通用 Agent MCP runtime。
+
 API Key 以 AES-256-GCM 加密保存在租户状态中，API、账户导出和浏览器都不会收到明文或密文。生产必须通过 Secret Manager 设置稳定的 `NOVI_CONFIG_ENCRYPTION_KEY`（至少 32 字符）；本地开发会在数据文件旁生成权限为 0600 的 `data/.novi-config-key`。已知 Provider 使用固定官方 endpoint；Ollama 只允许回环地址；远端自定义 OpenAI-compatible 主机必须使用 HTTPS 并列入逗号分隔的 `NOVI_LLM_ALLOWED_HOSTS`。每阶段超时由 `NOVI_LLM_TIMEOUT_MS` 控制，最大输出 token 由 `NOVI_LLM_MAX_OUTPUT_TOKENS` 控制，完整示例见 `.env.example`。
 
 ### Electron 桌面端
@@ -161,9 +169,9 @@ docker run --rm -p 4173:4173 -v novi-data:/app/data novi
 - [商用就绪审计](docs/COMMERCIAL_READINESS.md)：逐项验证证据与仍需目标环境完成的正式发布门禁。
 - [发布手册](docs/RELEASE.md)：三平台打包、签名/公证 Secret、SBOM、校验和及发布后验收。
 
-当前生成器默认是离线确定性实现，目的是让完整产品流程可演示、可测试；实时连接器仅补充来源，不替代生产级引用核验。Knowledge Builder 输出 Wiki/路线/Practice Lab/图谱；Deep Research 分别输出 Report/Wiki/Graph/SOTA/机会；Paper Author 输出完整章节、research gap、novelty、方法、实验、图表和审稿，并可导出 IEEE/ACM LaTeX。每个不可变成果保存 Research/Knowledge/Writing/Review 职责与模式切换 provenance；配置 Web Provider 后由 LangGraph.js 的 Workflow/ReAct/Plan & Execute/Supervisor 控制图调度这些职责。设置 `NOVI_AUTH_REQUIRED=true` 可强制注册/登录和租户隔离；生成接口添加 `?async=true` 可返回 Job 并通过 `/api/jobs/:id` 轮询，生成消息同时写入对应 Agent Session。`provider-contract-check` 已覆盖 LLM、支付、OIDC、Browser Agent 和 MCP 的本地真实 HTTP 协议形态，生产基线适配器和 outbox 已通过本地契约/集成验证；本地依赖/镜像扫描、Linux AppImage 和窗口 smoke 也已通过。当前 LangGraph checkpoint 仅在单次进程内存中使用，不能跨进程重启恢复图节点；环境变量旧 LLM 网关仍是单次调用，阶段内也尚未提供模型自主工具循环。正式商业发布仍必须完成真实供应商/目标服务验收、引用级人工核验、备份恢复演练、公网压力测试、托管 CI 记录，以及 Windows/macOS 签名、公证、安装和升级 E2E，详见商用就绪审计。
+当前生成器默认是离线确定性实现，目的是让完整产品流程可演示、可测试；实时连接器仅补充来源，不替代生产级引用核验。Knowledge Builder 输出 Wiki/路线/Practice Lab/图谱；Deep Research 分别输出 Report/Wiki/Graph/SOTA/机会；Paper Author 输出完整章节、research gap、novelty、方法、实验、图表和审稿，并可导出 IEEE/ACM LaTeX。每个不可变成果保存 Research/Knowledge/Writing/Review 职责、模式切换和工具调用 provenance；配置 Web Provider 后由 LangGraph.js 的 Workflow/ReAct/Plan & Execute/Supervisor 控制图调度这些职责，自主模式可使用管理员启用的内置/自定义工具。设置 `NOVI_AUTH_REQUIRED=true` 可强制注册/登录和租户隔离；生成接口添加 `?async=true` 可返回 Job 并通过 `/api/jobs/:id` 轮询，生成消息同时写入对应 Agent Session。`provider-contract-check` 已覆盖 LLM、支付、OIDC、Browser Agent 和固定来源 MCP 的本地真实 HTTP 协议形态，生产基线适配器和 outbox 已通过本地契约/集成验证；本地依赖/镜像扫描、Linux AppImage 和窗口 smoke 也已通过。当前 LangGraph checkpoint 仅在单次进程内存中使用，不能跨进程重启恢复图节点；环境变量旧 LLM 网关仍是单次调用；通用 MCP、Skills 和 Plugins runtime 尚未实现。正式商业发布仍必须完成真实供应商/目标服务验收、引用级人工核验、备份恢复演练、公网压力测试、托管 CI 记录，以及 Windows/macOS 签名、公证、安装和升级 E2E，详见商用就绪审计。
 
-Web 操作与组织角色对齐：viewer 可浏览、搜索、查看历史和导出；editor 可创建、生成、置顶、导入知识、刷新来源和删除单个知识文档；admin/owner 还可配置组织 LLM Provider、删除工作空间并发起付费 checkout。服务端会对每个写请求重新校验 membership。删除工作空间或发起任务的成员账户会取消关联未完成 Job、按原计费周期只退款一次，并阻止运行中的 worker 在删除后提交成果。
+Web 操作与组织角色对齐：viewer 可浏览、搜索、查看历史和导出；editor 可创建、生成、置顶、导入知识、刷新来源、删除单个知识文档并在生成中使用已启用工具；admin/owner 还可配置组织 LLM Provider 和 Agent Tools、删除工作空间并发起付费 checkout。服务端会对每个写请求重新校验 membership。删除工作空间或发起任务的成员账户会取消关联未完成 Job、按原计费周期只退款一次，并阻止运行中的 worker 在删除后提交成果。
 
 浏览器 Cookie 会话的写请求（POST/PUT/PATCH/DELETE）执行同源 `Origin`/Fetch Metadata 校验；跨站请求返回 403。显式 `Authorization: Bearer` 的 API 客户端不依赖浏览器 Cookie，因此不受该 CSRF 检查影响。
 

@@ -24,7 +24,8 @@ import { enqueueDocumentDeletion, enqueueDocumentProjection, externalProjectionP
 import { providerCatalog, publicProviderConfig, resolvedProviderConfig, saveProviderConfig, testProviderConnection } from './src/llm-providers.mjs';
 import { browserAgentConfigured, mcpSourceConfigured, renderWithBrowserAgent, validateSourceAdapterConfiguration } from './src/source-adapters.mjs';
 import { agentModeCatalog, publicMode, selectAgentMode, validateRequestedMode } from './src/agent-modes.mjs';
-import { beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun } from './src/agent-sessions.mjs';
+import { beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun, updateSessionToolCall } from './src/agent-sessions.mjs';
+import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings } from './src/agent-tools.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const publicDir = join(root, 'public');
@@ -409,6 +410,22 @@ async function api(req, res, url, store, auth, metrics) {
   if (req.method === 'GET' && url.pathname === '/api/agent/modes') {
     return send(res, 200, { modes: agentModeCatalog(), defaultMode: 'auto' });
   }
+  if (req.method === 'GET' && url.pathname === '/api/agent/tools') {
+    const state = await store.read(); const role = roleFor(state, user);
+    return send(res, 200, { settings: publicToolSettings(state, user.tenantId), configurable: role === 'owner' || role === 'admin' });
+  }
+  if (req.method === 'PUT' && url.pathname === '/api/agent/tools') {
+    if (!await requireRole(store, res, user, 'admin')) return true;
+    try {
+      const input = await jsonBody(req);
+      const settings = await store.update((state) => saveToolSettings(state, user.tenantId, user.id, input));
+      await store.audit({ action: 'agent.tools.updated', userId: user.id, tenantId: user.tenantId, resourceId: user.tenantId, builtins: settings.builtins.filter((tool) => tool.enabled).map((tool) => tool.name), customToolCount: settings.customTools.length });
+      return send(res, 200, { settings });
+    } catch (error) {
+      const unavailable = /NOVI_CONFIG_ENCRYPTION_KEY/.test(error.message);
+      return send(res, unavailable ? 503 : 422, { error: error.message, code: unavailable ? 'SECRET_STORAGE_UNAVAILABLE' : 'AGENT_TOOL_CONFIG_INVALID' });
+    }
+  }
   if (req.method === 'GET' && url.pathname === '/api/org') {
     const state = await store.read();
     const organization = state.organizations.find((item) => item.id === user.tenantId) || { id: user.tenantId, name: 'Personal workspace' };
@@ -701,7 +718,7 @@ async function api(req, res, url, store, auth, metrics) {
   }
   if (req.method === 'GET' && url.pathname === '/api/me/export') {
     const state = await store.read();
-    const payload = { user: { id: user.id, tenantId: user.tenantId, email: user.email, plan: user.plan, role: user.role }, organizations: state.organizations.filter((item) => item.id === user.tenantId), memberships: state.memberships.filter((item) => item.tenantId === user.tenantId), invitations: state.invitations.filter((item) => item.tenantId === user.tenantId).map(({ token, ...safe }) => safe), subscriptions: state.subscriptions.filter((item) => item.tenantId === user.tenantId), paymentEvents: state.paymentEvents.filter((item) => item.tenantId === user.tenantId), llmProviderConfigs: (state.llmProviderConfigs || []).filter((item) => item.tenantId === user.tenantId).map(publicProviderConfig), projects: state.projects.filter((item) => owned(item, user)), jobs: state.jobs.filter((item) => item.tenantId === user.tenantId), documents: state.documents.filter((item) => item.tenantId === user.tenantId), chunks: state.chunks.filter((item) => item.tenantId === user.tenantId), knowledgeEntities: state.knowledgeEntities.filter((item) => item.tenantId === user.tenantId), knowledgeEdges: state.knowledgeEdges.filter((item) => item.tenantId === user.tenantId), watchConfigs: state.watchConfigs.filter((item) => item.tenantId === user.tenantId).map(publicWatch), sourceSnapshots: state.sourceSnapshots.filter((item) => item.tenantId === user.tenantId), externalProjectionJobs: (state.externalProjectionJobs || []).filter((item) => item.tenantId === user.tenantId).map(({ content: _content, ...safe }) => safe), usage: state.usage.filter((item) => item.tenantId === user.tenantId), audit: state.audit.filter((item) => item.tenantId === user.tenantId) };
+    const payload = { user: { id: user.id, tenantId: user.tenantId, email: user.email, plan: user.plan, role: user.role }, organizations: state.organizations.filter((item) => item.id === user.tenantId), memberships: state.memberships.filter((item) => item.tenantId === user.tenantId), invitations: state.invitations.filter((item) => item.tenantId === user.tenantId).map(({ token, ...safe }) => safe), subscriptions: state.subscriptions.filter((item) => item.tenantId === user.tenantId), paymentEvents: state.paymentEvents.filter((item) => item.tenantId === user.tenantId), llmProviderConfigs: (state.llmProviderConfigs || []).filter((item) => item.tenantId === user.tenantId).map(publicProviderConfig), agentToolSettings: publicToolSettings(state, user.tenantId), projects: state.projects.filter((item) => owned(item, user)), jobs: state.jobs.filter((item) => item.tenantId === user.tenantId), documents: state.documents.filter((item) => item.tenantId === user.tenantId), chunks: state.chunks.filter((item) => item.tenantId === user.tenantId), knowledgeEntities: state.knowledgeEntities.filter((item) => item.tenantId === user.tenantId), knowledgeEdges: state.knowledgeEdges.filter((item) => item.tenantId === user.tenantId), watchConfigs: state.watchConfigs.filter((item) => item.tenantId === user.tenantId).map(publicWatch), sourceSnapshots: state.sourceSnapshots.filter((item) => item.tenantId === user.tenantId), externalProjectionJobs: (state.externalProjectionJobs || []).filter((item) => item.tenantId === user.tenantId).map(({ content: _content, ...safe }) => safe), usage: state.usage.filter((item) => item.tenantId === user.tenantId), audit: state.audit.filter((item) => item.tenantId === user.tenantId) };
     payload.agentSessions = (state.agentSessions || []).filter((item) => item.tenantId === user.tenantId).map(publicAgentSession);
     return send(res, 200, payload, { 'Content-Disposition': 'attachment; filename="novi-data.json"' });
   }
@@ -747,6 +764,7 @@ async function api(req, res, url, store, auth, metrics) {
       state.subscriptions = state.subscriptions.filter((item) => !ownedTenants.has(item.tenantId));
       state.paymentEvents = state.paymentEvents.filter((item) => !ownedTenants.has(item.tenantId));
       state.llmProviderConfigs = (state.llmProviderConfigs || []).filter((item) => !ownedTenants.has(item.tenantId));
+      state.agentToolConfigs = (state.agentToolConfigs || []).filter((item) => !ownedTenants.has(item.tenantId));
       state.memberships = state.memberships.filter((item) => !ownedTenants.has(item.tenantId) && item.userId !== user.id);
       state.sessions = state.sessions.filter((item) => item.userId !== user.id);
       state.users = state.users.filter((item) => item.id !== user.id);
@@ -938,8 +956,16 @@ async function api(req, res, url, store, auth, metrics) {
     }
     let artifact;
     try {
-      const providerConfig = await resolvedProviderConfig(await store.read(), user.tenantId);
-      artifact = await generateArtifactAsync(marked, { sources: liveSources, knowledgeContext, providerConfig, prompt, mode: requestedMode, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
+      const runtimeState = await store.read();
+      const providerConfig = await resolvedProviderConfig(runtimeState, user.tenantId);
+      const tools = (await resolvedTools(runtimeState, user.tenantId)).filter((tool) => tool.name !== 'web_search' || sourceCharged);
+      const toolExecutor = createToolExecutor({ store, project: marked, principal: user, allowWebSearch: sourceCharged });
+      const onTool = async (call) => store.update((state) => {
+        const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
+        if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
+        updateSessionToolCall(session, call); return true;
+      });
+      artifact = await generateArtifactAsync(marked, { sources: liveSources, knowledgeContext, providerConfig, prompt, mode: requestedMode, tools, toolExecutor, onTool, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
     } catch (error) {
       await store.update((state) => {
         refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod);
@@ -1070,7 +1096,10 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
     }
     const knowledgeContext = await retrieveWorkspaceKnowledge(store, project, user);
     if (!await store.updateJob(jobId, { progress: 20, currentStage: 'Preparing agent workflow' })) throw new Error('Generation was cancelled');
-    const providerConfig = await resolvedProviderConfig(await store.read(), user.tenantId);
+    const runtimeState = await store.read();
+    const providerConfig = await resolvedProviderConfig(runtimeState, user.tenantId);
+    const tools = (await resolvedTools(runtimeState, user.tenantId)).filter((tool) => tool.name !== 'web_search' || sourceCharged);
+    const toolExecutor = createToolExecutor({ store, project, principal: user, allowWebSearch: sourceCharged });
     const onStage = async (stage) => store.update((state) => {
       const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
       if (!job) return false;
@@ -1092,7 +1121,17 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentMode: job.currentMode, currentStage: job.currentStage || event.status, progress: job.progress });
       return true;
     });
-    const artifact = await generateArtifactAsync(project, { sources: liveSources, knowledgeContext, providerConfig, prompt: claimed.prompt || project.description || project.topic, mode: claimed.requestedMode || 'auto', onStage, onMode, threadId: `${user.tenantId}:${jobId}` });
+    const onTool = async (call) => store.update((state) => {
+      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
+      if (!job) return false;
+      job.agentToolCalls ||= [];
+      const index = job.agentToolCalls.findIndex((item) => item.id === call.id);
+      if (index >= 0) job.agentToolCalls[index] = call; else job.agentToolCalls.push(call);
+      job.currentStage = call.status === 'running' ? `Using ${call.tool}` : `${call.tool} ${call.status}`; job.updatedAt = new Date().toISOString();
+      updateSessionToolCall(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), call);
+      return true;
+    });
+    const artifact = await generateArtifactAsync(project, { sources: liveSources, knowledgeContext, providerConfig, prompt: claimed.prompt || project.description || project.topic, mode: claimed.requestedMode || 'auto', onStage, onMode, tools, toolExecutor, onTool, threadId: `${user.tenantId}:${jobId}` });
     const result = await store.update((state) => {
       const item = state.projects.find((entry) => entry.id === project.id && owned(entry, user));
       const job = (state.jobs || []).find((entry) => entry.id === jobId && entry.status === 'running');

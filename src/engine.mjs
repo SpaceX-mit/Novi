@@ -256,11 +256,12 @@ export async function generateArtifactAsync(project, options = {}) {
   let artifact;
   let execution = null;
   if (options.providerConfig) {
-    execution = await runAgentWorkflow(project, fallback, options.providerConfig, { sources: options.sources || fallback.content.sources || [], knowledgeContext: fallback.content.knowledgeContext || [], prompt: options.prompt, mode: options.mode, onStage: options.onStage, onMode: options.onMode, threadId: options.threadId });
+    execution = await runAgentWorkflow(project, fallback, options.providerConfig, { sources: options.sources || fallback.content.sources || [], knowledgeContext: fallback.content.knowledgeContext || [], prompt: options.prompt, mode: options.mode, onStage: options.onStage, onMode: options.onMode, tools: options.tools, toolExecutor: options.toolExecutor, onTool: options.onTool, threadId: options.threadId });
     artifact = { ...fallback, content: execution.content, model: options.providerConfig.model };
   } else artifact = await completeArtifact(project, fallback, options.sources || fallback.content.sources || [], fallback.content.knowledgeContext || []);
-  const sources = artifact.content.sources || [];
-  const content = { ...artifact.content, sources: fallback.content.sources, knowledgeContext: fallback.content.knowledgeContext, evidence: evidenceFor(artifact.content, sources) };
+  const sources = artifact.content.sources || fallback.content.sources || [];
+  const knowledgeContext = artifact.content.knowledgeContext || fallback.content.knowledgeContext || [];
+  const content = { ...artifact.content, sources, knowledgeContext, evidence: evidenceFor(artifact.content, sources) };
   return { ...artifact, content, workflow: workflowFor(project, content, artifact.createdAt, execution) };
 }
 

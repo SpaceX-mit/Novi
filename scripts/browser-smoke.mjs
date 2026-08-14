@@ -33,6 +33,14 @@ try {
   await evaluate(`location.href = ${JSON.stringify(base + '/')}`);
   await waitFor(`document.readyState === 'complete' && document.querySelector('#new-project') !== null && !document.querySelector('#new-project').hidden`);
   await sleep(500);
+  await evaluate(`document.querySelector('#customize-nav').click()`);
+  await waitFor(`document.querySelector('#view-customize').classList.contains('active-view') && document.querySelectorAll('[data-builtin-tool]').length === 3`);
+  const toolUi = await evaluate(`({ tabs: [...document.querySelectorAll('.customize-tabs button')].map((button) => button.textContent.trim()), builtins: [...document.querySelectorAll('[data-builtin-tool]')].map((input) => input.dataset.builtinTool), configurable: !document.querySelector('#save-tools').disabled, overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth })`);
+  if (JSON.stringify(toolUi.tabs) !== JSON.stringify(['Tools', 'MCP', 'Skills', 'Plugins']) || JSON.stringify(toolUi.builtins) !== JSON.stringify(['workspace_read', 'workspace_write', 'web_search']) || !toolUi.configurable || toolUi.overflow) throw new Error(`Customize tools UI is incorrect: ${JSON.stringify(toolUi)}`);
+  await evaluate(`(() => { const write = document.querySelector('[data-builtin-tool="workspace_write"]'); write.checked = true; document.querySelector('#save-tools').click(); })()`);
+  await waitFor(`document.querySelector('#toast').textContent === 'Agent tools saved'`);
+  await evaluate(`document.querySelector('[data-view="overview"]').click()`);
+  await waitFor(`document.querySelector('#view-overview').classList.contains('active-view')`);
   await evaluate(`document.querySelector('#billing-upgrade').click()`);
   await waitFor(`!document.querySelector('#billing-modal').classList.contains('hidden') && document.querySelectorAll('[data-checkout-plan]').length === 3`);
   const pricing = await evaluate(`([...document.querySelectorAll('[data-checkout-plan]')].map((button) => button.dataset.checkoutPlan + ':' + button.closest('article').textContent))`);

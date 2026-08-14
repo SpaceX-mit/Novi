@@ -32,6 +32,7 @@ import { normalizeProviderInput, resolvedProviderConfig, saveProviderConfig } fr
 import { runAgentWorkflow } from '../src/agent-runtime.mjs';
 import { agentModeCatalog, selectAgentMode } from '../src/agent-modes.mjs';
 import { appendSessionMessage, beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, sessionSummary, updateSessionRun } from '../src/agent-sessions.mjs';
+import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings } from '../src/agent-tools.mjs';
 
 test('engine generates complete artifacts for all product paths', () => {
   const base = { id: 'p', title: 'Agent OS', topic: 'Agent OS security', description: 'Study threat models' };
@@ -125,7 +126,7 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
     if (prompt.includes('Return {"steps"')) {
       content = JSON.stringify({ steps: ['research', 'knowledge', 'writing', 'review'].map((stage) => ({ stage, objective: `Complete ${stage}` })) });
     } else if (prompt.includes('Allowed next values:')) {
-      const completed = JSON.parse(prompt.match(/Completed stages: (\[[^\n]*\])/u)?.[1] || '[]');
+      const completed = JSON.parse(prompt.match(/Completed stages: (\[[^\]]*\])/u)?.[1] || '[]');
       const next = ['research', 'knowledge', 'writing', 'review'].find((stage) => !completed.includes(stage)) || 'finish';
       const requestedSwitch = prompt.includes('switch runtime') && completed.length === 0;
       content = JSON.stringify({ next, mode: requestedSwitch ? 'plan-execute' : system.includes('ReAct') ? 'react' : 'supervisor', reason: requestedSwitch ? 'complex-task-replan' : 'next bounded specialist' });
@@ -155,6 +156,66 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
   assert.equal(switched.runtime.initialMode, 'react'); assert.equal(switched.runtime.mode, 'plan-execute');
   assert.ok(switched.runtime.modeHistory.some((event) => event.from === 'react' && event.to === 'plan-execute'));
   assert.equal(switched.runtime.plan.length, 4);
+});
+
+test('Agent tools validate, encrypt, execute, and remain tenant/project scoped', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'novi-agent-tools-'));
+  const previous = { file: process.env.NOVI_DATA_FILE, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY, hosts: process.env.NOVI_TOOL_ALLOWED_HOSTS };
+  process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-agent-tool-encryption-key-32-characters'; process.env.NOVI_TOOL_ALLOWED_HOSTS = 'tools.example.com';
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { const env = { file: 'NOVI_DATA_FILE', encryption: 'NOVI_CONFIG_ENCRYPTION_KEY', hosts: 'NOVI_TOOL_ALLOWED_HOSTS' }[key]; if (value === undefined) delete process.env[env]; else process.env[env] = value; } });
+  const state = { agentToolConfigs: [] };
+  const schema = { type: 'object', additionalProperties: false, properties: { query: { type: 'string', maxLength: 100 } }, required: ['query'] };
+  await assert.rejects(() => saveToolSettings(state, 'tenant', 'owner', { customTools: [{ name: 'blocked_tool', description: 'Blocked', endpoint: 'https://blocked.example/invoke', inputSchema: schema }] }), /NOVI_TOOL_ALLOWED_HOSTS/);
+  const saved = await saveToolSettings(state, 'tenant', 'owner', { builtins: { workspace_read: true, workspace_write: true, web_search: false }, customTools: [{ name: 'domain_lookup', description: 'Look up a domain fact', endpoint: 'https://tools.example.com/invoke', bearerToken: 'custom-secret-token', inputSchema: schema }] });
+  assert.equal(saved.customTools[0].hasBearerToken, true); assert.equal('encryptedBearerToken' in saved.customTools[0], false);
+  assert.doesNotMatch(state.agentToolConfigs[0].customTools[0].encryptedBearerToken, /custom-secret-token/);
+  const tools = await resolvedTools(state, 'tenant'); assert.equal(tools.find((tool) => tool.name === 'domain_lookup').bearerToken, 'custom-secret-token');
+  assert.deepEqual(publicToolSettings({ agentToolConfigs: [] }, 'tenant').builtins.map((tool) => [tool.name, tool.enabled]), [['workspace_read', true], ['workspace_write', false], ['web_search', true]]);
+
+  const store = new JsonStore(process.env.NOVI_DATA_FILE);
+  const project = await store.createProject({ title: 'Tool project', topic: 'Tool runtime', type: 'knowledge' });
+  await store.update((next) => { const ingested = ingestDocument({ title: 'Runtime notes', content: 'Bounded Agent tools require tenant isolation and invocation provenance.' }, { projectId: project.id, tenantId: 'local' }); next.documents.push(ingested.document); next.chunks.push(...ingested.chunks); next.knowledgeEntities.push(...ingested.entities); next.knowledgeEdges.push(...ingested.edges); });
+  let authorization;
+  const executor = createToolExecutor({ store, project, principal: { id: 'local', tenantId: 'local' }, fetchImpl: async (_url, options) => { authorization = options.headers.authorization; return new Response(JSON.stringify({ answer: 'bounded result' }), { status: 200, headers: { 'content-type': 'application/json' } }); } });
+  const readTool = tools.find((tool) => tool.name === 'workspace_read');
+  const read = await executor(readTool, { query: 'tenant isolation', limit: 3 }); assert.equal(read.result.passages[0].document, 'Runtime notes');
+  const writeTool = tools.find((tool) => tool.name === 'workspace_write');
+  const written = await executor(writeTool, { title: 'Agent note', content: 'A controlled note written by the Agent tool runtime.' }); assert.equal(written.result.chunkCount, 1);
+  assert.equal((await store.read()).documents.filter((document) => document.projectId === project.id).length, 2);
+  const custom = await executor(tools.find((tool) => tool.name === 'domain_lookup'), { query: 'runtime' }); assert.equal(custom.result.answer, 'bounded result'); assert.equal(authorization, 'Bearer custom-secret-token');
+  await assert.rejects(() => executor(readTool, { query: 'valid', unexpected: true }), /unsupported field/);
+  const oversizedExecutor = createToolExecutor({ store, project, principal: { id: 'local', tenantId: 'local' }, fetchImpl: async () => new Response('x'.repeat(32 * 1024 + 1), { status: 200 }) });
+  await assert.rejects(() => oversizedExecutor(tools.find((tool) => tool.name === 'domain_lookup'), { query: 'runtime' }), /exceeds 32 KB/);
+});
+
+test('ReAct, Plan and Supervisor execute bounded Agent tool observations', async (t) => {
+  const modelServer = http.createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body); const system = String(request.messages?.[0]?.content || ''); const prompt = String(request.messages?.at(-1)?.content || '');
+    let content;
+    if (prompt.includes('Return {"steps"')) content = JSON.stringify({ steps: ['research', 'knowledge', 'writing', 'review'].map((stage) => ({ stage, objective: stage })), toolCalls: [{ name: 'workspace_read', input: { query: 'runtime evidence' } }] });
+    else if (prompt.includes('Allowed next values:')) {
+      const completed = JSON.parse(prompt.match(/Completed stages: (\[[^\]]*\])/u)?.[1] || '[]');
+      const noObservation = prompt.includes('Tool observations: []'); const exhaust = prompt.includes('exhaust tools'); const toolAvailable = /Allowed next values: [^.]*\btool\b/u.test(prompt);
+      const next = noObservation || (exhaust && toolAvailable) ? 'tool' : ['research', 'knowledge', 'writing', 'review'].find((stage) => !completed.includes(stage)) || 'finish';
+      content = JSON.stringify({ next, mode: system.includes('ReAct') ? 'react' : 'supervisor', reason: 'bounded decision', ...(next === 'tool' ? { tool: { name: 'workspace_read', input: { query: 'runtime evidence' } } } : {}) });
+    } else {
+      const marker = 'Editable schema and current draft: '; const line = prompt.split('\n').find((value) => value.startsWith(marker)); const editable = line ? JSON.parse(line.slice(marker.length)) : {}; const key = Object.keys(editable)[0]; content = JSON.stringify(key ? { [key]: editable[key] } : {});
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'tool-loop', object: 'chat.completion', created: 1, model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }] }));
+  });
+  await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve)); t.after(() => modelServer.close());
+  const project = { id: 'tool-loop-project', tenantId: 'tenant', title: 'Tool loop', topic: 'Agent tools', type: 'knowledge' }; const fallback = generateArtifact(project);
+  const config = { provider: 'custom', model: 'test-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'key' };
+  const tools = [{ name: 'workspace_read', description: 'Read workspace', kind: 'builtin', inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string', maxLength: 500 } }, required: ['query'] } }];
+  for (const mode of ['react', 'plan-execute', 'supervisor']) {
+    const events = [];
+    const result = await runAgentWorkflow(project, fallback, config, { mode, prompt: `Use tools in ${mode}`, tools, toolExecutor: async (_definition, input) => ({ result: { passages: [{ text: `Observation for ${input.query}` }] } }), onTool: async (event) => { events.push(event); return true; } });
+    assert.equal(result.runtime.toolCalls.length, 1); assert.equal(result.runtime.toolCalls[0].status, 'completed'); assert.equal(events.length, 2); assert.ok(result.stages.length >= 4);
+  }
+  const bounded = await runAgentWorkflow(project, fallback, config, { mode: 'react', prompt: 'exhaust tools then finish', tools, toolExecutor: async () => ({ result: { ok: true } }) });
+  assert.equal(bounded.runtime.toolCalls.length, 6); assert.ok(bounded.stages.length >= 4);
 });
 
 test('LLM provider configuration is encrypted, endpoint-restricted, and resolved without exposing the key', async () => {
@@ -222,6 +283,38 @@ test('Web-configured provider runs the four-stage LangGraph workflow', async (t)
   response = await fetch(`${base}/api/projects/${project.id}/sessions/${secondSession.id}`, { method: 'DELETE' }); assert.equal(response.status, 204);
   const raw = await readFile(join(dir, 'state.json'), 'utf8'); assert.doesNotMatch(raw, /test-provider-key/);
   const exported = await (await fetch(`${base}/api/me/export`)).json(); assert.equal(exported.llmProviderConfigs[0].hasApiKey, true); assert.equal('encryptedApiKey' in exported.llmProviderConfigs[0], false); assert.equal(exported.agentSessions.length, 1); assert.equal(exported.agentSessions[0].messages[2].artifactId, artifact.id);
+});
+
+test('async Agent generation persists tool provenance in Job, Session, and Artifact', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'novi-tool-provenance-'));
+  const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER, live: process.env.NOVI_LIVE_SOURCES, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY };
+  process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_JOB_WORKER = 'true'; process.env.NOVI_LIVE_SOURCES = 'false'; process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-tool-provenance-encryption-key-32-chars';
+  const modelServer = http.createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || ''); let content;
+    if (prompt.includes('Allowed next values:')) {
+      const completed = JSON.parse(prompt.match(/Completed stages: (\[[^\]]*\])/u)?.[1] || '[]'); const next = prompt.includes('Tool observations: []') ? 'tool' : ['research', 'knowledge', 'writing', 'review'].find((stage) => !completed.includes(stage)) || 'finish';
+      content = JSON.stringify({ next, mode: 'react', reason: 'retrieve workspace evidence', ...(next === 'tool' ? { tool: { name: 'workspace_read', input: { query: 'sandbox boundaries', limit: 3 } } } : {}) });
+    } else {
+      const marker = 'Editable schema and current draft: '; const line = prompt.split('\n').find((value) => value.startsWith(marker)); const editable = line ? JSON.parse(line.slice(marker.length)) : {}; const key = Object.keys(editable)[0]; content = JSON.stringify(key ? { [key]: editable[key] } : {});
+    }
+    res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ id: 'tool-provenance', object: 'chat.completion', created: 1, model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }] }));
+  });
+  await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
+  const server = createServer(); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.close(); modelServer.close(); for (const [key, value] of Object.entries(previous)) { const env = { file: 'NOVI_DATA_FILE', auth: 'NOVI_AUTH_REQUIRED', worker: 'NOVI_JOB_WORKER', live: 'NOVI_LIVE_SOURCES', encryption: 'NOVI_CONFIG_ENCRYPTION_KEY' }[key]; if (value === undefined) delete process.env[env]; else process.env[env] = value; } });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let response = await fetch(`${base}/api/llm/provider`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'custom', model: 'test-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'key' }) }); assert.equal(response.status, 200);
+  response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Tool provenance', topic: 'Agent sandbox', type: 'knowledge' }) }); const created = await response.json();
+  response = await fetch(`${base}/api/projects/${created.project.id}/knowledge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Sandbox notes', content: 'Sandbox boundaries require explicit policy and adversarial verification.' }) }); assert.equal(response.status, 201);
+  response = await fetch(`${base}/api/projects/${created.project.id}/generate?async=true`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'react', prompt: 'Use workspace evidence to review sandbox boundaries', sessionId: created.session.id }) }); assert.equal(response.status, 202); const jobId = (await response.json()).job.id;
+  let job;
+  for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 25)); job = (await (await fetch(`${base}/api/jobs/${jobId}`)).json()).job; if (!['queued', 'running'].includes(job.status)) break; }
+  assert.equal(job.status, 'completed'); assert.equal(job.agentToolCalls.length, 1); assert.equal(job.agentToolCalls[0].tool, 'workspace_read');
+  const project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project; const artifact = project.artifacts[0];
+  assert.equal(artifact.workflow.runtime.toolCalls.length, 1); assert.equal(artifact.content.knowledgeContext[0].document, 'Sandbox notes');
+  const session = (await (await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}`)).json()).session; const assistant = session.messages.at(-1);
+  assert.equal(assistant.toolCalls.length, 1); assert.equal(assistant.toolCalls[0].status, 'completed');
 });
 
 test('Agent session API isolates projects and tenants and protects active sessions', async (t) => {
@@ -1442,6 +1535,10 @@ test('organization invitations enforce RBAC and isolate editor/viewer actions', 
   response = await fetch(`${base}/api/projects`, { headers: { authorization: `Bearer ${viewer.token}` } });
   assert.equal(response.status, 401);
   response = await fetch(`${base}/api/llm/providers`, { headers: { authorization: `Bearer ${switched.token}` } });
+  assert.equal(response.status, 403);
+  response = await fetch(`${base}/api/agent/tools`, { headers: { authorization: `Bearer ${switched.token}` } });
+  assert.equal(response.status, 200); assert.equal((await response.json()).configurable, false);
+  response = await fetch(`${base}/api/agent/tools`, { method: 'PUT', headers: { authorization: `Bearer ${switched.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ builtins: { workspace_read: false }, customTools: [] }) });
   assert.equal(response.status, 403);
   response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { authorization: `Bearer ${switched.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Nope', topic: 'Nope', type: 'knowledge' }) });
   assert.equal(response.status, 403);
