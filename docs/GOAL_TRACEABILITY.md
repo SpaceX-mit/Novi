@@ -24,6 +24,23 @@
 | 数据采集架构建议 | Crawler、API Connector、Browser Agent、MCP Connector | 安全 HTTP/PDF/GitHub crawler 与 API connectors；`src/source-adapters.mjs` 提供固定来源 MCP adapter，把 concrete URL 纳入统一 evidence 管线；`src/mcp-runtime.mjs` 另提供租户配置、逐工具授权的通用 Agent MCP Streamable HTTP runtime。两条路径均带 HTTPS/allowlist、凭据、超时、大小和不可信输入边界 | 源码与本地协议契约已实现；目标 Browser/MCP 服务仍需真实凭据与生产取证 |
 | 可正式收费商用 | 真实供应商、目标基础设施、容量、灾备、安全、签名与领域质量均有证据 | `docs/COMMERCIAL_READINESS.md` 第 3 节 | 未完成，外部门禁 |
 
+## Agent / Workspace 目标追溯
+
+以下八项来自 Agent Runtime 与 OpenHands 风格 Workspace 交互目标。OpenHands 仅作为交互和能力分层参考；Novi 使用自己的 LangGraph.js、有界权限和租户隔离实现，不加载或复制 OpenHands 运行时代码。
+
+| 目标 | 当前实现证据 | 判定 |
+| --- | --- | --- |
+| 根据提示词意图选择 Workflow、ReAct、Plan & Execute、Supervisor，并可在运行中重新调度 | `src/agent-modes.mjs` 完成显式模式和中英文意图路由；`src/agent-runtime.mjs` 的 router/controller 记录并执行模式切换；核心测试真实运行四种图并验证 ReAct → Plan & Execute | 已实现 |
+| 运行时显示当前执行模式 | Job 和 Session 持久化 `currentMode/currentModeLabel`；`public/app.js` 在 Workspace 状态条与 Session run header 实时刷新模式、阶段和进度；Chromium smoke 验证可见模式 | 已实现 |
+| 内置工具与新增工具 | `src/agent-tools.mjs` 提供 workspace read/write/web search 和 allowlisted 自定义 HTTP Tool；三种自主模式进入同一有界 Tool node；领域、HTTP 和 provenance 测试覆盖 | 已实现 |
+| MCP | `src/mcp-runtime.mjs` 使用官方 SDK 接入 Streamable HTTP discovery/call，逐工具授权、命名空间、加密凭据和调用边界完整；Customize/MCP 与协议集成测试覆盖 | 已实现 |
+| Skills 与 Plugins | `src/skill-runtime.mjs` 提供有界 playbook 选择和 prompt 注入；`src/plugin-runtime.mjs` 以声明式 manifest 组合现有 Skill 与已授权 Tool；两者均进入 LangGraph、provenance 和 Customize UI | 已实现 |
+| Workspace 默认进入对话 Session，右侧提供 Files、LLM Wiki、Document | 项目创建即创建默认 Session；`public/app.js` 渲染 Session rail、conversation composer 和三页 inspector；desktop/mobile Chromium smoke 验证布局与核心交互 | 已实现 |
+| 左侧 Customize 可设置 MCP、Skills、Plugins | `public/index.html` 提供权限控制的 Customize 导航；`public/app.js` 提供 Tools/MCP/Skills/Plugins 四个配置页；Chromium smoke 验证保存与响应式布局 | 已实现 |
+| Generate now 进入并留在当前对话 Session | 创建 Workspace 后直接 `showWorkspace` 并加载默认 Session；`Generate now` 携带当前 `sessionId` 异步生成，运行消息、模式、Artifact 链接回写当前 Session；Chromium smoke 覆盖完整旅程 | 已实现 |
+
+这八项的完成不包含远程 Plugin marketplace、第三方可执行包、生产数据库 LangGraph checkpoint 或真实供应商生产验收；这些扩展和门禁继续记录在 `docs/IMPLEMENTATION_PROGRESS.md`，不改变上述功能的本地实现判定。
+
 ## 判定原则
 
 - `goal.md` 中三条产品路径、Knowledge OS、持续更新、商业方案、Web/Desktop 是交付范围，必须由运行行为或自动化证明。
