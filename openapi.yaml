@@ -93,6 +93,11 @@ paths:
         - in: query
           name: async
           schema: { type: boolean }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentGenerationInput' }
       responses:
         '200': { description: Synchronous artifact result }
         '202': { description: Queued generation job }
@@ -249,6 +254,21 @@ paths:
     get:
       parameters: [ { $ref: '#/components/parameters/JobId' } ]
       responses: { '200': { description: Job status } }
+  /api/agent/modes:
+    get:
+      responses:
+        '200':
+          description: Available adaptive Agent execution modes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [modes, defaultMode]
+                properties:
+                  defaultMode: { type: string, const: auto }
+                  modes:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentMode' }
   /api/search:
     get:
       parameters:
@@ -374,6 +394,18 @@ components:
     JobId: { in: path, name: id, required: true, schema: { type: string, format: uuid } }
     MemberId: { in: path, name: id, required: true, schema: { type: string, format: uuid } }
   schemas:
+    AgentGenerationInput:
+      type: object
+      properties:
+        prompt: { type: string, minLength: 1, maxLength: 20000 }
+        mode: { type: string, enum: [auto, workflow, react, plan-execute, supervisor], default: auto }
+    AgentMode:
+      type: object
+      required: [id, name, description]
+      properties:
+        id: { type: string, enum: [workflow, react, plan-execute, supervisor] }
+        name: { type: string }
+        description: { type: string }
     LlmProviderInput:
       type: object
       required: [provider, model]

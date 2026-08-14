@@ -1,6 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null };
+const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, activeJob: null };
 let authRegister = false;
 const roleRank = Object.freeze({ viewer: 10, editor: 20, admin: 30, owner: 40 });
 const canRole = (required) => (roleRank[state.role] || 0) >= roleRank[required];
@@ -82,6 +82,14 @@ function formatDate(date) { return new Intl.DateTimeFormat(undefined, { month: '
 
 function formatDateTime(date) {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(date));
+}
+
+function updateAgentRunStatus(job) {
+  if (!job) return;
+  const mode = $('#agent-run-mode'); const stage = $('#agent-run-stage'); const progress = $('#agent-run-progress');
+  if (mode) mode.textContent = job.currentModeLabel || job.currentMode || 'Routing';
+  if (stage) stage.textContent = job.currentStage || (job.status === 'queued' ? 'Queued' : 'Preparing');
+  if (progress) progress.textContent = `${Math.max(0, Math.min(100, Number(job.progress) || 0))}%`;
 }
 
 function renderVersionToolbar(project, artifactIndex) {
@@ -171,14 +179,15 @@ function renderWorkspace(project, selected = state.activeTab) {
   if (artifact) state.activeArtifactId = artifact.id;
   const previousArtifact = artifactIndex >= 0 ? artifacts[artifactIndex + 1] : null;
   const c = artifact?.content;
+  const activeJob = state.activeJob?.projectId === project.id && ['queued', 'running'].includes(state.activeJob.status) ? state.activeJob : null;
   const meta = typeMeta[project.type];
   const availableTabs = tabsFor(project.type);
   const editor = canRole('editor'); const administrator = canRole('admin');
   if (!availableTabs.some((tab) => tab.key === selected)) selected = availableTabs[0].key;
   state.activeTab = selected;
   $('#workspace-root').innerHTML = `<button class="back-link" id="back-overview">← All workspaces</button>
-    <div class="workspace-head"><div><span class="type-label ${meta.color}">${meta.label}</span><h1>${escapeHtml(project.title)}</h1><p>${escapeHtml(project.topic)}</p>${project.status === 'generating' ? '<div class="evidence-badge">◌ Generation in progress…</div>' : ''}</div><div class="workspace-actions">${editor ? `<button class="secondary-button" id="pin-workspace">${project.pinned ? '★ Pinned' : '☆ Pin'}</button>` : ''}${artifact ? `<button class="secondary-button" id="export-md">↓ Markdown</button>${project.type === 'paper' ? '<button class="secondary-button" id="export-ieee">↓ IEEE LaTeX</button><button class="secondary-button" id="export-acm">↓ ACM LaTeX</button>' : ''}` : ''}${administrator ? '<button class="secondary-button danger-button" id="delete-workspace">Delete</button>' : ''}${editor ? `<button class="primary-button" id="generate" ${project.status === 'generating' ? 'disabled' : ''}>${project.status === 'generating' ? 'Generating…' : artifact ? '↻ Regenerate' : '✦ Generate asset'}</button>` : ''}</div></div>
-    ${artifact ? `${renderVersionToolbar(project, artifactIndex)}${state.compareVersions && previousArtifact ? renderVersionComparison(project, artifactIndex) : ''}<div class="workspace-layout"><div class="artifact-panel"><div class="artifact-tabs">${availableTabs.map((tab) => `<button class="artifact-tab ${selected === tab.key ? 'active' : ''}" data-artifact-tab="${tab.key}">${tab.label}</button>`).join('')}</div><div class="artifact-content">${renderArtifact(project, selected, c)}</div></div><aside><div class="side-panel"><h3>Workspace details</h3><div class="side-meta"><div><span>Workspace created</span><b>${formatDate(project.createdAt)}</b></div><div><span>Selected version</span><b>Version ${artifacts.length - artifactIndex}</b></div><div><span>Generated</span><b>${formatDate(artifact.createdAt)}</b></div><div><span>Sources mapped</span><b>${c.sources?.length || 0}</b></div></div></div><div class="side-panel"><h3>Knowledge actions</h3><div class="generate-box"><p>Keep this workspace current as your understanding evolves.</p><button class="secondary-button full" id="copy-summary">Copy summary</button>${editor ? '<button class="secondary-button full" id="ingest-document" style="margin-top:8px">Import notes</button><button class="secondary-button full" id="import-url" style="margin-top:8px">Import web/PDF URL</button>' : ''}<button class="secondary-button full" id="knowledge-library" style="margin-top:8px">Browse & search knowledge</button>${editor ? '<button class="secondary-button full" id="refresh-sources" style="margin-top:8px">Refresh sources</button>' : ''}<button class="secondary-button full" id="show-snapshots" style="margin-top:8px">View source history</button>${editor ? '<button class="secondary-button full" id="toggle-watch" style="margin-top:8px">Configure updates</button>' : ''}</div></div></aside></div>` : `<div class="empty-state show"><div class="empty-icon">✦</div><h3>Your workspace is ready</h3><p>${editor ? `Generate a structured ${meta.label.toLowerCase()} artifact to begin.` : 'This workspace has not generated an artifact yet.'}</p>${editor ? '<button class="primary-button" id="generate-empty">Generate now <span>→</span></button>' : ''}</div>`}`;
+    <div class="workspace-head"><div><span class="type-label ${meta.color}">${meta.label}</span><h1>${escapeHtml(project.title)}</h1><p>${escapeHtml(project.topic)}</p>${activeJob || project.status === 'generating' ? `<div class="agent-run-strip" id="agent-run-status" aria-live="polite"><span>ACTIVE MODE</span><b id="agent-run-mode">${escapeHtml(activeJob?.currentModeLabel || activeJob?.currentMode || 'Routing')}</b><i></i><strong id="agent-run-stage">${escapeHtml(activeJob?.currentStage || 'Preparing')}</strong><small id="agent-run-progress">${Number(activeJob?.progress || 0)}%</small></div>` : ''}</div><div class="workspace-actions">${editor ? `<button class="secondary-button" id="pin-workspace">${project.pinned ? '★ Pinned' : '☆ Pin'}</button>` : ''}${artifact ? `<button class="secondary-button" id="export-md">↓ Markdown</button>${project.type === 'paper' ? '<button class="secondary-button" id="export-ieee">↓ IEEE LaTeX</button><button class="secondary-button" id="export-acm">↓ ACM LaTeX</button>' : ''}` : ''}${administrator ? '<button class="secondary-button danger-button" id="delete-workspace">Delete</button>' : ''}${editor ? `<button class="primary-button" id="generate" ${project.status === 'generating' ? 'disabled' : ''}>${project.status === 'generating' ? 'Generating…' : artifact ? '↻ Regenerate' : '✦ Generate asset'}</button>` : ''}</div></div>
+    ${artifact ? `${renderVersionToolbar(project, artifactIndex)}${state.compareVersions && previousArtifact ? renderVersionComparison(project, artifactIndex) : ''}<div class="workspace-layout"><div class="artifact-panel"><div class="artifact-tabs">${availableTabs.map((tab) => `<button class="artifact-tab ${selected === tab.key ? 'active' : ''}" data-artifact-tab="${tab.key}">${tab.label}</button>`).join('')}</div><div class="artifact-content">${renderArtifact(project, selected, c)}</div></div><aside><div class="side-panel"><h3>Workspace details</h3><div class="side-meta"><div><span>Workspace created</span><b>${formatDate(project.createdAt)}</b></div><div><span>Selected version</span><b>Version ${artifacts.length - artifactIndex}</b></div><div><span>Generated</span><b>${formatDate(artifact.createdAt)}</b></div><div><span>Sources mapped</span><b>${c.sources?.length || 0}</b></div></div></div><div class="side-panel"><h3>Knowledge actions</h3><div class="generate-box"><p>Keep this workspace current as your understanding evolves.</p><button class="secondary-button full" id="copy-summary">Copy summary</button>${editor ? '<button class="secondary-button full" id="ingest-document" style="margin-top:8px">Import notes</button><button class="secondary-button full" id="import-url" style="margin-top:8px">Import web/PDF URL</button>' : ''}<button class="secondary-button full" id="knowledge-library" style="margin-top:8px">Browse & search knowledge</button>${editor ? '<button class="secondary-button full" id="refresh-sources" style="margin-top:8px">Refresh sources</button>' : ''}<button class="secondary-button full" id="show-snapshots" style="margin-top:8px">View source history</button>${editor ? '<button class="secondary-button full" id="toggle-watch" style="margin-top:8px">Configure updates</button>' : ''}</div></div></aside></div>` : `<div class="empty-state show"><div class="empty-icon">✦</div><h3>Your workspace is ready</h3><p>${editor ? `Generate a structured ${meta.label.toLowerCase()} artifact to begin.` : 'This workspace has not generated an artifact yet.'}</p>${editor ? `<button class="primary-button" id="generate-empty" ${project.status === 'generating' ? 'disabled' : ''}>${project.status === 'generating' ? 'Generating…' : 'Generate now'} <span>${project.status === 'generating' ? '' : '→'}</span></button>` : ''}</div>`}`;
   if (c?.knowledgeContext?.length && ['wiki', 'report', 'draft'].includes(selected)) $('.artifact-content')?.insertAdjacentHTML('beforeend', renderWorkspaceKnowledgeContext(c.knowledgeContext));
   $('#back-overview').onclick = showOverview;
   $('#generate')?.addEventListener('click', () => generate(project.id)); $('#generate-empty')?.addEventListener('click', () => generate(project.id));
@@ -322,21 +331,30 @@ async function disableProvider() {
 async function generate(id) {
   try {
     showToast('Generation queued…');
-    const queued = await request(`/api/projects/${id}/generate?async=true`, { method: 'POST' });
+    const sourceProject = state.projects.find((project) => project.id === id) || state.activeProject;
+    const prompt = [sourceProject?.topic, sourceProject?.description].filter(Boolean).join('\n');
+    const queued = await request(`/api/projects/${id}/generate?async=true`, { method: 'POST', body: JSON.stringify({ prompt, mode: 'auto' }) });
     let job = queued.job; let lastStage = '';
+    state.activeJob = job;
+    state.projects = state.projects.map((project) => project.id === id ? { ...project, status: 'generating' } : project);
+    const generatingProject = state.projects.find((project) => project.id === id);
+    if (generatingProject) showWorkspace(generatingProject);
+    updateAgentRunStatus(job);
     for (let attempt = 0; attempt < 1200; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 500));
       job = (await request(`/api/jobs/${job.id}`)).job;
-      if (job.currentStage && job.currentStage !== lastStage) { lastStage = job.currentStage; showToast(`${job.currentStage} · ${job.progress}%`); }
+      state.activeJob = job; updateAgentRunStatus(job);
+      if (job.currentStage && job.currentStage !== lastStage) { lastStage = job.currentStage; showToast(`${job.currentModeLabel || job.currentMode} · ${job.currentStage}`); }
       if (job.status === 'completed') break;
       if (job.status === 'failed') throw new Error(job.error || 'Generation failed');
     }
     if (job.status !== 'completed') throw new Error('Generation timed out');
     const result = await request(`/api/projects/${id}`);
     state.projects = state.projects.map((p) => p.id === id ? result.project : p);
+    state.activeJob = null;
     state.activeArtifactId = result.project.artifacts?.[0]?.id || null; state.compareVersions = false;
     state.activeTab = 'overview'; showWorkspace(result.project); showToast('Knowledge asset generated');
-  } catch (error) { showToast(error.message); }
+  } catch (error) { state.activeJob = null; showToast(error.message); await loadProjects().catch(() => {}); const project = state.projects.find((item) => item.id === id); if (project) showWorkspace(project); }
 }
 async function pin(id) { const result = await request(`/api/projects/${id}/pin`, { method: 'PATCH' }); state.projects = state.projects.map((p) => p.id === id ? result.project : p); showWorkspace(result.project); renderProjects(); }
 async function deleteWorkspace(project) {

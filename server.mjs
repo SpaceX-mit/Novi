@@ -23,6 +23,7 @@ import { graphStoreConfigured, validateGraphConfiguration } from './src/graph-st
 import { enqueueDocumentDeletion, enqueueDocumentProjection, externalProjectionPending, flushExternalProjectionJobs } from './src/external-projection.mjs';
 import { providerCatalog, publicProviderConfig, resolvedProviderConfig, saveProviderConfig, testProviderConnection } from './src/llm-providers.mjs';
 import { browserAgentConfigured, mcpSourceConfigured, renderWithBrowserAgent, validateSourceAdapterConfiguration } from './src/source-adapters.mjs';
+import { agentModeCatalog, publicMode, selectAgentMode, validateRequestedMode } from './src/agent-modes.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const publicDir = join(root, 'public');
@@ -403,6 +404,9 @@ async function api(req, res, url, store, auth, metrics) {
     if (!await requireRole(store, res, user, 'admin')) return true;
     const state = await store.read();
     return send(res, 200, { metrics: { ...metrics, externalProjectionPending: externalProjectionPending(state), uptimeSeconds: Math.floor((Date.now() - Date.parse(metrics.startedAt)) / 1000) } });
+  }
+  if (req.method === 'GET' && url.pathname === '/api/agent/modes') {
+    return send(res, 200, { modes: agentModeCatalog(), defaultMode: 'auto' });
   }
   if (req.method === 'GET' && url.pathname === '/api/org') {
     const state = await store.read();
@@ -795,6 +799,13 @@ async function api(req, res, url, store, auth, metrics) {
     const current = (await store.read()).projects.find((entry) => entry.id === id && owned(entry, user));
     if (!current) return send(res, 404, { error: 'Project not found' });
     if (current.status === 'generating') return send(res, 409, { error: 'Generation already in progress', code: 'GENERATION_IN_PROGRESS' });
+    const generationInput = await jsonBody(req);
+    const prompt = String(generationInput.prompt || current.description || current.topic || '').trim();
+    if (!prompt || prompt.length > 20_000) return send(res, 422, { error: 'prompt is required and must be 20000 characters or less' });
+    let requestedMode;
+    try { requestedMode = validateRequestedMode(generationInput.mode || 'auto'); }
+    catch (error) { return send(res, error.status || 422, { error: error.message, code: 'AGENT_MODE_INVALID' }); }
+    const selectedMode = selectAgentMode(prompt, { requestedMode });
     const quota = await store.update((state) => consumeGeneration(state, user));
     if (!quota.allowed) return send(res, 402, { error: 'Monthly generation limit reached', code: 'GENERATION_QUOTA_EXCEEDED', plan: quota.plan, usage: quota.usage, limits: quota.limits });
     const generationPeriod = quota.usage.period;
@@ -816,7 +827,8 @@ async function api(req, res, url, store, auth, metrics) {
           const item = state.projects.find((entry) => entry.id === id && owned(entry, user));
           if (!item) return null;
           if (item.status === 'generating') return { conflict: true };
-          const created = { id: randomUUID(), type: 'generate', projectId: id, userId: user.id, tenantId: user.tenantId, status: 'queued', progress: 0, previousStatus: item.status, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+          const createdAt = new Date().toISOString();
+          const created = { id: randomUUID(), type: 'generate', projectId: id, userId: user.id, tenantId: user.tenantId, prompt, requestedMode, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, modeHistory: [{ from: null, to: selectedMode.mode, reason: selectedMode.reason, at: createdAt }], status: 'queued', progress: 0, previousStatus: item.status, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
           item.status = 'generating'; item.updatedAt = new Date().toISOString();
           state.jobs.unshift(created);
           return created;
@@ -859,7 +871,7 @@ async function api(req, res, url, store, auth, metrics) {
     let artifact;
     try {
       const providerConfig = await resolvedProviderConfig(await store.read(), user.tenantId);
-      artifact = await generateArtifactAsync(marked, { sources: liveSources, knowledgeContext, providerConfig, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
+      artifact = await generateArtifactAsync(marked, { sources: liveSources, knowledgeContext, providerConfig, prompt, mode: requestedMode, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
     } catch (error) {
       await store.update((state) => {
         refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod);
@@ -969,12 +981,21 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       if (!job) return false;
       job.agentStages ||= [];
       const index = job.agentStages.findIndex((item) => item.id === stage.id);
-      const publicStage = { id: stage.id, name: stage.name, status: stage.status, ...(stage.startedAt ? { startedAt: stage.startedAt } : {}), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}) };
+      const publicStage = { id: stage.id, name: stage.name, mode: stage.mode || job.currentMode, status: stage.status, ...(stage.startedAt ? { startedAt: stage.startedAt } : {}), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}) };
       if (index >= 0) job.agentStages[index] = publicStage; else job.agentStages.push(publicStage);
-      job.progress = Math.max(job.progress || 0, stage.progress || 0); job.currentStage = stage.name; job.updatedAt = new Date().toISOString();
+      job.progress = Math.max(job.progress || 0, stage.progress || 0); job.currentStage = stage.name; job.currentMode = stage.mode || job.currentMode; job.currentModeLabel = publicMode(job.currentMode).name; job.updatedAt = new Date().toISOString();
       return true;
     });
-    const artifact = await generateArtifactAsync(project, { sources: liveSources, knowledgeContext, providerConfig, onStage, threadId: `${user.tenantId}:${jobId}` });
+    const onMode = async (event) => store.update((state) => {
+      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
+      if (!job) return false;
+      if (job.currentMode !== event.mode) job.modeHistory = [...(job.modeHistory || []), { from: job.currentMode || null, to: event.mode, reason: event.reason || 'runtime-router', at: new Date().toISOString() }];
+      job.currentMode = event.mode; job.currentModeLabel = event.label || publicMode(event.mode).name; job.modeReason = event.reason || job.modeReason;
+      job.currentStage = event.status === 'planning' ? 'Planning execution' : job.currentStage;
+      job.progress = Math.max(job.progress || 0, event.progress || 0); job.updatedAt = new Date().toISOString();
+      return true;
+    });
+    const artifact = await generateArtifactAsync(project, { sources: liveSources, knowledgeContext, providerConfig, prompt: claimed.prompt || project.description || project.topic, mode: claimed.requestedMode || 'auto', onStage, onMode, threadId: `${user.tenantId}:${jobId}` });
     const result = await store.update((state) => {
       const item = state.projects.find((entry) => entry.id === project.id && owned(entry, user));
       const job = (state.jobs || []).find((entry) => entry.id === jobId && entry.status === 'running');

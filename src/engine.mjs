@@ -219,13 +219,13 @@ function workflowFor(project, content, completedAt, execution = null) {
   const stages = new Map((execution?.stages || []).map((stage) => [stage.id, stage]));
   return {
     version: 1,
-    strategy: 'bounded-four-stage-pipeline',
+    strategy: execution?.runtime?.mode ? `adaptive-${execution.runtime.mode}` : 'bounded-four-stage-pipeline',
     product: project.type,
     completedAt,
     runtime: execution?.runtime || { name: 'offline-deterministic', version: 1 },
     agents: AGENT_PIPELINE.map(([name, responsibility], index) => {
       const stage = stages.get(['research', 'knowledge', 'writing', 'review'][index]);
-      return { order: index + 1, name, responsibility, status: stage?.status || 'completed', outputs: outputCounts[index], ...(stage ? { startedAt: stage.startedAt, completedAt: stage.completedAt, usage: stage.usage, ...(stage.error ? { error: stage.error } : {}) } : {}) };
+      return { order: index + 1, name, responsibility, status: stage?.status || (execution ? 'not-run' : 'completed'), outputs: outputCounts[index], ...(stage ? { startedAt: stage.startedAt, completedAt: stage.completedAt, usage: stage.usage, ...(stage.error ? { error: stage.error } : {}) } : {}) };
     }),
   };
 }
@@ -256,7 +256,7 @@ export async function generateArtifactAsync(project, options = {}) {
   let artifact;
   let execution = null;
   if (options.providerConfig) {
-    execution = await runAgentWorkflow(project, fallback, options.providerConfig, { sources: options.sources || fallback.content.sources || [], knowledgeContext: fallback.content.knowledgeContext || [], onStage: options.onStage, threadId: options.threadId });
+    execution = await runAgentWorkflow(project, fallback, options.providerConfig, { sources: options.sources || fallback.content.sources || [], knowledgeContext: fallback.content.knowledgeContext || [], prompt: options.prompt, mode: options.mode, onStage: options.onStage, onMode: options.onMode, threadId: options.threadId });
     artifact = { ...fallback, content: execution.content, model: options.providerConfig.model };
   } else artifact = await completeArtifact(project, fallback, options.sources || fallback.content.sources || [], fallback.content.knowledgeContext || []);
   const sources = artifact.content.sources || [];

@@ -38,12 +38,12 @@ Web 浏览器或 Electron 客户端通过 HTTP REST API 访问 Novi 服务。服
 | FR-28 | 成果版本历史 | 每次重新生成追加不可变成果；Web 可选择任意版本、与紧邻上一版比较逐节内容/来源变化并导出指定版本；非论文工作区不显示 LaTeX 操作 | `project.artifacts`, `public/app.js`, `GET /api/projects/:id/export?artifactId=` |
 | FR-29 | 工作区语义记忆 | Web 可浏览导入文档并检索片段；生成同步或异步成果前按租户/项目检索最多 6 个相关片段，实际片段与分数固化到不可变成果并可导出；PostgreSQL 有 pgvector 时使用 HNSW/余弦查询，无扩展时仅开发回退，生产门禁强制原生向量；检索内容按不可信数据送入模型且不能成为已核验引用 | `GET /api/projects/:id/knowledge?q=`, `Repository.searchKnowledge`, `novi_chunk_vectors_native`, `content.knowledgeContext` |
 | FR-30 | 知识文档生命周期 | editor 可删除租户项目内的单个知识文档；同一事务移除文档、片段、实体、关系及 PostgreSQL JSONB/pgvector 投影，并通过持久 outbox 清理对象存储和 Neo4j；不存在和跨租户访问均返回 404，重复删除幂等返回 404；不可变成果保留删除前已经使用的 excerpt，UI 必须提示完整清除需删除工作空间或账户 | `DELETE /api/projects/:id/knowledge/:documentId`, `enqueueDocumentDeletion`, `public/app.js` |
-| FR-31 | 有界四阶段工作流 | 每个不可变成果只记录 Research、Knowledge、Writing、Review 四个顺序职责，包含责任、完成状态和实际输出计数；Markdown 导出 provenance，不引入无边界 Agent 间对话 | `workflowFor()`, `artifact.workflow`, `artifactToMarkdown()` |
+| FR-31 | 有界 Agent 职责 | 每个不可变成果记录 Research、Knowledge、Writing、Review 四个受控职责，包含责任、完成/回退/未运行状态和实际输出计数；自适应模式可调整顺序或重试，但不引入无边界 Agent 间对话 | `workflowFor()`, `artifact.workflow`, `artifactToMarkdown()` |
 | FR-32 | 商业计划目录 | Billing API 与管理员 Web 显示 Free、Personal $29、Pro $99、Enterprise $1000 起的额度和目标用户；Personal/Pro/Enterprise 可提交真实 provider checkout，未配置 provider 明确 503，不模拟收费 | `PLANS`, `/api/billing`, `/api/billing/checkout`, `#billing-modal` |
 | FR-33 | JavaScript 渲染 Browser Agent | editor 可对公开 HTTP(S) 页面显式选择 `render=browser`；服务端先对目标 URL 执行 DNS/SSRF 校验，再通过配置的隔离 HTTP worker 执行 JS 渲染，阻断图片/媒体/字体，限制超时、worker 响应 1 MB 和提取文本 880 KB，并对 worker 返回的最终 URL 再校验；未配置时返回 503，不在主服务执行远程脚本 | `src/source-adapters.mjs`, `POST /api/projects/:id/knowledge/import`, `public/app.js` |
 | FR-34 | 通用 MCP 来源适配 | 配置 MCP Streamable HTTP endpoint 后执行 `initialize`、`notifications/initialized`、`tools/list`、`tools/call`；只调用管理员配置且服务端实际公布的 source tool，输入固定为 `{query,limit}`，只接纳 structured sources 中的无凭据 HTTP(S) URL，限制响应大小、超时和 authority 上限，再进入统一去重、排序与 concrete URL 证据核验 | `src/source-adapters.mjs`, `src/connectors.mjs`, `GET /api/search` |
 | FR-35 | Web LLM Provider 配置 | owner/admin 可按组织选择主流 Provider（含国内 MiniMax）、模型和允许的 endpoint，保存/覆盖 API Key、测试连接或切回 Offline mode；viewer/editor 的 UI 隐藏且 API 返回 403，响应与数据导出不暴露明文或密文 API Key | `src/llm-providers.mjs`, `/api/llm/provider*`, `#provider-modal` |
-| FR-36 | LangGraph Agent Runtime | 存在租户 Web Provider 时，Research、Knowledge、Writing、Review 四个 LangGraph 节点依次单独调用模型，只修改字段白名单内同形数据；Job 暴露阶段、进度和 token，阶段失败记录 fallback 并保留离线草稿 | `src/agent-runtime.mjs`, `generateArtifactAsync()`, `agentStages` |
+| FR-36 | LangGraph Agent Runtime | 存在租户 Web Provider 时，根据 `{prompt,mode}` 进入 Workflow、ReAct、Plan & Execute 或 Supervisor；auto 模式识别中英文意图，controller 可在运行中切换模式，阶段 fallback 升级到 Supervisor。Specialist 只修改字段白名单内同形数据；Job 和 Web 暴露当前模式、阶段与进度，成果保存计划、模式历史、controller 事件和 token | `src/agent-modes.mjs`, `src/agent-runtime.mjs`, `generateArtifactAsync()`, `agentStages` |
 
 ## 3. 外部接口
 
@@ -92,7 +92,7 @@ Web 浏览器或 Electron 客户端通过 HTTP REST API 访问 Novi 服务。服
 | NFR-17 | 数据生命周期与可审计性 | 单文档删除必须原子移除活跃关系/向量检索数据并持久重试外部清理；成果版本作为不可变生成记录保留当时已使用 excerpt，删除确认明确提示该边界；需要完全清除时使用工作空间或账户删除 |
 | NFR-18 | 外部采集适配器安全 | Browser Agent/MCP 远端 endpoint 必须为 HTTPS（仅回环开发允许 HTTP），生产非回环 endpoint 必须使用独立 bearer token；endpoint 禁止 URL 凭据/fragment，供应商调用禁止自动重定向并设置 1–30 秒有界超时和 1 MB 响应上限；适配器内容始终视为不可信输入，MCP 返回 URL仍须经过统一 evidence verification |
 | NFR-19 | LLM 凭据与网络安全 | 租户 API Key 使用 AES-256-GCM；生产必须提供至少 32 字符的稳定配置密钥；API/导出不得返回密文；固定厂商使用批准 endpoint，Ollama 仅回环，自定义远端主机必须 HTTPS 且在 allowlist |
-| NFR-20 | Agent 有界与恢复语义 | LangGraph recursion limit 为 8，不允许模型增加来源/字段/工具调用；单阶段错误显式标记 fallback。当前 checkpoint 为进程内存，服务重启按 Job 失败退款恢复，不宣称节点级续跑 |
+| NFR-20 | Agent 有界与恢复语义 | LangGraph recursion limit 为 40、Specialist 执行上限为 8 且单职责最多两次；不允许模型增加来源/字段/工具调用，计划和路由值使用白名单。单阶段错误显式标记 fallback。当前 checkpoint 为进程内存，服务重启按 Job 失败退款恢复，不宣称节点级续跑 |
 
 ## 5. 数据约束
 

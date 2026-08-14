@@ -29,6 +29,8 @@ import { getDocumentObject, putDocumentObject } from '../src/object-store.mjs';
 import { syncKnowledgeGraph } from '../src/graph-store.mjs';
 import { enqueueDocumentProjection, flushExternalProjectionJobs } from '../src/external-projection.mjs';
 import { normalizeProviderInput, resolvedProviderConfig, saveProviderConfig } from '../src/llm-providers.mjs';
+import { runAgentWorkflow } from '../src/agent-runtime.mjs';
+import { agentModeCatalog, selectAgentMode } from '../src/agent-modes.mjs';
 
 test('engine generates complete artifacts for all product paths', () => {
   const base = { id: 'p', title: 'Agent OS', topic: 'Agent OS security', description: 'Study threat models' };
@@ -77,6 +79,57 @@ test('engine generates complete artifacts for all product paths', () => {
   assert.match(artifactToLatex(base, paper, 'acm'), /^\\documentclass\[sigconf\]\{acmart\}/);
 });
 
+test('agent mode intent routing selects bounded execution strategies', () => {
+  assert.deepEqual(agentModeCatalog().map((mode) => mode.id), ['workflow', 'react', 'plan-execute', 'supervisor']);
+  assert.equal(selectAgentMode('Generate this with the standard pipeline').mode, 'workflow');
+  assert.equal(selectAgentMode('Search the latest web evidence and verify sources').mode, 'react');
+  assert.equal(selectAgentMode('Create a step-by-step roadmap and execute the plan').mode, 'plan-execute');
+  assert.equal(selectAgentMode('Use a multi-agent supervisor to review and revise').mode, 'supervisor');
+  assert.equal(selectAgentMode('/mode react draft a report').reason, 'prompt-directive');
+  assert.equal(selectAgentMode('search sources', { requestedMode: 'workflow' }).mode, 'workflow');
+});
+
+test('LangGraph executes all adaptive modes and can reschedule mode during a run', async (t) => {
+  const calls = [];
+  const modelServer = http.createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body); const system = String(request.messages?.[0]?.content || ''); const prompt = String(request.messages?.at(-1)?.content || '');
+    let content;
+    if (prompt.includes('Return {"steps"')) {
+      content = JSON.stringify({ steps: ['research', 'knowledge', 'writing', 'review'].map((stage) => ({ stage, objective: `Complete ${stage}` })) });
+    } else if (prompt.includes('Allowed next values:')) {
+      const completed = JSON.parse(prompt.match(/Completed stages: (\[[^\n]*\])/u)?.[1] || '[]');
+      const next = ['research', 'knowledge', 'writing', 'review'].find((stage) => !completed.includes(stage)) || 'finish';
+      const requestedSwitch = prompt.includes('switch runtime') && completed.length === 0;
+      content = JSON.stringify({ next, mode: requestedSwitch ? 'plan-execute' : system.includes('ReAct') ? 'react' : 'supervisor', reason: requestedSwitch ? 'complex-task-replan' : 'next bounded specialist' });
+    } else {
+      const marker = 'Editable schema and current draft: ';
+      const line = prompt.split('\n').find((value) => value.startsWith(marker));
+      const editable = line ? JSON.parse(line.slice(marker.length)) : {};
+      const key = Object.keys(editable)[0]; content = JSON.stringify(key ? { [key]: editable[key] } : {});
+    }
+    calls.push({ system, prompt, content });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: `adaptive-${calls.length}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } }));
+  });
+  await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
+  t.after(() => modelServer.close());
+  const project = { id: 'adaptive-project', tenantId: 'tenant', title: 'Adaptive runtime', topic: 'Agent systems', description: '', type: 'research' };
+  const fallback = generateArtifact(project);
+  const config = { provider: 'custom', model: 'test-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'test-key' };
+  for (const mode of ['workflow', 'react', 'plan-execute', 'supervisor']) {
+    const result = await runAgentWorkflow(project, fallback, config, { mode, prompt: `Run in ${mode}` });
+    assert.equal(result.runtime.initialMode, mode); assert.equal(result.runtime.mode, mode);
+    assert.ok(result.stages.length >= 4); assert.ok(result.stages.every((stage) => stage.status === 'completed'));
+    if (mode === 'plan-execute') assert.equal(result.runtime.plan.length, 4);
+    if (mode === 'react' || mode === 'supervisor') assert.ok(result.runtime.controlEvents.some((event) => event.id === `${mode}-controller`));
+  }
+  const switched = await runAgentWorkflow(project, fallback, config, { mode: 'react', prompt: 'switch runtime for this complex task' });
+  assert.equal(switched.runtime.initialMode, 'react'); assert.equal(switched.runtime.mode, 'plan-execute');
+  assert.ok(switched.runtime.modeHistory.some((event) => event.from === 'react' && event.to === 'plan-execute'));
+  assert.equal(switched.runtime.plan.length, 4);
+});
+
 test('LLM provider configuration is encrypted, endpoint-restricted, and resolved without exposing the key', async () => {
   const previous = { encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY, allowed: process.env.NOVI_LLM_ALLOWED_HOSTS };
   process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-provider-encryption-key-with-32-characters';
@@ -119,7 +172,8 @@ test('Web-configured provider runs the four-stage LangGraph workflow', async (t)
     for (const [key, value] of Object.entries(previous)) { const env = { file: 'NOVI_DATA_FILE', auth: 'NOVI_AUTH_REQUIRED', worker: 'NOVI_JOB_WORKER', encryption: 'NOVI_CONFIG_ENCRYPTION_KEY' }[key]; if (value === undefined) delete process.env[env]; else process.env[env] = value; }
   });
   const base = `http://127.0.0.1:${server.address().port}`;
-  let response = await fetch(`${base}/api/llm/provider`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'custom', model: 'test-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'test-provider-key' }) });
+  let response = await fetch(`${base}/api/agent/modes`); assert.equal(response.status, 200); assert.equal((await response.json()).modes.length, 4);
+  response = await fetch(`${base}/api/llm/provider`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'custom', model: 'test-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'test-provider-key' }) });
   assert.equal(response.status, 200); const saved = (await response.json()).config; assert.equal(saved.hasApiKey, true); assert.equal('encryptedApiKey' in saved, false);
   response = await fetch(`${base}/api/llm/providers`); const settings = await response.json(); assert.equal(settings.activeProvider, 'custom'); assert.equal('encryptedApiKey' in settings.configs[0], false);
   response = await fetch(`${base}/api/llm/provider/test`, { method: 'POST' }); assert.equal(response.status, 200);
@@ -128,9 +182,9 @@ test('Web-configured provider runs the four-stage LangGraph workflow', async (t)
   response = await fetch(`${base}/api/projects/${project.id}/generate?async=true`, { method: 'POST' }); assert.equal(response.status, 202); const jobId = (await response.json()).job.id;
   let job;
   for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 30)); job = (await (await fetch(`${base}/api/jobs/${jobId}`)).json()).job; if (job.status !== 'queued' && job.status !== 'running') break; }
-  assert.equal(job.status, 'completed'); assert.equal(job.agentStages.length, 4); assert.ok(job.agentStages.every((stage) => stage.status === 'completed'));
+  assert.equal(job.status, 'completed'); assert.equal(job.currentMode, 'workflow'); assert.equal(job.currentModeLabel, 'Workflow'); assert.equal(job.agentStages.length, 4); assert.ok(job.agentStages.every((stage) => stage.status === 'completed'));
   const generated = await (await fetch(`${base}/api/projects/${project.id}`)).json(); const artifact = generated.project.artifacts[0];
-  assert.equal(modelCalls, 4); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.deepEqual(artifact.workflow.agents.map((agent) => agent.status), ['completed', 'completed', 'completed', 'completed']);
+  assert.equal(modelCalls, 4); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.deepEqual(artifact.workflow.agents.map((agent) => agent.status), ['completed', 'completed', 'completed', 'completed']);
   const raw = await readFile(join(dir, 'state.json'), 'utf8'); assert.doesNotMatch(raw, /test-provider-key/);
   const exported = await (await fetch(`${base}/api/me/export`)).json(); assert.equal(exported.llmProviderConfigs[0].hasApiKey, true); assert.equal('encryptedApiKey' in exported.llmProviderConfigs[0], false);
 });

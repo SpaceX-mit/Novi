@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder、Deep Research、Paper Author 三条核心产品路径已经实现并具有本地自动化验证证据。Web 已支持按组织配置主流 LLM Provider；配置后使用 LangGraph.js 依次运行 Research、Knowledge、Writing、Review 四个真实模型阶段。正式收费商用发布尚未完成，剩余工作主要是持久 Agent checkpoint、目标环境、真实供应商、跨平台签名安装、容量与安全验收等门禁。
+Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder、Deep Research、Paper Author 三条核心产品路径已经实现并具有本地自动化验证证据。Web 已支持按组织配置主流 LLM Provider；配置后 LangGraph.js 可根据提示词意图选择 Workflow、ReAct、Plan & Execute 或 Supervisor，并在运行中重新调度模式，工作区实时显示当前模式、阶段和进度。正式收费商用发布尚未完成，剩余工作主要是工具/MCP/Skill/Plugin 运行时、对话 Session 工作区、持久 Agent checkpoint、目标环境和正式发布门禁。
 
 当前开发机上的源码位于 NTFS/FUSE 挂载的 `/data`。该文件系统无法保存 Electron `chrome-sandbox` 所需的 `root:root 4755` 权限，因此直接执行 `npm run desktop` 仍不能显示 UI；需要将项目迁移到 ext4，或把 Electron runtime 安装到 `/opt` 后再完成一次真实窗口验收。这是当前环境问题，不是 UI 功能缺失。
 
@@ -13,16 +13,16 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder�
 | 范围 | 已实现内容 | 当前证据 |
 | --- | --- | --- |
 | 核心产品 | Knowledge Builder、Deep Research、Paper Author；成果版本、导出、Research/Knowledge/Writing/Review provenance | 默认测试与浏览器核心旅程覆盖 |
-| Web 与 API | 共享 REST API/UI、工作区、知识导入与检索、异步 Job/Agent 阶段、来源刷新、成果历史、Provider 设置、指标 | OpenAPI 3.1 契约共 38 paths / 44 operations；语法检查覆盖 40 modules |
+| Web 与 API | 共享 REST API/UI、工作区、知识导入与检索、异步 Job/Agent 模式与阶段、来源刷新、成果历史、Provider 设置、指标 | OpenAPI 3.1 契约共 39 paths / 45 operations；语法检查覆盖 41 modules |
 | 账户与商业边界 | Cookie-only Web 会话、OIDC 边界、组织与 RBAC、配额、支付 provider 边界、审计与生命周期取消 | 本地 HTTP/provider 契约和领域测试通过；未配置真实支付 provider 时明确返回 503，不创建模拟订单 |
 | 知识与生成 | 文本/Web/PDF/GitHub 导入、离线向量、RAG 上下文、来源连接器、Browser Agent/MCP 接口、连续更新 | 本地契约、集成和浏览器 smoke 已覆盖；真实来源仍需生产级人工核验 |
-| Agent Runtime | LangGraph.js 有界四阶段 StateGraph；每阶段独立模型调用、字段/形状校验、fallback、token 与 Job 进度；Novi RBAC/evidence/配额/持久化保持权威 | 本地 OpenAI-compatible HTTP 集成验证 4 次阶段调用；68 tests passed + 1 PostgreSQL 条件跳过 |
+| Agent Runtime | 意图路由的 Workflow、ReAct、Plan & Execute、Supervisor 四模式 LangGraph.js StateGraph；controller/阶段 fallback 可运行中切换模式，最多 8 个 Specialist 步骤；字段/形状校验、token、模式历史、计划和 Job 进度可追溯 | 本地 OpenAI-compatible HTTP 验证四种模式和 ReAct → Plan & Execute 运行中切换；70 tests passed + 1 PostgreSQL 条件跳过；Chromium 验证模式显示 |
 | LLM Provider Web 配置 | OpenAI、Anthropic、Google、DeepSeek、MiniMax、OpenRouter、Mistral、xAI、Groq、Azure OpenAI、Ollama、自定义兼容服务；租户隔离、owner/admin RBAC、连接测试、Offline mode | Chromium smoke 与 API/RBAC 测试通过；API Key AES-256-GCM 加密且不进入 API/导出响应 |
 | 存储接口 | JSON 文件、PostgreSQL/pgvector、对象存储、Neo4j、持久 outbox | 本地 PostgreSQL/MinIO/Neo4j 路径已验证；目标托管实例仍待验收 |
 | Web/容器交付 | Web 本地运行、Docker 多阶段非 root 运行、健康与就绪检查 | Docker 镜像已构建并检查；最近记录的镜像为 `sha256:5af027f80df589bc4f7fe746e3464669576e6c5bf28a3b8fd3b9300f7f0e0cb1` |
 | Electron 构建兼容 | Node.js 商业开发基线设为 22.12+，`.nvmrc` 固定 22.22.2，desktop lifecycle 增加版本预检 | 已消除旧 Node 加载 `@noble/hashes` 时的 `ERR_REQUIRE_ESM` |
 | Linux 桌面制品 | electron-builder 配置、安全 BrowserWindow、Linux unpacked/AppImage 构建与打包态 smoke | AppImage 已生成；最近记录 SHA-256 为 `b956734a2233861e8feb160ae7941142bb87a80559217f33efd715f5a403016d` |
-| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 最近记录：68 passed + 1 PostgreSQL 条件跳过；npm 官方 audit 0 vulnerabilities；锁文件 SBOM 352 components / 59 runtime；浏览器与 Provider 契约通过 |
+| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 最近记录：70 passed + 1 PostgreSQL 条件跳过；41 个 JavaScript 模块语法通过；npm 官方 audit 0 vulnerabilities；锁文件 SBOM 352 components / 59 runtime；浏览器与 Provider 契约通过 |
 
 ## 未完成
 
@@ -66,6 +66,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder�
 
 ## 更新记录
 
+- 2026-08-14：完成自适应 Agent 执行模式纵向闭环：中英文意图路由 Workflow/ReAct/Plan & Execute/Supervisor，controller 可在运行中转模式，阶段 fallback 升级 Supervisor；Job/成果保存模式、切换历史、计划、controller 事件与 token，Web 实时显示模式/阶段/进度并禁止运行中重复生成。验证：`npm test` 70 passed + 1 skip、`npm run check` 41 modules、`npm run openapi-check` 39 paths / 45 operations、`npm run browser-smoke` 及 1360×900/390×844 Chromium 截图通过，`npm run release-check` 及 Provider/存储/SBOM 契约通过；工具循环、MCP/Skill/Plugin 运行时与对话 Session UI 仍待实现。
 - 2026-08-14：将功能交付节奏固化到 `AGENTS.md`：每个可独立验收的完整功能或修复必须单独完成验证、进度更新、commit 与 push，推送成功后再开始下一项功能。
 - 2026-08-14：将 LangGraph 四阶段 Runtime、Web LLM Provider/MiniMax 配置及局域网监听改动提交并推送至 GitHub `origin/main`；变更文件未发现凭据形状的明文，本地运行数据和配置密钥保持忽略。托管 CI 运行与证据归档仍待完成。
 - 2026-08-14：修复 Provider 初次配置的测试顺序；`Save & test` 现在先保存当前 MiniMax/其他 Provider 表单再测试，避免尚无 active 配置时返回 409。验证：`npm test` 68 passed + 1 skip、`npm run browser-smoke`、`npm run check`、`npm run openapi-check` 通过。用户在对话中暴露的 Key 未写入代码或状态文件，必须撤销轮换。

@@ -7,6 +7,8 @@ import WebSocket from 'ws';
 
 const chromium = process.env.CHROMIUM_BIN || 'chromium';
 const debugPort = Number(process.env.NOVI_BROWSER_DEBUG_PORT || 9228);
+const viewportWidth = Number(process.env.NOVI_BROWSER_WIDTH || 1360);
+const viewportHeight = Number(process.env.NOVI_BROWSER_HEIGHT || 900);
 const dataDir = await mkdtemp(join(tmpdir(), 'novi-browser-'));
 const previous = { auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER, refresh: process.env.NOVI_REFRESH_WORKER, verify: process.env.NOVI_VERIFY_SOURCES, file: process.env.NOVI_DATA_FILE };
 process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_JOB_WORKER = 'true'; process.env.NOVI_REFRESH_WORKER = 'false'; process.env.NOVI_VERIFY_SOURCES = 'false'; process.env.NOVI_DATA_FILE = join(dataDir, 'state.json');
@@ -27,7 +29,7 @@ async function evaluate(expression) { const result = await command('Runtime.eval
 async function waitFor(expression, timeout = 12_000) { const end = Date.now() + timeout; while (Date.now() < end) { if (await evaluate(expression)) return; await sleep(100); } throw new Error(`Browser condition timed out: ${expression}`); }
 try {
   await command('Page.enable'); await command('Runtime.enable');
-  await command('Emulation.setDeviceMetricsOverride', { width: 1360, height: 900, deviceScaleFactor: 1, mobile: false });
+  await command('Emulation.setDeviceMetricsOverride', { width: viewportWidth, height: viewportHeight, deviceScaleFactor: 1, mobile: viewportWidth <= 640 });
   await evaluate(`location.href = ${JSON.stringify(base + '/')}`);
   await waitFor(`document.readyState === 'complete' && document.querySelector('#new-project') !== null && !document.querySelector('#new-project').hidden`);
   await sleep(500);
@@ -55,6 +57,14 @@ try {
   await waitFor(`document.querySelector('#view-workspace').classList.contains('active-view')`);
   await waitFor(`document.querySelector('#generate') !== null`);
   await evaluate(`document.querySelector('#generate').click()`);
+  await waitFor(`document.querySelector('#agent-run-status') !== null && document.querySelector('#agent-run-mode').textContent.trim().length > 0`);
+  const activeMode = await evaluate(`document.querySelector('#agent-run-mode').textContent.trim()`);
+  if (activeMode !== 'Workflow') throw new Error(`Agent execution mode is not visible or was routed incorrectly: ${activeMode}`);
+  if (!await evaluate(`document.querySelector('#generate-empty')?.disabled === true`)) throw new Error('Empty workspace generate action remains enabled during an active Agent run');
+  if (process.env.NOVI_BROWSER_AGENT_MODE_SCREENSHOT) {
+    const screenshot = await command('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    await writeFile(process.env.NOVI_BROWSER_AGENT_MODE_SCREENSHOT, Buffer.from(screenshot.data, 'base64'));
+  }
   await waitFor(`document.querySelector('#workspace-root .artifact-panel') !== null`, 15_000);
   if (!await evaluate(`document.querySelector('[data-artifact-tab="practice"]') !== null`)) throw new Error('Knowledge Builder practice lab is unavailable');
   await evaluate(`document.querySelector('[data-artifact-tab="practice"]').click()`);
@@ -133,7 +143,7 @@ try {
   await waitFor(`document.querySelector('.artifact-content').textContent.includes('Interview preparation') && document.querySelector('.artifact-content').textContent.includes('Capstone project')`);
   await evaluate(`document.querySelector('[data-artifact-tab="graph"]').click()`);
   await waitFor(`document.querySelectorAll('.artifact-content .node').length >= 10`);
-  console.log(`browser-smoke: created=${result.title}, status=${result.status}, pricing=ready, viewer-ui=ready, knowledge-search=ready, rag-context=ready, versions=${versionResult.count}, comparison=ready, continuous-update=ready, knowledge-delete=ready, markdown-export=${result.exportStatus}, paper-svg=ready, paper-gap=ready, publication-templates=ready, research-suite=ready`);
+  console.log(`browser-smoke: created=${result.title}, status=${result.status}, pricing=ready, agent-mode=${activeMode}, viewer-ui=ready, knowledge-search=ready, rag-context=ready, versions=${versionResult.count}, comparison=ready, continuous-update=ready, knowledge-delete=ready, markdown-export=${result.exportStatus}, paper-svg=ready, paper-gap=ready, publication-templates=ready, research-suite=ready`);
 } finally {
   socket.close(); chrome.kill('SIGTERM'); await new Promise((resolve) => server.close(resolve));
   for (const [key, value] of Object.entries(previous)) { const name = { auth: 'NOVI_AUTH_REQUIRED', worker: 'NOVI_JOB_WORKER', refresh: 'NOVI_REFRESH_WORKER', verify: 'NOVI_VERIFY_SOURCES', file: 'NOVI_DATA_FILE' }[key]; if (value === undefined) delete process.env[name]; else process.env[name] = value; }
