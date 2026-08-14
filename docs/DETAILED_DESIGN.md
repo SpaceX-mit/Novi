@@ -13,6 +13,7 @@
 - `src/llm-providers.mjs`：租户 Provider 目录、输入规范化、endpoint allowlist、AES-256-GCM API Key 加解密、LangChain 模型构造和连接测试。支持 OpenAI、Anthropic、Google、DeepSeek、MiniMax、OpenRouter、Mistral、xAI、Groq、Azure OpenAI、Ollama 与自定义 OpenAI-compatible 服务；MiniMax 使用国内官方 `https://api.minimaxi.com/v1`。
 - `src/agent-modes.mjs`：维护 Workflow、ReAct、Plan & Execute、Supervisor 目录，校验显式模式并从中英文提示词意图中选择自动模式。
 - `src/agent-runtime.mjs`：LangGraph.js 自适应有向图；Router 进入固定流水线、ReAct controller、Planner 或 Supervisor，controller 可切换模式，阶段 fallback 会升级到 Supervisor。每个 Specialist 建立有界 prompt、单独调用模型、校验 JSON 和现有字段形状，记录状态/时间/token。最多执行 8 个 Specialist 步骤，单职责最多两次；取消信号终止整条工作流。
+- `src/agent-sessions.mjs`：创建/查找租户项目 Session，追加最多 500 条、单条最多 20000 字符的消息，并维护 queued/running/completed/failed run 生命周期。助手成果消息保存 Artifact ID；失败写入有界错误摘要且幂等，公开响应复制消息数组，避免传输层直接修改持久对象。
 - `src/oidc.mjs`：OIDC discovery、PKCE S256、授权码交换、JWKS/RS256 ID Token 校验；HTTP start/callback 还用短时 HttpOnly 状态 Cookie 将授权响应绑定到发起浏览器。
 - `src/payments.mjs`：checkout provider 边界与 HMAC webhook；事件类型和 active plan 均白名单校验后才改变订阅。
 - `src/postgres-store.mjs`：可选 PostgreSQL JSONB Repository 迁移适配器，使用事务和连接池；pgvector 可用时维护 24 维原生向量表、HNSW cosine 索引，并通过租户/项目过滤的 `<=>` 查询实现 `searchKnowledge`。
@@ -35,6 +36,8 @@ Artifact { id, type, title, createdAt, content: { ..., knowledgeContext[] } }
 Workflow { strategy, product, completedAt, runtime?, agents[4]: { order, name, responsibility, status, usage?, outputs } }
 LlmProviderConfig { tenantId, provider, model, baseUrl, apiVersion?, encryptedApiKey?, active, createdBy, updatedBy }
 SourceSnapshot { id, projectId, tenantId, sources[], changeStatus, changes, autoUpdateStatus?, artifactId? }
+AgentSession { id, tenantId, projectId, createdBy, title, status: idle | running, activeRun?, messages[<=500], createdAt, updatedAt }
+AgentMessage { id, role: user | assistant, kind, content, jobId?, artifactId?, mode?, status?, createdAt }
 ```
 
 创建后状态为 `draft`；用户生成或持续更新成功后追加成果并变为 `ready`。持续更新成果额外保存 `trigger=continuous-update` 与 `snapshotId`。每个版本的 `workflow` 包含 Research/Knowledge/Writing/Review 四个有界职责，并保存运行模式、切换历史、计划和 controller 事件；`knowledgeContext` 保存 chunk/document ID、标题、片段、来源 URL 和相关分数，说明当次生成实际使用的个人知识。UI 默认使用最新成果，也可选择任意不可变历史版本。写操作进入同一 Promise 队列；更新后的完整状态先写 0600 临时文件，再用 rename 原子替换，状态目录使用 0700。
@@ -44,6 +47,8 @@ SourceSnapshot { id, projectId, tenantId, sources[], changeStatus, changes, auto
 Web 端生成使用 `POST /api/projects/:id/generate?async=true`，先取得 Job，再轮询 `/api/jobs/:id`；任务阶段为 queued → running → completed/failed。配置 Web Provider 后，Job 还持久化 `agentStages`、`currentStage` 和 20–100 的实际进度；每个阶段状态为 running → completed/fallback，并保存有界错误摘要与 token usage。项目状态在任务创建前原子切换到 `generating`，同一项目重复请求返回 409；额度扣减与任务创建在同一串行存储队列中完成，Job 保存 generation/source 计费周期，失败或服务重启时按原周期退款且只执行一次。成果提交成功后即使 Job 状态更新失败也不会重复退款。服务启动时会把遗留 queued/running Job 标记失败并恢复项目状态。每个消费者先通过 Repository 的事务性 `claimJob` 将 queued 原子变为 running 并写入 workerId，多个 HTTP 实例不会重复执行同一 Job。删除工作空间或发起任务的成员账户时，删除事务按 Job 的 charged/refunded 标记退款并移除 Job；运行中的 worker 在每个 LangGraph 节点前确认 Job 仍存在，并在成果提交事务再次确认 running Job、项目和 active membership，删除竞态不会重复退款或把成果写回共享项目。同步/异步执行都会以项目 topic + description 查询 `Repository.searchKnowledge`，再把经过字段白名单和长度限制的结果交给领域层。领域层先生成离线结构；租户存在 Web Provider 时优先用 LangGraph 四阶段补全，否则由旧 OpenAI-compatible `ModelGateway` 单次补全。外部调用超时、非 2xx 或 schema 不合法时回退到受控离线结构，避免外部服务故障破坏工作区。
 
 上述“LangGraph 四阶段补全”的控制层已升级为自适应模式：生成请求接受 `{prompt,mode}`，`auto` 通过 `src/agent-modes.mjs` 识别意图；Job 持久化 `requestedMode`、`currentMode`、`modeHistory`、`agentStages` 和 `currentStage`，工作区实时显示当前模式、阶段和进度。成果 runtime 固化 initial/final mode、plan、controller events 与 token usage。
+
+生成请求还接受项目内 `sessionId`；未提供时选择该项目最近更新的 Session，不存在则创建默认 Session。异步路径在同一存储事务中创建 Job、把项目置为 generating 并调用 `beginSessionRun`；同步路径同样原子设置项目和 Session，避免两步间删除竞态。阶段与模式回调更新 `activeRun`，成功时 `completeSessionRun` 追加带 Artifact ID 的助手消息，失败时 `failSessionRun` 追加一次错误消息并解除 active run。服务启动恢复对 queued/running Job 执行同一失败转换；项目、账户和备份/导出生命周期均包含 `agentSessions`。Session API 先用 tenant+project 查 Project，再以相同复合范围查 Session，避免通过 ID 探测其他租户数据。
 
 Provider 管理接口只允许 owner/admin。保存时固定厂商忽略客户端 base URL；Azure 只接受批准的 Azure AI hostname，Ollama 只接受回环，自定义非回环 hostname 必须出现在 `NOVI_LLM_ALLOWED_HOSTS` 且使用 HTTPS。API Key 使用 `NOVI_CONFIG_ENCRYPTION_KEY` 派生的 256 位 key 做 AES-GCM；生产缺少稳定密钥时拒绝保存，本地生成数据目录下 0600 key 文件。连接测试只返回 provider/model/latency，不返回凭据。当前 `MemorySaver` 不提供跨进程图恢复；服务重启仍按现有 Job 恢复规则将中断任务失败并退款，而不是从某个 Agent 节点继续。
 
@@ -78,6 +83,6 @@ MCP source adapter 使用协议版本 `2025-06-18`，按请求完成 `initialize
 
 项目的 `artifacts` 使用 newest-first 不可变数组。重新生成只追加新 ID/时间戳，不覆盖旧内容；Web 以 `activeArtifactId` 选择版本，将当前版与数组中紧邻的旧版按摘要、章节、方法、实验、图表和来源 URL 比较。导出 API 接受租户项目内的 `artifactId`，不存在或不属于该项目时返回 404，下载文件名携带稳定版本号。
 
-备份、恢复和账户导出包含知识摄取与持续更新数组；备份/状态文件以 0600 保存，单文档删除清理活跃索引而保留不可变成果 excerpt，工作空间/账户删除则级联清理对应成果、Job、文档、chunks、实体/边、watchConfigs 和 sourceSnapshots；未完成 Job 在清理前按原计费周期单次退款。
+备份、恢复和账户导出包含 Agent Session、知识摄取与持续更新数组；备份/状态文件以 0600 保存，单文档删除清理活跃索引而保留不可变成果 excerpt，工作空间/账户删除则级联清理对应 Session、成果、Job、文档、chunks、实体/边、watchConfigs 和 sourceSnapshots；未完成 Job 在清理前按原计费周期单次退款。
 
 发布前运行 `npm run openapi-check`、`npm run sbom-check` 和 `npm run perf-check`；三者分别验证 OpenAPI 3.1 schema/引用/核心路径、CycloneDX/SPDX 的完整与生产依赖边界及许可证元数据、40 次本地 `/api/health` 请求 P95 和小于 500 KB 的首页响应体。`npm run provider-contract-check` 使用本地 HTTP 供应商实现走通 LLM 成功/错误/超时、支付 checkout 与签名 webhook、OIDC discovery/PKCE/RS256/userinfo、Browser Agent 渲染和 MCP initialize/list/call；它验证协议和安全边界，但不替代真实第三方沙盒或目标 worker/MCP server 验收。`npm run infrastructure-integration-check` 对配置的 S3-compatible/Neo4j 做带清理的真实写读删，本地已用 MinIO SigV4 和真实 Neo4j 通过。性能检查不是公网压力测试替代品，生产仍需独立压测；本地 SBOM/镜像扫描快照也不替代持续发布 CI。

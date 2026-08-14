@@ -16,6 +16,7 @@ export async function restoreStore(source, destination) {
   const parsed = JSON.parse(await readFile(source, 'utf8'));
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || parsed.version !== 3 || !Array.isArray(parsed.projects) || !Array.isArray(parsed.users) || !Array.isArray(parsed.jobs)) throw new Error('Unsupported Novi backup format');
   parsed.externalProjectionJobs ||= [];
+  parsed.agentSessions ||= [];
   await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
   const temporary = `${destination}.${process.pid}.tmp`;
   await writeFile(temporary, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });

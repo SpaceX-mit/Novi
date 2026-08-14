@@ -109,6 +109,27 @@ paths:
     delete:
       parameters: [ { $ref: '#/components/parameters/ProjectId' } ]
       responses: { '204': { description: 'Project, jobs, knowledge and update data deleted; unfinished generation usage refunded once' }, '403': { description: Admin role required } }
+  /api/projects/{id}/sessions:
+    get:
+      parameters: [ { $ref: '#/components/parameters/ProjectId' } ]
+      responses: { '200': { description: Tenant-scoped Agent session summaries } }
+    post:
+      parameters: [ { $ref: '#/components/parameters/ProjectId' } ]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { title: { type: string, maxLength: 120 } }
+      responses: { '201': { description: Agent session created }, '403': { description: Editor role required } }
+  /api/projects/{id}/sessions/{sessionId}:
+    get:
+      parameters: [ { $ref: '#/components/parameters/ProjectId' }, { $ref: '#/components/parameters/SessionId' } ]
+      responses: { '200': { description: Agent session messages and active run }, '404': { description: Session not found } }
+    delete:
+      parameters: [ { $ref: '#/components/parameters/ProjectId' }, { $ref: '#/components/parameters/SessionId' } ]
+      responses: { '204': { description: Idle Agent session deleted }, '409': { description: Session has an active run } }
   /api/projects/{id}/pin:
     patch:
       parameters: [ { $ref: '#/components/parameters/ProjectId' } ]
@@ -392,6 +413,7 @@ components:
   parameters:
     ProjectId: { in: path, name: id, required: true, schema: { type: string, format: uuid } }
     JobId: { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    SessionId: { in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }
     MemberId: { in: path, name: id, required: true, schema: { type: string, format: uuid } }
   schemas:
     AgentGenerationInput:
@@ -399,6 +421,34 @@ components:
       properties:
         prompt: { type: string, minLength: 1, maxLength: 20000 }
         mode: { type: string, enum: [auto, workflow, react, plan-execute, supervisor], default: auto }
+        sessionId: { type: string, format: uuid, description: Existing project Agent session; defaults to the most recently updated session }
+    AgentMessage:
+      type: object
+      required: [id, role, kind, content, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        role: { type: string, enum: [user, assistant] }
+        kind: { type: string, enum: [welcome, message, artifact, error] }
+        content: { type: string, maxLength: 20000 }
+        runId: { type: string }
+        jobId: { type: string }
+        artifactId: { type: string, format: uuid }
+        mode: { type: string }
+        status: { type: string, enum: [queued, running, completed, failed] }
+        createdAt: { type: string, format: date-time }
+    AgentSession:
+      type: object
+      required: [id, tenantId, projectId, title, status, messages, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string }
+        projectId: { type: string, format: uuid }
+        title: { type: string, maxLength: 120 }
+        status: { type: string, enum: [idle, running] }
+        activeRun: { type: [object, 'null'] }
+        messages: { type: array, maxItems: 500, items: { $ref: '#/components/schemas/AgentMessage' } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     AgentMode:
       type: object
       required: [id, name, description]

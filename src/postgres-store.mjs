@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { embedText, searchProjectKnowledge } from './knowledge.mjs';
+import { failSessionRun, findAgentSession } from './agent-sessions.mjs';
 
-const initialState = () => ({ version: 3, projects: [], jobs: [], users: [], sessions: [], audit: [], usage: [], subscriptions: [], paymentEvents: [], organizations: [], memberships: [], invitations: [], oidcStates: [], llmProviderConfigs: [], documents: [], chunks: [], knowledgeEntities: [], knowledgeEdges: [], watchConfigs: [], sourceSnapshots: [], externalProjectionJobs: [] });
+const initialState = () => ({ version: 3, projects: [], jobs: [], users: [], sessions: [], agentSessions: [], audit: [], usage: [], subscriptions: [], paymentEvents: [], organizations: [], memberships: [], invitations: [], oidcStates: [], llmProviderConfigs: [], documents: [], chunks: [], knowledgeEntities: [], knowledgeEdges: [], watchConfigs: [], sourceSnapshots: [], externalProjectionJobs: [] });
 
 /**
  * PostgreSQL repository. `novi_state` is a compatibility envelope for legacy
@@ -52,7 +53,7 @@ export class PostgresStore {
     const result = await client.query('SELECT state FROM novi_state WHERE id = 1');
     if (!result.rows[0]) return initialState();
     const state = result.rows[0].state;
-    state.version = 3; state.projects ||= []; state.jobs ||= []; state.users ||= []; state.sessions ||= []; state.audit ||= []; state.usage ||= []; state.subscriptions ||= []; state.paymentEvents ||= []; state.organizations ||= []; state.memberships ||= []; state.invitations ||= []; state.oidcStates ||= []; state.llmProviderConfigs ||= []; state.documents ||= []; state.chunks ||= []; state.knowledgeEntities ||= []; state.knowledgeEdges ||= []; state.watchConfigs ||= []; state.sourceSnapshots ||= []; state.externalProjectionJobs ||= [];
+    state.version = 3; state.projects ||= []; state.jobs ||= []; state.users ||= []; state.sessions ||= []; state.agentSessions ||= []; state.audit ||= []; state.usage ||= []; state.subscriptions ||= []; state.paymentEvents ||= []; state.organizations ||= []; state.memberships ||= []; state.invitations ||= []; state.oidcStates ||= []; state.llmProviderConfigs ||= []; state.documents ||= []; state.chunks ||= []; state.knowledgeEntities ||= []; state.knowledgeEdges ||= []; state.watchConfigs ||= []; state.sourceSnapshots ||= []; state.externalProjectionJobs ||= [];
     return state;
   }
 
@@ -64,7 +65,7 @@ export class PostgresStore {
       // cannot overwrite one another while this migration envelope is used.
       const locked = await client.query('SELECT state FROM novi_state WHERE id = 1 FOR UPDATE');
       const state = locked.rows[0]?.state || initialState();
-      state.version = 3; state.projects ||= []; state.jobs ||= []; state.users ||= []; state.sessions ||= []; state.audit ||= []; state.usage ||= []; state.subscriptions ||= []; state.paymentEvents ||= []; state.organizations ||= []; state.memberships ||= []; state.invitations ||= []; state.oidcStates ||= []; state.llmProviderConfigs ||= []; state.documents ||= []; state.chunks ||= []; state.knowledgeEntities ||= []; state.knowledgeEdges ||= []; state.watchConfigs ||= []; state.sourceSnapshots ||= []; state.externalProjectionJobs ||= [];
+      state.version = 3; state.projects ||= []; state.jobs ||= []; state.users ||= []; state.sessions ||= []; state.agentSessions ||= []; state.audit ||= []; state.usage ||= []; state.subscriptions ||= []; state.paymentEvents ||= []; state.organizations ||= []; state.memberships ||= []; state.invitations ||= []; state.oidcStates ||= []; state.llmProviderConfigs ||= []; state.documents ||= []; state.chunks ||= []; state.knowledgeEntities ||= []; state.knowledgeEdges ||= []; state.watchConfigs ||= []; state.sourceSnapshots ||= []; state.externalProjectionJobs ||= [];
       const result = await mutator(state);
       await client.query('UPDATE novi_state SET version = 3, state = $1::jsonb, updated_at = now() WHERE id = 1', [JSON.stringify(state)]);
       await this.projectProjection(client, state);
@@ -157,6 +158,7 @@ export class PostgresStore {
           job.generationRefunded ||= Boolean(job.generationCharged);
           job.sourceRefunded ||= Boolean(job.sourceCharged);
           job.generationCharged = false; job.sourceCharged = false;
+          failSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { jobId: job.id, mode: job.currentMode, error: 'Generation interrupted by service restart' });
           interrupted.add(job.projectId);
         }
       }

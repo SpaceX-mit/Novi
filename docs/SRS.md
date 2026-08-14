@@ -44,11 +44,14 @@ Web 浏览器或 Electron 客户端通过 HTTP REST API 访问 Novi 服务。服
 | FR-34 | 通用 MCP 来源适配 | 配置 MCP Streamable HTTP endpoint 后执行 `initialize`、`notifications/initialized`、`tools/list`、`tools/call`；只调用管理员配置且服务端实际公布的 source tool，输入固定为 `{query,limit}`，只接纳 structured sources 中的无凭据 HTTP(S) URL，限制响应大小、超时和 authority 上限，再进入统一去重、排序与 concrete URL 证据核验 | `src/source-adapters.mjs`, `src/connectors.mjs`, `GET /api/search` |
 | FR-35 | Web LLM Provider 配置 | owner/admin 可按组织选择主流 Provider（含国内 MiniMax）、模型和允许的 endpoint，保存/覆盖 API Key、测试连接或切回 Offline mode；viewer/editor 的 UI 隐藏且 API 返回 403，响应与数据导出不暴露明文或密文 API Key | `src/llm-providers.mjs`, `/api/llm/provider*`, `#provider-modal` |
 | FR-36 | LangGraph Agent Runtime | 存在租户 Web Provider 时，根据 `{prompt,mode}` 进入 Workflow、ReAct、Plan & Execute 或 Supervisor；auto 模式识别中英文意图，controller 可在运行中切换模式，阶段 fallback 升级到 Supervisor。Specialist 只修改字段白名单内同形数据；Job 和 Web 暴露当前模式、阶段与进度，成果保存计划、模式历史、controller 事件和 token | `src/agent-modes.mjs`, `src/agent-runtime.mjs`, `generateArtifactAsync()`, `agentStages` |
+| FR-37 | 持久 Agent Session | 创建项目时生成默认 Session；可按项目列出、新建、查看和删除空闲 Session。同步/异步生成接受 `sessionId`，保存用户/助手消息、active run 模式/阶段/进度、Job 与 Artifact 关联；Session 按 tenant+project 隔离并随项目/账户删除，运行中删除返回 409，服务重启把中断运行写为失败并解除占用 | `src/agent-sessions.mjs`, `/api/projects/:id/sessions*`, `agentSessions` |
 
 ## 3. 外部接口
 
 - `POST /api/projects`：`{title, topic, type, description?}`。
-- `POST /api/projects/:id/generate`：同步生成当前版本成果。
+- `POST /api/projects/:id/generate`：同步生成当前版本成果；请求可传 `{prompt,mode,sessionId}`，异步模式返回的 Job 绑定 Session。
+- `GET/POST /api/projects/:id/sessions`：列出项目 Session 摘要或创建新 Session。
+- `GET/DELETE /api/projects/:id/sessions/:sessionId`：查看完整消息或删除空闲 Session；跨项目/租户返回 404，运行中返回 409。
 - `PATCH /api/projects/:id/pin`：切换置顶状态。
 - `DELETE /api/projects/:id`：admin 删除项目，并级联取消未完成生成、单次退款及清理 Job/知识/关注数据。
 - `GET /api/projects/:id/export?format=markdown|latex&artifactId=<uuid>&template=article|ieee|acm`：下载指定不可变版本；未传 `artifactId` 时下载最新成果，LaTeX 可选择出版模板。

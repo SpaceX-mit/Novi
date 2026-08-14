@@ -35,6 +35,8 @@ HOST=0.0.0.0 PORT=4173 NOVI_AUTH_REQUIRED=true NOVI_APP_ORIGIN=http://<服务器
 
 Web 中保存的租户配置优先于 `NOVI_LLM_BASE_URL`、`NOVI_LLM_API_KEY`、`NOVI_LLM_MODEL` 旧配置。启用 Web Provider 后，LangGraph.js 会根据生成提示词在 Workflow、ReAct、Plan & Execute 和 Supervisor 之间选择有界执行模式；控制节点可在运行中重新调度模式，Research、Knowledge、Writing、Review 仍只能修改各自字段。异步 Job 和工作区显示当前模式、阶段和进度；单阶段调用或响应校验失败时保留受控离线草稿，并转由 Supervisor 进行有界恢复。未保存 Web Provider 时，旧环境变量仍走原有单次 OpenAI-compatible 网关；两者都未配置时完全离线运行。`GET /api/agent/modes` 返回可用模式，生成请求可传 `{prompt,mode}`，其中 `mode=auto` 为默认。
 
+每个新项目同时创建一个持久 Agent Session。`GET/POST /api/projects/:id/sessions` 可列出或新建会话，`GET/DELETE /api/projects/:id/sessions/:sessionId` 可读取或删除空闲会话；运行中的会话返回 409，不能被删除。同步和异步生成都可传 `{prompt,mode,sessionId}`，并把用户请求、当前运行模式/阶段/进度、失败信息以及最终 Artifact 链接写回 Session；不传 `sessionId` 时使用该项目最近更新的会话。Session 按项目和租户双重隔离，随工作空间或账户删除，并包含在账户导出和 v3 备份中。服务重启会把中断 Session 置回 idle、写入失败消息并按原规则退款。当前这部分是后端 API 与持久状态基线；对话式 Session 工作区 UI 仍在后续实现。
+
 API Key 以 AES-256-GCM 加密保存在租户状态中，API、账户导出和浏览器都不会收到明文或密文。生产必须通过 Secret Manager 设置稳定的 `NOVI_CONFIG_ENCRYPTION_KEY`（至少 32 字符）；本地开发会在数据文件旁生成权限为 0600 的 `data/.novi-config-key`。已知 Provider 使用固定官方 endpoint；Ollama 只允许回环地址；远端自定义 OpenAI-compatible 主机必须使用 HTTPS 并列入逗号分隔的 `NOVI_LLM_ALLOWED_HOSTS`。每阶段超时由 `NOVI_LLM_TIMEOUT_MS` 控制，最大输出 token 由 `NOVI_LLM_MAX_OUTPUT_TOKENS` 控制，完整示例见 `.env.example`。
 
 ### Electron 桌面端
@@ -159,7 +161,7 @@ docker run --rm -p 4173:4173 -v novi-data:/app/data novi
 - [商用就绪审计](docs/COMMERCIAL_READINESS.md)：逐项验证证据与仍需目标环境完成的正式发布门禁。
 - [发布手册](docs/RELEASE.md)：三平台打包、签名/公证 Secret、SBOM、校验和及发布后验收。
 
-当前生成器默认是离线确定性实现，目的是让完整产品流程可演示、可测试；实时连接器仅补充来源，不替代生产级引用核验。Knowledge Builder 输出 Wiki/路线/Practice Lab/图谱；Deep Research 分别输出 Report/Wiki/Graph/SOTA/机会；Paper Author 输出完整章节、research gap、novelty、方法、实验、图表和审稿，并可导出 IEEE/ACM LaTeX。每个不可变成果保存 Research/Knowledge/Writing/Review 职责与模式切换 provenance；配置 Web Provider 后由 LangGraph.js 的 Workflow/ReAct/Plan & Execute/Supervisor 控制图调度这些职责。设置 `NOVI_AUTH_REQUIRED=true` 可强制注册/登录和租户隔离；生成接口添加 `?async=true` 可返回 Job 并通过 `/api/jobs/:id` 轮询。`provider-contract-check` 已覆盖 LLM、支付、OIDC、Browser Agent 和 MCP 的本地真实 HTTP 协议形态，生产基线适配器和 outbox 已通过本地契约/集成验证；本地依赖/镜像扫描、Linux AppImage 和窗口 smoke 也已通过。当前 LangGraph checkpoint 仅在单次进程内存中使用，不能跨进程重启恢复图节点；环境变量旧 LLM 网关仍是单次调用，阶段内也尚未提供模型自主工具循环。正式商业发布仍必须完成真实供应商/目标服务验收、引用级人工核验、备份恢复演练、公网压力测试、托管 CI 记录，以及 Windows/macOS 签名、公证、安装和升级 E2E，详见商用就绪审计。
+当前生成器默认是离线确定性实现，目的是让完整产品流程可演示、可测试；实时连接器仅补充来源，不替代生产级引用核验。Knowledge Builder 输出 Wiki/路线/Practice Lab/图谱；Deep Research 分别输出 Report/Wiki/Graph/SOTA/机会；Paper Author 输出完整章节、research gap、novelty、方法、实验、图表和审稿，并可导出 IEEE/ACM LaTeX。每个不可变成果保存 Research/Knowledge/Writing/Review 职责与模式切换 provenance；配置 Web Provider 后由 LangGraph.js 的 Workflow/ReAct/Plan & Execute/Supervisor 控制图调度这些职责。设置 `NOVI_AUTH_REQUIRED=true` 可强制注册/登录和租户隔离；生成接口添加 `?async=true` 可返回 Job 并通过 `/api/jobs/:id` 轮询，生成消息同时写入对应 Agent Session。`provider-contract-check` 已覆盖 LLM、支付、OIDC、Browser Agent 和 MCP 的本地真实 HTTP 协议形态，生产基线适配器和 outbox 已通过本地契约/集成验证；本地依赖/镜像扫描、Linux AppImage 和窗口 smoke 也已通过。当前 LangGraph checkpoint 仅在单次进程内存中使用，不能跨进程重启恢复图节点；环境变量旧 LLM 网关仍是单次调用，阶段内也尚未提供模型自主工具循环。正式商业发布仍必须完成真实供应商/目标服务验收、引用级人工核验、备份恢复演练、公网压力测试、托管 CI 记录，以及 Windows/macOS 签名、公证、安装和升级 E2E，详见商用就绪审计。
 
 Web 操作与组织角色对齐：viewer 可浏览、搜索、查看历史和导出；editor 可创建、生成、置顶、导入知识、刷新来源和删除单个知识文档；admin/owner 还可配置组织 LLM Provider、删除工作空间并发起付费 checkout。服务端会对每个写请求重新校验 membership。删除工作空间或发起任务的成员账户会取消关联未完成 Job、按原计费周期只退款一次，并阻止运行中的 worker 在删除后提交成果。
 

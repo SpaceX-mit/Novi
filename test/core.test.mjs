@@ -31,6 +31,7 @@ import { enqueueDocumentProjection, flushExternalProjectionJobs } from '../src/e
 import { normalizeProviderInput, resolvedProviderConfig, saveProviderConfig } from '../src/llm-providers.mjs';
 import { runAgentWorkflow } from '../src/agent-runtime.mjs';
 import { agentModeCatalog, selectAgentMode } from '../src/agent-modes.mjs';
+import { appendSessionMessage, beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, sessionSummary, updateSessionRun } from '../src/agent-sessions.mjs';
 
 test('engine generates complete artifacts for all product paths', () => {
   const base = { id: 'p', title: 'Agent OS', topic: 'Agent OS security', description: 'Study threat models' };
@@ -87,6 +88,32 @@ test('agent mode intent routing selects bounded execution strategies', () => {
   assert.equal(selectAgentMode('Use a multi-agent supervisor to review and revise').mode, 'supervisor');
   assert.equal(selectAgentMode('/mode react draft a report').reason, 'prompt-directive');
   assert.equal(selectAgentMode('search sources', { requestedMode: 'workflow' }).mode, 'workflow');
+});
+
+test('Agent sessions preserve bounded conversation and run lifecycle state', () => {
+  const state = { agentSessions: [] };
+  const project = { id: 'project-1', tenantId: 'tenant-1', ownerId: 'user-1', title: 'Runtime study', topic: 'Agent runtimes' };
+  const session = createAgentSession(state, project, { id: 'user-1', tenantId: 'tenant-1' });
+  assert.equal(session.messages[0].kind, 'welcome');
+  assert.equal(session.status, 'idle');
+  const userMessage = beginSessionRun(session, { jobId: 'job-1', prompt: 'Research current runtimes', requestedMode: 'auto', currentMode: 'react' });
+  assert.equal(userMessage.status, 'queued'); assert.equal(session.status, 'running'); assert.equal(session.activeRun.currentMode, 'react');
+  updateSessionRun(session, { currentMode: 'plan-execute', currentStage: 'Writing', progress: 70 });
+  assert.equal(userMessage.status, 'running'); assert.equal(userMessage.mode, 'plan-execute'); assert.equal(session.activeRun.progress, 70);
+  const assistantMessage = completeSessionRun(session, { jobId: 'job-1', artifact: { id: 'artifact-1', content: { summary: 'Completed result' } }, mode: 'plan-execute' });
+  assert.equal(assistantMessage.artifactId, 'artifact-1'); assert.equal(session.status, 'idle'); assert.equal(session.activeRun, null); assert.equal(userMessage.status, 'completed');
+  beginSessionRun(session, { jobId: 'job-2', prompt: 'Retry with evidence', requestedMode: 'supervisor', currentMode: 'supervisor' });
+  failSessionRun(session, { jobId: 'job-2', mode: 'supervisor', error: 'Provider unavailable' });
+  failSessionRun(session, { jobId: 'job-2', mode: 'supervisor', error: 'Provider unavailable' });
+  assert.equal(session.messages.filter((message) => message.jobId === 'job-2' && message.role === 'assistant').length, 1);
+  assert.equal(sessionSummary(session).messageCount, 5); assert.equal(session.status, 'idle');
+  assert.throws(() => appendSessionMessage(session, { role: 'user', content: 'x'.repeat(20_001) }), /20000/);
+  const newerSession = createAgentSession(state, project, { id: 'user-1', tenantId: 'tenant-1' }, { title: 'Newer session' });
+  session.updatedAt = new Date(Date.now() + 1000).toISOString();
+  assert.equal(ensureAgentSession(state, project, { id: 'user-1', tenantId: 'tenant-1' }).id, session.id);
+  state.agentSessions = state.agentSessions.filter((item) => item.id !== newerSession.id);
+  for (let index = 0; index < 501; index += 1) appendSessionMessage(session, { role: 'user', content: `message-${index}` });
+  assert.equal(session.messages.length, 500); assert.equal(session.messages[0].content, 'message-1');
 });
 
 test('LangGraph executes all adaptive modes and can reschedule mode during a run', async (t) => {
@@ -178,15 +205,68 @@ test('Web-configured provider runs the four-stage LangGraph workflow', async (t)
   response = await fetch(`${base}/api/llm/providers`); const settings = await response.json(); assert.equal(settings.activeProvider, 'custom'); assert.equal('encryptedApiKey' in settings.configs[0], false);
   response = await fetch(`${base}/api/llm/provider/test`, { method: 'POST' }); assert.equal(response.status, 200);
   response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'LangGraph', topic: 'Agent runtime', type: 'paper' }) });
-  const project = (await response.json()).project;
-  response = await fetch(`${base}/api/projects/${project.id}/generate?async=true`, { method: 'POST' }); assert.equal(response.status, 202); const jobId = (await response.json()).job.id;
+  const created = await response.json(); const project = created.project; const initialSession = created.session;
+  assert.equal(initialSession.messages.length, 1); assert.equal(initialSession.messages[0].kind, 'welcome');
+  response = await fetch(`${base}/api/projects/${project.id}/generate?async=true`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: 'Generate the standard artifact', mode: 'auto', sessionId: initialSession.id }) }); assert.equal(response.status, 202); const queued = await response.json(); const jobId = queued.job.id; assert.equal(queued.sessionId, initialSession.id);
   let job;
   for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 30)); job = (await (await fetch(`${base}/api/jobs/${jobId}`)).json()).job; if (job.status !== 'queued' && job.status !== 'running') break; }
   assert.equal(job.status, 'completed'); assert.equal(job.currentMode, 'workflow'); assert.equal(job.currentModeLabel, 'Workflow'); assert.equal(job.agentStages.length, 4); assert.ok(job.agentStages.every((stage) => stage.status === 'completed'));
   const generated = await (await fetch(`${base}/api/projects/${project.id}`)).json(); const artifact = generated.project.artifacts[0];
   assert.equal(modelCalls, 4); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.deepEqual(artifact.workflow.agents.map((agent) => agent.status), ['completed', 'completed', 'completed', 'completed']);
+  const session = (await (await fetch(`${base}/api/projects/${project.id}/sessions/${initialSession.id}`)).json()).session;
+  assert.equal(session.status, 'idle'); assert.equal(session.activeRun, null); assert.deepEqual(session.messages.map((message) => message.role), ['assistant', 'user', 'assistant']);
+  assert.equal(session.messages[1].jobId, jobId); assert.equal(session.messages[1].status, 'completed'); assert.equal(session.messages[2].artifactId, artifact.id); assert.equal(session.messages[2].mode, 'workflow');
+  response = await fetch(`${base}/api/projects/${project.id}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Follow-up analysis' }) });
+  assert.equal(response.status, 201); const secondSession = (await response.json()).session;
+  response = await fetch(`${base}/api/projects/${project.id}/sessions`); assert.equal(response.status, 200); assert.equal((await response.json()).sessions.length, 2);
+  response = await fetch(`${base}/api/projects/${project.id}/sessions/${secondSession.id}`, { method: 'DELETE' }); assert.equal(response.status, 204);
   const raw = await readFile(join(dir, 'state.json'), 'utf8'); assert.doesNotMatch(raw, /test-provider-key/);
-  const exported = await (await fetch(`${base}/api/me/export`)).json(); assert.equal(exported.llmProviderConfigs[0].hasApiKey, true); assert.equal('encryptedApiKey' in exported.llmProviderConfigs[0], false);
+  const exported = await (await fetch(`${base}/api/me/export`)).json(); assert.equal(exported.llmProviderConfigs[0].hasApiKey, true); assert.equal('encryptedApiKey' in exported.llmProviderConfigs[0], false); assert.equal(exported.agentSessions.length, 1); assert.equal(exported.agentSessions[0].messages[2].artifactId, artifact.id);
+});
+
+test('Agent session API isolates projects and tenants and protects active sessions', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'novi-agent-sessions-'));
+  const file = join(dir, 'state.json');
+  const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER };
+  process.env.NOVI_DATA_FILE = file; process.env.NOVI_AUTH_REQUIRED = 'true'; process.env.NOVI_JOB_WORKER = 'false';
+  const server = createServer(); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    server.close();
+    for (const [key, value] of Object.entries(previous)) {
+      const env = { file: 'NOVI_DATA_FILE', auth: 'NOVI_AUTH_REQUIRED', worker: 'NOVI_JOB_WORKER' }[key];
+      if (value === undefined) delete process.env[env]; else process.env[env] = value;
+    }
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const register = async (email) => {
+    await fetch(`${base}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: 'correct horse battery staple' }) });
+    return (await (await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: 'correct horse battery staple' }) })).json()).token;
+  };
+  const tokenA = await register('session-a@example.com'); const tokenB = await register('session-b@example.com');
+  const createProject = async (token, title) => {
+    const response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ title, topic: 'Session isolation', type: 'knowledge' }) });
+    assert.equal(response.status, 201); return response.json();
+  };
+  const first = await createProject(tokenA, 'First project'); const second = await createProject(tokenA, 'Second project');
+  let response = await fetch(`${base}/api/projects/${first.project.id}/sessions/${second.session.id}`, { headers: { authorization: `Bearer ${tokenA}` } });
+  assert.equal(response.status, 404);
+  response = await fetch(`${base}/api/projects/${first.project.id}/sessions/${first.session.id}`, { headers: { authorization: `Bearer ${tokenB}` } });
+  assert.equal(response.status, 404);
+  response = await fetch(`${base}/api/projects/${first.project.id}/generate?async=true`, { method: 'POST', headers: { authorization: `Bearer ${tokenA}`, 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: second.session.id }) });
+  assert.equal(response.status, 404); assert.equal((await response.json()).code, 'AGENT_SESSION_NOT_FOUND');
+  assert.equal((await (await fetch(`${base}/api/usage`, { headers: { authorization: `Bearer ${tokenA}` } })).json()).usage.generations, 0);
+  response = await fetch(`${base}/api/projects/${first.project.id}/sessions`, { method: 'POST', headers: { authorization: `Bearer ${tokenA}`, 'content-type': 'application/json' }, body: JSON.stringify({ title: 'x'.repeat(121) }) });
+  assert.equal(response.status, 422);
+  const stateStore = new JsonStore(file);
+  await stateStore.update((state) => {
+    const session = state.agentSessions.find((item) => item.id === first.session.id);
+    beginSessionRun(session, { jobId: 'manual-active-run', prompt: 'Active request', requestedMode: 'auto', currentMode: 'workflow' });
+  });
+  response = await fetch(`${base}/api/projects/${first.project.id}/sessions/${first.session.id}`, { method: 'DELETE', headers: { authorization: `Bearer ${tokenA}` } });
+  assert.equal(response.status, 409); assert.equal((await response.json()).code, 'AGENT_SESSION_ACTIVE');
+  await stateStore.update((state) => failSessionRun(state.agentSessions.find((item) => item.id === first.session.id), { jobId: 'manual-active-run', mode: 'workflow', error: 'Cancelled for test' }));
+  response = await fetch(`${base}/api/projects/${first.project.id}/sessions/${first.session.id}`, { method: 'DELETE', headers: { authorization: `Bearer ${tokenA}` } });
+  assert.equal(response.status, 204);
 });
 
 test('evidence exports preserve claim-level source links and disclaimers', () => {
@@ -582,7 +662,9 @@ test('HTTP API validates, creates, generates, exports and deletes projects', asy
   assert.equal(response.status, 204);
   response = await fetch(`${base}/api/me/export`);
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).projects.length, 0);
+  const afterDeletion = await response.json();
+  assert.equal(afterDeletion.projects.length, 0);
+  assert.equal(afterDeletion.agentSessions.length, 0);
   response = await fetch(`${base}/api/projects/${project.id}`);
   assert.equal(response.status, 404);
 });
@@ -995,13 +1077,20 @@ test('store recovers interrupted jobs and generating projects after restart', as
   const store = new JsonStore(join(dir, 'state.json'));
   const project = await store.createProject({ title: 'Interrupted', topic: 'Recovery', type: 'knowledge' });
   await store.update((state) => {
+    const session = createAgentSession(state, project, { id: 'local', tenantId: 'local' });
+    beginSessionRun(session, { jobId: 'job-1', prompt: 'Recover this run', requestedMode: 'react', currentMode: 'react' });
     state.projects[0].status = 'generating';
-    state.jobs.push({ id: 'job-1', projectId: project.id, status: 'running', progress: 60, previousStatus: 'draft' });
+    state.jobs.push({ id: 'job-1', projectId: project.id, sessionId: session.id, tenantId: 'local', currentMode: 'react', status: 'running', progress: 60, previousStatus: 'draft' });
   });
   assert.equal(await store.recoverInterruptedJobs(), 1);
   const state = await store.read();
   assert.equal(state.projects[0].status, 'draft');
   assert.equal(state.jobs[0].status, 'failed');
+  assert.equal(state.agentSessions[0].status, 'idle');
+  assert.equal(state.agentSessions[0].activeRun, null);
+  assert.equal(state.agentSessions[0].messages[1].status, 'failed');
+  assert.equal(state.agentSessions[0].messages[2].kind, 'error');
+  assert.match(state.agentSessions[0].messages[2].content, /service restart/);
   await store.update((next) => { next.projects[0].status = 'generating'; next.jobs.length = 0; });
   assert.equal(await store.recoverInterruptedJobs(), 0);
   assert.equal((await store.read()).projects[0].status, 'draft');
@@ -1421,7 +1510,7 @@ test('account deletion removes knowledge, watch and snapshot data', async (t) =>
   await fetch(`${base}/api/projects/${project.id}/watch`, { method: 'PUT', headers: { authorization: `Bearer ${account.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true, frequency: 'weekly' }) });
   response = await fetch(`${base}/api/me`, { method: 'DELETE', headers: { authorization: `Bearer ${account.token}` } }); assert.equal(response.status, 204);
   const raw = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'));
-  assert.equal(raw.projects.length, 0); assert.equal(raw.documents.length, 0); assert.equal(raw.watchConfigs.length, 0); assert.equal(raw.sourceSnapshots.length, 0); assert.equal(raw.users.length, 0);
+  assert.equal(raw.projects.length, 0); assert.equal(raw.agentSessions.length, 0); assert.equal(raw.documents.length, 0); assert.equal(raw.watchConfigs.length, 0); assert.equal(raw.sourceSnapshots.length, 0); assert.equal(raw.users.length, 0);
 });
 
 test('metrics endpoint is admin-only and exposes operational counters', async (t) => {

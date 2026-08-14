@@ -2,8 +2,9 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { searchProjectKnowledge } from './knowledge.mjs';
+import { failSessionRun, findAgentSession } from './agent-sessions.mjs';
 
-const initialState = () => ({ version: 3, projects: [], jobs: [], users: [], sessions: [], audit: [], usage: [], subscriptions: [], paymentEvents: [], organizations: [], memberships: [], invitations: [], oidcStates: [], llmProviderConfigs: [], documents: [], chunks: [], knowledgeEntities: [], knowledgeEdges: [], watchConfigs: [], sourceSnapshots: [], externalProjectionJobs: [] });
+const initialState = () => ({ version: 3, projects: [], jobs: [], users: [], sessions: [], agentSessions: [], audit: [], usage: [], subscriptions: [], paymentEvents: [], organizations: [], memberships: [], invitations: [], oidcStates: [], llmProviderConfigs: [], documents: [], chunks: [], knowledgeEntities: [], knowledgeEdges: [], watchConfigs: [], sourceSnapshots: [], externalProjectionJobs: [] });
 
 export class JsonStore {
   constructor(file) {
@@ -15,7 +16,7 @@ export class JsonStore {
     try {
       const state = JSON.parse(await readFile(this.file, 'utf8'));
       state.version = 3;
-      state.projects ||= []; state.jobs ||= []; state.users ||= []; state.sessions ||= []; state.audit ||= [];
+      state.projects ||= []; state.jobs ||= []; state.users ||= []; state.sessions ||= []; state.agentSessions ||= []; state.audit ||= [];
       state.usage ||= []; state.subscriptions ||= []; state.paymentEvents ||= [];
       state.organizations ||= []; state.memberships ||= []; state.invitations ||= [];
       state.oidcStates ||= [];
@@ -115,6 +116,7 @@ export class JsonStore {
           job.generationRefunded ||= Boolean(job.generationCharged);
           job.sourceRefunded ||= Boolean(job.sourceCharged);
           job.generationCharged = false; job.sourceCharged = false;
+          failSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { jobId: job.id, mode: job.currentMode, error: 'Generation interrupted by service restart' });
           interrupted.add(job.projectId);
         }
       }

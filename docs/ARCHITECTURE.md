@@ -9,6 +9,7 @@ HTTP + REST
         |
 Novi Application Server
   |-- Project API
+  |-- Agent Session API + conversation/run persistence
   |-- Tenant LLM Provider API + encrypted credential store
   |-- LangGraph Agent Runtime (intent router / Workflow / ReAct / Plan & Execute / Supervisor)
   |-- Knowledge Intelligence Engine
@@ -39,11 +40,13 @@ Query planning -> Connectors -> Parse/deduplicate -> Validate URL -> Rank eviden
 
 Agent Runtime 保留 Research、Knowledge、Writing、Review 四种受控职责，并在外层增加意图路由与四种执行模式。Workflow 按固定顺序执行；ReAct controller 每次根据当前观察决定下一职责或结束；Plan & Execute 先产生最多 8 步的受限计划再执行；Supervisor 可重新分派职责。Controller 可返回新模式，阶段 fallback 也会触发 Supervisor，因此运行中可重新调度；总 Specialist 执行次数上限为 8，单职责最多两次。每个 Specialist 仍只能修改字段白名单内、与离线草稿结构相同的数据。来源、个人知识上下文和 evidence 始终由 Novi 控制，不允许模型添加来源或执行检索片段中的指令。每个不可变成果固化 initial/final mode、mode history、plan、controller event、provider/model、职责状态和 token 使用；异步 Job 同步暴露当前模式、阶段和进度。未配置 Web Provider 时保留确定性离线流程。
 
+`src/agent-sessions.mjs` 在 Project 之上提供持久对话边界。项目创建时生成默认 Session；同步/异步生成把用户消息、当前 mode/stage/progress、失败信息和 Artifact 引用写入同一个 Session，Job 保存 `sessionId` 和用户消息 ID。Session 同时约束 `tenantId + projectId`，跨项目或跨租户查询统一 404，运行中不可删除；项目/账户删除级联清理。服务重启不会恢复 LangGraph 节点，但会把中断 Job 对应 Session 写成失败并解除 active run，使会话可继续使用。当前 Web 仍使用旧成果工作区；Conversation Session UI 是下一独立交付项。
+
 `src/llm-providers.mjs` 提供主流厂商目录和 LangChain chat model 适配，包括国内 MiniMax（固定 `https://api.minimaxi.com/v1`）和 DeepSeek。Provider 配置按租户保存且只允许 owner/admin 访问；API Key 使用 AES-256-GCM 加密，响应和账户导出只暴露 `hasApiKey` 与末四位。固定厂商 endpoint 不允许改写，Ollama 仅回环，自定义远端 endpoint 必须是 HTTPS 且主机列入部署 allowlist。Web 配置优先于旧 `NOVI_LLM_*` 单次网关。当前 LangGraph 使用 `MemorySaver`，用于单次执行的 thread checkpoint；Job 和最终阶段状态由 Novi Repository 持久化，但图节点 checkpoint 尚不能跨服务重启恢复。
 
 ## 3. 生产存储映射
 
-- PostgreSQL：用户、组织、项目、任务、成果元数据、权限、审计和计费。
+- PostgreSQL：用户、组织、项目、Agent Session/消息、任务、成果元数据、权限、审计和计费。
 - Knowledge ingestion/retrieval：文档、内容哈希、分块、embedding、实体和关系写入 Repository envelope，并在 PostgreSQL 模式投影到带租户索引的知识表；始终维护 `novi_chunk_vectors` JSONB migration 投影，pgvector 可用时维护 24 维原生表与 HNSW cosine 索引。`Repository.searchKnowledge` 在生产走带 tenant/project 条件的 `<=>` 查询；同步和异步生成均检索最多 6 个片段，截断后随成果固化。JSONB/内存余弦只用于桌面、开发或迁移回退，生产门禁强制 `NOVI_REQUIRE_NATIVE_VECTOR=true`。单文档删除在主事务移除 document/chunk/entity/edge，关系投影的 orphan 清理同步删除 JSONB/native vectors；对象和图删除 intent 同事务写入持久 `externalProjectionJobs` outbox，提交后由 worker 幂等执行，失败按退避重试，过期租约在启动/轮询时恢复。已经固化到不可变成果的 excerpt 不受活跃知识删除影响。
 - 对象存储：原始文档、解析结果、导出文件和图像；`src/object-store.mjs` 支持受控本地目录、Bearer HTTP gateway 或带 AWS SigV4 的 S3-compatible HTTP endpoint，原文写入和删除均采用安全对象键。
 - PostgreSQL pgvector：`novi_chunk_vectors_native` 提供当前生产基线的带租户过滤 HNSW/余弦片段索引；LanceDB/Milvus 保留为目标规模超过单 PostgreSQL 边界后的 Repository 适配选项。

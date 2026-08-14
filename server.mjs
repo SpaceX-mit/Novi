@@ -24,6 +24,7 @@ import { enqueueDocumentDeletion, enqueueDocumentProjection, externalProjectionP
 import { providerCatalog, publicProviderConfig, resolvedProviderConfig, saveProviderConfig, testProviderConnection } from './src/llm-providers.mjs';
 import { browserAgentConfigured, mcpSourceConfigured, renderWithBrowserAgent, validateSourceAdapterConfiguration } from './src/source-adapters.mjs';
 import { agentModeCatalog, publicMode, selectAgentMode, validateRequestedMode } from './src/agent-modes.mjs';
+import { beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun } from './src/agent-sessions.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const publicDir = join(root, 'public');
@@ -701,6 +702,7 @@ async function api(req, res, url, store, auth, metrics) {
   if (req.method === 'GET' && url.pathname === '/api/me/export') {
     const state = await store.read();
     const payload = { user: { id: user.id, tenantId: user.tenantId, email: user.email, plan: user.plan, role: user.role }, organizations: state.organizations.filter((item) => item.id === user.tenantId), memberships: state.memberships.filter((item) => item.tenantId === user.tenantId), invitations: state.invitations.filter((item) => item.tenantId === user.tenantId).map(({ token, ...safe }) => safe), subscriptions: state.subscriptions.filter((item) => item.tenantId === user.tenantId), paymentEvents: state.paymentEvents.filter((item) => item.tenantId === user.tenantId), llmProviderConfigs: (state.llmProviderConfigs || []).filter((item) => item.tenantId === user.tenantId).map(publicProviderConfig), projects: state.projects.filter((item) => owned(item, user)), jobs: state.jobs.filter((item) => item.tenantId === user.tenantId), documents: state.documents.filter((item) => item.tenantId === user.tenantId), chunks: state.chunks.filter((item) => item.tenantId === user.tenantId), knowledgeEntities: state.knowledgeEntities.filter((item) => item.tenantId === user.tenantId), knowledgeEdges: state.knowledgeEdges.filter((item) => item.tenantId === user.tenantId), watchConfigs: state.watchConfigs.filter((item) => item.tenantId === user.tenantId).map(publicWatch), sourceSnapshots: state.sourceSnapshots.filter((item) => item.tenantId === user.tenantId), externalProjectionJobs: (state.externalProjectionJobs || []).filter((item) => item.tenantId === user.tenantId).map(({ content: _content, ...safe }) => safe), usage: state.usage.filter((item) => item.tenantId === user.tenantId), audit: state.audit.filter((item) => item.tenantId === user.tenantId) };
+    payload.agentSessions = (state.agentSessions || []).filter((item) => item.tenantId === user.tenantId).map(publicAgentSession);
     return send(res, 200, payload, { 'Content-Disposition': 'attachment; filename="novi-data.json"' });
   }
   if (req.method === 'GET' && (url.pathname === '/api/billing' || url.pathname === '/api/usage')) {
@@ -731,6 +733,7 @@ async function api(req, res, url, store, auth, metrics) {
       // Delete organizations owned solely by this user; detach the user from shared organizations.
       state.projects = state.projects.filter((item) => !ownedTenants.has(item.tenantId));
       removeJobs(state, (item) => ownedTenants.has(item.tenantId) || item.userId === user.id);
+      state.agentSessions = (state.agentSessions || []).filter((item) => !ownedTenants.has(item.tenantId) && item.createdBy !== user.id);
       state.documents = state.documents.filter((item) => !ownedTenants.has(item.tenantId));
       state.chunks = state.chunks.filter((item) => !ownedTenants.has(item.tenantId));
       state.knowledgeEntities = state.knowledgeEntities.filter((item) => !ownedTenants.has(item.tenantId));
@@ -776,8 +779,53 @@ async function api(req, res, url, store, auth, metrics) {
     const errors = validateProject(input);
     if (Object.keys(errors).length) return send(res, 422, { error: 'Validation failed', fields: errors });
     const project = await store.createProject(input, user);
+    const session = await store.update((state) => ensureAgentSession(state, project, user));
     await store.audit({ action: 'project.created', userId: user.id, tenantId: user.tenantId, resourceId: project.id });
-    return send(res, 201, { project });
+    return send(res, 201, { project, session: publicAgentSession(session) });
+  }
+
+  const sessionCollectionMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/sessions$/);
+  if (sessionCollectionMatch && (req.method === 'GET' || req.method === 'POST')) {
+    const projectId = decodeURIComponent(sessionCollectionMatch[1]);
+    const project = (await store.read()).projects.find((item) => item.id === projectId && owned(item, user));
+    if (!project) return send(res, 404, { error: 'Project not found' });
+    if (req.method === 'POST' && !await requireRole(store, res, user, 'editor')) return true;
+    let title = '';
+    if (req.method === 'POST') {
+      title = String((await jsonBody(req)).title || '').trim();
+      if (title.length > 120) return send(res, 422, { error: 'title must be 120 characters or less' });
+    }
+    const result = await store.update((state) => {
+      const current = state.projects.find((item) => item.id === projectId && owned(item, user));
+      if (!current) return null;
+      const session = req.method === 'POST' ? createAgentSession(state, current, user, { title }) : ensureAgentSession(state, current, user);
+      const sessions = (state.agentSessions || []).filter((item) => item.projectId === projectId && item.tenantId === user.tenantId).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
+      return { session, sessions };
+    });
+    if (!result) return send(res, 404, { error: 'Project not found' });
+    if (req.method === 'POST') await store.audit({ action: 'agent.session.created', userId: user.id, tenantId: user.tenantId, resourceId: result.session.id, projectId });
+    return send(res, req.method === 'POST' ? 201 : 200, { sessions: result.sessions.map(sessionSummary), ...(req.method === 'POST' ? { session: publicAgentSession(result.session) } : {}) });
+  }
+  const sessionDetailMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)$/);
+  if (sessionDetailMatch && (req.method === 'GET' || req.method === 'DELETE')) {
+    const projectId = decodeURIComponent(sessionDetailMatch[1]); const sessionId = decodeURIComponent(sessionDetailMatch[2]);
+    const state = await store.read(); const project = state.projects.find((item) => item.id === projectId && owned(item, user));
+    if (!project) return send(res, 404, { error: 'Project not found' });
+    const session = findAgentSession(state, sessionId, projectId, user.tenantId);
+    if (!session) return send(res, 404, { error: 'Agent session not found' });
+    if (req.method === 'GET') return send(res, 200, { session: publicAgentSession(session) });
+    if (!await requireRole(store, res, user, 'editor')) return true;
+    const deletion = await store.update((next) => {
+      const current = findAgentSession(next, sessionId, projectId, user.tenantId);
+      if (!current) return 'missing';
+      if (current.status === 'running') return 'active';
+      next.agentSessions = (next.agentSessions || []).filter((item) => item.id !== sessionId || item.projectId !== projectId || item.tenantId !== user.tenantId);
+      return 'deleted';
+    });
+    if (deletion === 'missing') return send(res, 404, { error: 'Agent session not found' });
+    if (deletion === 'active') return send(res, 409, { error: 'An active Agent session cannot be deleted', code: 'AGENT_SESSION_ACTIVE' });
+    await store.audit({ action: 'agent.session.deleted', userId: user.id, tenantId: user.tenantId, resourceId: sessionId, projectId });
+    return send(res, 204, '');
   }
 
   const jobMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
@@ -806,6 +854,17 @@ async function api(req, res, url, store, auth, metrics) {
     try { requestedMode = validateRequestedMode(generationInput.mode || 'auto'); }
     catch (error) { return send(res, error.status || 422, { error: error.message, code: 'AGENT_MODE_INVALID' }); }
     const selectedMode = selectAgentMode(prompt, { requestedMode });
+    const requestedSessionId = String(generationInput.sessionId || '').trim();
+    if (requestedSessionId.length > 100) return send(res, 422, { error: 'sessionId is invalid' });
+    const selectedSession = await store.update((state) => {
+      const project = state.projects.find((entry) => entry.id === id && owned(entry, user));
+      if (!project) return null;
+      return requestedSessionId ? findAgentSession(state, requestedSessionId, id, user.tenantId) : ensureAgentSession(state, project, user);
+    });
+    if (!selectedSession) return send(res, 404, {
+      error: requestedSessionId ? 'Agent session not found' : 'Project not found',
+      code: requestedSessionId ? 'AGENT_SESSION_NOT_FOUND' : 'PROJECT_NOT_FOUND',
+    });
     const quota = await store.update((state) => consumeGeneration(state, user));
     if (!quota.allowed) return send(res, 402, { error: 'Monthly generation limit reached', code: 'GENERATION_QUOTA_EXCEEDED', plan: quota.plan, usage: quota.usage, limits: quota.limits });
     const generationPeriod = quota.usage.period;
@@ -828,7 +887,11 @@ async function api(req, res, url, store, auth, metrics) {
           if (!item) return null;
           if (item.status === 'generating') return { conflict: true };
           const createdAt = new Date().toISOString();
-          const created = { id: randomUUID(), type: 'generate', projectId: id, userId: user.id, tenantId: user.tenantId, prompt, requestedMode, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, modeHistory: [{ from: null, to: selectedMode.mode, reason: selectedMode.reason, at: createdAt }], status: 'queued', progress: 0, previousStatus: item.status, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
+          const created = { id: randomUUID(), type: 'generate', projectId: id, sessionId: selectedSession.id, userId: user.id, tenantId: user.tenantId, prompt, requestedMode, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, modeHistory: [{ from: null, to: selectedMode.mode, reason: selectedMode.reason, at: createdAt }], status: 'queued', progress: 0, previousStatus: item.status, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
+          const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
+          if (!session) return { sessionMissing: true };
+          const message = beginSessionRun(session, { jobId: created.id, prompt, requestedMode, currentMode: selectedMode.mode });
+          created.userMessageId = message.id;
           item.status = 'generating'; item.updatedAt = new Date().toISOString();
           state.jobs.unshift(created);
           return created;
@@ -837,12 +900,12 @@ async function api(req, res, url, store, auth, metrics) {
         await store.update((state) => { refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod); });
         throw error;
       }
-      if (!job || job.conflict) {
+      if (!job || job.conflict || job.sessionMissing) {
         await store.update((state) => { refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod); });
-        return send(res, 409, { error: 'Generation already in progress', code: 'GENERATION_IN_PROGRESS' });
+        return send(res, job?.sessionMissing ? 404 : 409, { error: job?.sessionMissing ? 'Agent session not found' : 'Generation already in progress', code: job?.sessionMissing ? 'AGENT_SESSION_NOT_FOUND' : 'GENERATION_IN_PROGRESS' });
       }
       void runGeneration(store, auth, job.id, current, user, job.previousStatus, sourceCharged, generationPeriod, sourcePeriod, metrics);
-      return send(res, 202, { job });
+      return send(res, 202, { job, sessionId: selectedSession.id });
     }
     let liveSources = [];
     if (process.env.NOVI_LIVE_SOURCES === 'true') {
@@ -851,11 +914,15 @@ async function api(req, res, url, store, auth, metrics) {
     }
     const knowledgeContext = await retrieveWorkspaceKnowledge(store, current, user);
     let marked;
+    const syncRunId = `sync:${randomUUID()}`;
     try {
       marked = await store.update((state) => {
         const item = state.projects.find((entry) => entry.id === id && owned(entry, user));
         if (!item || !owned(item, user)) return null;
         if (item.status === 'generating') return { conflict: true };
+        const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
+        if (!session) return { sessionMissing: true };
+        beginSessionRun(session, { jobId: syncRunId, prompt, requestedMode, currentMode: selectedMode.mode });
         item.status = 'generating';
         item.updatedAt = new Date().toISOString();
         return { ...item, artifacts: [...item.artifacts] };
@@ -864,9 +931,10 @@ async function api(req, res, url, store, auth, metrics) {
       await store.update((state) => { refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod); });
       throw error;
     }
-    if (!marked || marked.conflict) {
+    if (!marked || marked.conflict || marked.sessionMissing) {
       await store.update((state) => { refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod); });
-      return send(res, marked?.conflict ? 409 : 404, { error: marked?.conflict ? 'Generation already in progress' : 'Project not found', ...(marked?.conflict ? { code: 'GENERATION_IN_PROGRESS' } : {}) });
+      if (marked?.conflict) return send(res, 409, { error: 'Generation already in progress', code: 'GENERATION_IN_PROGRESS' });
+      return send(res, 404, { error: marked?.sessionMissing ? 'Agent session not found' : 'Project not found', code: marked?.sessionMissing ? 'AGENT_SESSION_NOT_FOUND' : 'PROJECT_NOT_FOUND' });
     }
     let artifact;
     try {
@@ -877,21 +945,29 @@ async function api(req, res, url, store, auth, metrics) {
         refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod);
         const item = state.projects.find((entry) => entry.id === id && owned(entry, user));
         if (item?.status === 'generating') { item.status = current.status; item.updatedAt = new Date().toISOString(); }
+        failSessionRun(findAgentSession(state, selectedSession.id, id, user.tenantId), { jobId: syncRunId, mode: selectedMode.mode, error: 'Generation failed' });
       });
       throw error;
     }
     const project = await store.update((state) => {
       const item = state.projects.find((entry) => entry.id === id && owned(entry, user));
       if (!item || !activePrincipal(state, user)) return null;
-      item.artifacts.unshift(artifact); item.status = 'ready'; item.updatedAt = new Date().toISOString(); return item;
+      item.artifacts.unshift(artifact); item.status = 'ready'; item.updatedAt = new Date().toISOString();
+      completeSessionRun(findAgentSession(state, selectedSession.id, id, user.tenantId), { jobId: syncRunId, artifact, mode: artifact.workflow?.runtime?.mode || selectedMode.mode });
+      return item;
     });
     if (!project) {
-      await store.update((state) => { refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod); });
+      await store.update((state) => {
+        refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod);
+        const item = state.projects.find((entry) => entry.id === id && entry.tenantId === user.tenantId);
+        if (item?.status === 'generating') { item.status = current.status; item.updatedAt = new Date().toISOString(); }
+        failSessionRun(findAgentSession(state, selectedSession.id, id, user.tenantId), { jobId: syncRunId, mode: selectedMode.mode, error: 'Generation was cancelled' });
+      });
       return send(res, 404, { error: 'Project not found' });
     }
     metrics.generationCompleted += 1;
     await store.audit({ action: 'project.generated', userId: user.id, tenantId: user.tenantId, resourceId: id });
-    return send(res, 200, { project });
+    return send(res, 200, { project, sessionId: selectedSession.id });
   }
   if (req.method === 'PATCH' && action === 'pin') {
     if (!await requireRole(store, res, user, 'editor')) return true;
@@ -916,6 +992,7 @@ async function api(req, res, url, store, auth, metrics) {
       state.externalProjectionJobs = (state.externalProjectionJobs || []).filter((job) => !deletedDocumentIds.has(job.documentId) || !['completed', 'cancelled'].includes(job.status));
       state.projects.splice(index, 1);
       removeJobs(state, (item) => item.projectId === id && item.tenantId === user.tenantId);
+      state.agentSessions = (state.agentSessions || []).filter((item) => item.projectId !== id || item.tenantId !== user.tenantId);
       state.documents = (state.documents || []).filter((item) => item.projectId !== id);
       state.chunks = (state.chunks || []).filter((item) => item.projectId !== id);
       state.knowledgeEntities = (state.knowledgeEntities || []).filter((item) => item.projectId !== id);
@@ -959,6 +1036,24 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
   try {
     const claimed = store.claimJob ? await store.claimJob(jobId, `worker-${process.pid}`) : await store.updateJob(jobId, { status: 'running', progress: 10 });
     if (!claimed) return false;
+    const sessionState = await store.update((state) => {
+      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
+      const currentProject = state.projects.find((item) => item.id === project.id && item.tenantId === user.tenantId);
+      if (!job || !currentProject) return null;
+      const session = job.sessionId ? findAgentSession(state, job.sessionId, project.id, user.tenantId) : ensureAgentSession(state, currentProject, user);
+      if (!session) return null;
+      job.sessionId = session.id;
+      job.prompt ||= project.description || project.topic;
+      job.requestedMode ||= 'auto';
+      job.currentMode ||= selectAgentMode(job.prompt, { requestedMode: job.requestedMode }).mode;
+      if (!(session.messages || []).some((message) => message.jobId === job.id && message.role === 'user')) {
+        const message = beginSessionRun(session, { jobId: job.id, prompt: job.prompt, requestedMode: job.requestedMode, currentMode: job.currentMode });
+        job.userMessageId = message.id;
+      }
+      return { sessionId: session.id, prompt: job.prompt, requestedMode: job.requestedMode, currentMode: job.currentMode };
+    });
+    if (!sessionState) throw new Error('Agent session is unavailable');
+    Object.assign(claimed, sessionState);
     let liveSources = [];
     if (process.env.NOVI_LIVE_SOURCES === 'true') {
       try { liveSources = await searchKnowledgeSources(project.topic, 5); if (process.env.NOVI_VERIFY_SOURCES !== 'false') liveSources = await verifyEvidenceSources(liveSources); }
@@ -984,6 +1079,7 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       const publicStage = { id: stage.id, name: stage.name, mode: stage.mode || job.currentMode, status: stage.status, ...(stage.startedAt ? { startedAt: stage.startedAt } : {}), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}) };
       if (index >= 0) job.agentStages[index] = publicStage; else job.agentStages.push(publicStage);
       job.progress = Math.max(job.progress || 0, stage.progress || 0); job.currentStage = stage.name; job.currentMode = stage.mode || job.currentMode; job.currentModeLabel = publicMode(job.currentMode).name; job.updatedAt = new Date().toISOString();
+      updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress });
       return true;
     });
     const onMode = async (event) => store.update((state) => {
@@ -993,6 +1089,7 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       job.currentMode = event.mode; job.currentModeLabel = event.label || publicMode(event.mode).name; job.modeReason = event.reason || job.modeReason;
       job.currentStage = event.status === 'planning' ? 'Planning execution' : job.currentStage;
       job.progress = Math.max(job.progress || 0, event.progress || 0); job.updatedAt = new Date().toISOString();
+      updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentMode: job.currentMode, currentStage: job.currentStage || event.status, progress: job.progress });
       return true;
     });
     const artifact = await generateArtifactAsync(project, { sources: liveSources, knowledgeContext, providerConfig, prompt: claimed.prompt || project.description || project.topic, mode: claimed.requestedMode || 'auto', onStage, onMode, threadId: `${user.tenantId}:${jobId}` });
@@ -1000,7 +1097,9 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       const item = state.projects.find((entry) => entry.id === project.id && owned(entry, user));
       const job = (state.jobs || []).find((entry) => entry.id === jobId && entry.status === 'running');
       if (!item || !job || !activePrincipal(state, user)) return null;
-      item.artifacts.unshift(artifact); item.status = 'ready'; item.updatedAt = new Date().toISOString(); return item;
+      item.artifacts.unshift(artifact); item.status = 'ready'; item.updatedAt = new Date().toISOString();
+      completeSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { jobId, artifact, mode: artifact.workflow?.runtime?.mode || job.currentMode });
+      return item;
     });
     if (!result) throw new Error('Project was deleted');
     committed = true;
@@ -1013,6 +1112,7 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
         const job = (state.jobs || []).find((item) => item.id === jobId);
         if (job) {
           refundUnfinishedJob(state, job);
+          failSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { jobId, mode: job.currentMode, error: 'Generation failed' });
           job.updatedAt = new Date().toISOString();
         }
         const item = state.projects.find((entry) => entry.id === project.id && owned(entry, user));
