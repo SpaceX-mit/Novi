@@ -27,6 +27,7 @@ import { agentModeCatalog, publicMode, selectAgentMode, validateRequestedMode } 
 import { beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun, updateSessionToolCall } from './src/agent-sessions.mjs';
 import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings } from './src/agent-tools.mjs';
 import { discoverMcpServer, publicMcpSettings, resolvedMcpTools, saveMcpSettings } from './src/mcp-runtime.mjs';
+import { publicSkillSettings, resolveSkills, saveSkillSettings, skillProvenance } from './src/skill-runtime.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const publicDir = join(root, 'public');
@@ -468,6 +469,21 @@ async function api(req, res, url, store, auth, metrics) {
       return send(res, 502, { error: 'The MCP server could not be discovered', code: 'MCP_SERVER_UNAVAILABLE' });
     }
   }
+  if (req.method === 'GET' && url.pathname === '/api/agent/skills') {
+    const state = await store.read(); const role = roleFor(state, user);
+    return send(res, 200, { settings: publicSkillSettings(state, user.tenantId), configurable: role === 'owner' || role === 'admin' });
+  }
+  if (req.method === 'PUT' && url.pathname === '/api/agent/skills') {
+    if (!await requireRole(store, res, user, 'admin')) return true;
+    try {
+      const input = await jsonBody(req);
+      const settings = await store.update((state) => saveSkillSettings(state, user.tenantId, user.id, input));
+      await store.audit({ action: 'agent.skills.updated', userId: user.id, tenantId: user.tenantId, resourceId: user.tenantId, skillCount: settings.skills.length, enabledSkillCount: settings.skills.filter((skill) => skill.enabled).length });
+      return send(res, 200, { settings });
+    } catch (error) {
+      return send(res, 422, { error: error.message, code: 'SKILL_CONFIG_INVALID' });
+    }
+  }
   if (req.method === 'GET' && url.pathname === '/api/org') {
     const state = await store.read();
     const organization = state.organizations.find((item) => item.id === user.tenantId) || { id: user.tenantId, name: 'Personal workspace' };
@@ -760,7 +776,7 @@ async function api(req, res, url, store, auth, metrics) {
   }
   if (req.method === 'GET' && url.pathname === '/api/me/export') {
     const state = await store.read();
-    const payload = { user: { id: user.id, tenantId: user.tenantId, email: user.email, plan: user.plan, role: user.role }, organizations: state.organizations.filter((item) => item.id === user.tenantId), memberships: state.memberships.filter((item) => item.tenantId === user.tenantId), invitations: state.invitations.filter((item) => item.tenantId === user.tenantId).map(({ token, ...safe }) => safe), subscriptions: state.subscriptions.filter((item) => item.tenantId === user.tenantId), paymentEvents: state.paymentEvents.filter((item) => item.tenantId === user.tenantId), llmProviderConfigs: (state.llmProviderConfigs || []).filter((item) => item.tenantId === user.tenantId).map(publicProviderConfig), agentToolSettings: publicToolSettings(state, user.tenantId), mcpSettings: publicMcpSettings(state, user.tenantId), projects: state.projects.filter((item) => owned(item, user)), jobs: state.jobs.filter((item) => item.tenantId === user.tenantId), documents: state.documents.filter((item) => item.tenantId === user.tenantId), chunks: state.chunks.filter((item) => item.tenantId === user.tenantId), knowledgeEntities: state.knowledgeEntities.filter((item) => item.tenantId === user.tenantId), knowledgeEdges: state.knowledgeEdges.filter((item) => item.tenantId === user.tenantId), watchConfigs: state.watchConfigs.filter((item) => item.tenantId === user.tenantId).map(publicWatch), sourceSnapshots: state.sourceSnapshots.filter((item) => item.tenantId === user.tenantId), externalProjectionJobs: (state.externalProjectionJobs || []).filter((item) => item.tenantId === user.tenantId).map(({ content: _content, ...safe }) => safe), usage: state.usage.filter((item) => item.tenantId === user.tenantId), audit: state.audit.filter((item) => item.tenantId === user.tenantId) };
+    const payload = { user: { id: user.id, tenantId: user.tenantId, email: user.email, plan: user.plan, role: user.role }, organizations: state.organizations.filter((item) => item.id === user.tenantId), memberships: state.memberships.filter((item) => item.tenantId === user.tenantId), invitations: state.invitations.filter((item) => item.tenantId === user.tenantId).map(({ token, ...safe }) => safe), subscriptions: state.subscriptions.filter((item) => item.tenantId === user.tenantId), paymentEvents: state.paymentEvents.filter((item) => item.tenantId === user.tenantId), llmProviderConfigs: (state.llmProviderConfigs || []).filter((item) => item.tenantId === user.tenantId).map(publicProviderConfig), agentToolSettings: publicToolSettings(state, user.tenantId), mcpSettings: publicMcpSettings(state, user.tenantId), skillSettings: publicSkillSettings(state, user.tenantId), projects: state.projects.filter((item) => owned(item, user)), jobs: state.jobs.filter((item) => item.tenantId === user.tenantId), documents: state.documents.filter((item) => item.tenantId === user.tenantId), chunks: state.chunks.filter((item) => item.tenantId === user.tenantId), knowledgeEntities: state.knowledgeEntities.filter((item) => item.tenantId === user.tenantId), knowledgeEdges: state.knowledgeEdges.filter((item) => item.tenantId === user.tenantId), watchConfigs: state.watchConfigs.filter((item) => item.tenantId === user.tenantId).map(publicWatch), sourceSnapshots: state.sourceSnapshots.filter((item) => item.tenantId === user.tenantId), externalProjectionJobs: (state.externalProjectionJobs || []).filter((item) => item.tenantId === user.tenantId).map(({ content: _content, ...safe }) => safe), usage: state.usage.filter((item) => item.tenantId === user.tenantId), audit: state.audit.filter((item) => item.tenantId === user.tenantId) };
     payload.agentSessions = (state.agentSessions || []).filter((item) => item.tenantId === user.tenantId).map(publicAgentSession);
     return send(res, 200, payload, { 'Content-Disposition': 'attachment; filename="novi-data.json"' });
   }
@@ -808,6 +824,7 @@ async function api(req, res, url, store, auth, metrics) {
       state.llmProviderConfigs = (state.llmProviderConfigs || []).filter((item) => !ownedTenants.has(item.tenantId));
       state.agentToolConfigs = (state.agentToolConfigs || []).filter((item) => !ownedTenants.has(item.tenantId));
       state.mcpServerConfigs = (state.mcpServerConfigs || []).filter((item) => !ownedTenants.has(item.tenantId));
+      state.agentSkillConfigs = (state.agentSkillConfigs || []).filter((item) => !ownedTenants.has(item.tenantId));
       state.memberships = state.memberships.filter((item) => !ownedTenants.has(item.tenantId) && item.userId !== user.id);
       state.sessions = state.sessions.filter((item) => item.userId !== user.id);
       state.users = state.users.filter((item) => item.id !== user.id);
@@ -1001,6 +1018,13 @@ async function api(req, res, url, store, auth, metrics) {
     try {
       const runtimeState = await store.read();
       const providerConfig = await resolvedProviderConfig(runtimeState, user.tenantId);
+      const skills = providerConfig ? resolveSkills(runtimeState, user.tenantId, marked, prompt) : [];
+      const appliedSkills = skillProvenance(skills);
+      if (!await store.update((state) => {
+        const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
+        if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
+        updateSessionRun(session, { skills: appliedSkills }); return true;
+      })) throw new Error('Generation was cancelled');
       const tools = [...(await resolvedTools(runtimeState, user.tenantId)).filter((tool) => tool.name !== 'web_search' || sourceCharged), ...await resolvedMcpTools(runtimeState, user.tenantId)];
       const toolExecutor = createToolExecutor({ store, project: marked, principal: user, allowWebSearch: sourceCharged });
       const onTool = async (call) => store.update((state) => {
@@ -1008,7 +1032,7 @@ async function api(req, res, url, store, auth, metrics) {
         if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
         updateSessionToolCall(session, call); return true;
       });
-      artifact = await generateArtifactAsync(marked, { sources: liveSources, knowledgeContext, providerConfig, prompt, mode: requestedMode, tools, toolExecutor, onTool, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
+      artifact = await generateArtifactAsync(marked, { sources: liveSources, knowledgeContext, providerConfig, prompt, mode: requestedMode, tools, skills, toolExecutor, onTool, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
     } catch (error) {
       await store.update((state) => {
         refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod);
@@ -1141,6 +1165,15 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
     if (!await store.updateJob(jobId, { progress: 20, currentStage: 'Preparing agent workflow' })) throw new Error('Generation was cancelled');
     const runtimeState = await store.read();
     const providerConfig = await resolvedProviderConfig(runtimeState, user.tenantId);
+    const skills = providerConfig ? resolveSkills(runtimeState, user.tenantId, project, claimed.prompt || project.description || project.topic) : [];
+    const appliedSkills = skillProvenance(skills);
+    if (!await store.update((state) => {
+      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
+      if (!job) return false;
+      job.activeSkills = appliedSkills; job.updatedAt = new Date().toISOString();
+      updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { skills: appliedSkills });
+      return true;
+    })) throw new Error('Generation was cancelled');
     const tools = [...(await resolvedTools(runtimeState, user.tenantId)).filter((tool) => tool.name !== 'web_search' || sourceCharged), ...await resolvedMcpTools(runtimeState, user.tenantId)];
     const toolExecutor = createToolExecutor({ store, project, principal: user, allowWebSearch: sourceCharged });
     const onStage = async (stage) => store.update((state) => {
@@ -1174,7 +1207,7 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       updateSessionToolCall(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), call);
       return true;
     });
-    const artifact = await generateArtifactAsync(project, { sources: liveSources, knowledgeContext, providerConfig, prompt: claimed.prompt || project.description || project.topic, mode: claimed.requestedMode || 'auto', onStage, onMode, tools, toolExecutor, onTool, threadId: `${user.tenantId}:${jobId}` });
+    const artifact = await generateArtifactAsync(project, { sources: liveSources, knowledgeContext, providerConfig, prompt: claimed.prompt || project.description || project.topic, mode: claimed.requestedMode || 'auto', onStage, onMode, tools, skills, toolExecutor, onTool, threadId: `${user.tenantId}:${jobId}` });
     const result = await store.update((state) => {
       const item = state.projects.find((entry) => entry.id === project.id && owned(entry, user));
       const job = (state.jobs || []).find((entry) => entry.id === jobId && entry.status === 'running');

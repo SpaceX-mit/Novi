@@ -61,6 +61,7 @@ export function appendSessionMessage(session, input) {
     ...(input.mode ? { mode: input.mode } : {}),
     ...(input.status ? { status: input.status } : {}),
     ...(input.toolCalls?.length ? { toolCalls: input.toolCalls.slice(-20).map((call) => ({ ...call })) } : {}),
+    ...(input.skills?.length ? { skills: input.skills.slice(0, 3).map((skill) => ({ ...skill, productTypes: [...(skill.productTypes || [])] })) } : {}),
   };
   session.messages.push(message);
   session.messages = session.messages.slice(-500);
@@ -102,7 +103,8 @@ export function completeSessionRun(session, { jobId, artifact, mode }) {
   if (userMessage) { userMessage.status = 'completed'; userMessage.mode = mode || userMessage.mode; }
   const summary = String(artifact?.content?.summary || artifact?.title || 'Artifact generated.').trim().slice(0, 12_000);
   const toolCalls = session.activeRun?.jobId === jobId ? session.activeRun.toolCalls || [] : [];
-  const message = appendSessionMessage(session, { role: 'assistant', kind: 'artifact', content: summary, runId: jobId, jobId, artifactId: artifact?.id, mode, status: 'completed', toolCalls });
+  const skills = artifact?.workflow?.runtime?.skills || (session.activeRun?.jobId === jobId ? session.activeRun.skills || [] : []);
+  const message = appendSessionMessage(session, { role: 'assistant', kind: 'artifact', content: summary, runId: jobId, jobId, artifactId: artifact?.id, mode, status: 'completed', toolCalls, skills });
   session.status = 'idle'; session.activeRun = null; session.updatedAt = message.createdAt;
   return message;
 }

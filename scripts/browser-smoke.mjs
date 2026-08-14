@@ -46,6 +46,14 @@ try {
   const mcpUi = await evaluate(`({ endpoint: !!document.querySelector('.mcp-server-row [name="endpoint"]'), discover: document.querySelector('[data-sync-mcp]').textContent.trim(), overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth })`);
   if (!mcpUi.endpoint || mcpUi.discover !== 'Save & discover' || mcpUi.overflow) throw new Error(`Customize MCP UI is incorrect: ${JSON.stringify(mcpUi)}`);
   await evaluate(`document.querySelector('[data-remove-mcp]').click()`);
+  await evaluate(`document.querySelector('[data-customize-tab="skills"]').click()`);
+  await waitFor(`document.querySelector('#add-skill') !== null && document.querySelector('#save-skills') !== null`);
+  await evaluate(`document.querySelector('#add-skill').click()`);
+  await waitFor(`document.querySelector('.skill-row') !== null`);
+  const skillUi = await evaluate(`(() => { const row = document.querySelector('.skill-row'); const set = (name, value) => { row.querySelector('[name="' + name + '"]').value = value; }; set('name', 'browser_review'); set('title', 'Browser review'); set('description', 'Apply a browser smoke review checklist.'); set('triggerTerms', 'browser review, smoke checklist'); set('instructions', 'Check responsive layout, role boundaries, and persisted provenance.'); return { products: row.querySelectorAll('[data-skill-product]').length, activation: row.querySelector('[name="activation"]').value, instructions: !!row.querySelector('[name="instructions"]'), overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth }; })()`);
+  if (skillUi.products !== 3 || skillUi.activation !== 'auto' || !skillUi.instructions || skillUi.overflow) throw new Error(`Customize Skills UI is incorrect: ${JSON.stringify(skillUi)}`);
+  await evaluate(`document.querySelector('#save-skills').click()`);
+  await waitFor(`document.querySelector('#toast').textContent === 'Agent Skills saved' && document.querySelector('.skill-row [name="name"]').value === 'browser_review'`);
   await evaluate(`document.querySelector('[data-view="overview"]').click()`);
   await waitFor(`document.querySelector('#view-overview').classList.contains('active-view')`);
   await evaluate(`document.querySelector('#billing-upgrade').click()`);
@@ -66,7 +74,7 @@ try {
   const clickResult = await evaluate(`(() => { const button = document.querySelector('#new-project'); button.click(); return { hidden: document.querySelector('#modal').classList.contains('hidden'), html: document.querySelector('#modal').outerHTML.slice(0, 120) }; })()`);
   if (clickResult.hidden) throw new Error(`New workspace button did not open modal: ${JSON.stringify(clickResult)}`);
   await waitFor(`!document.querySelector('#modal').classList.contains('hidden')`);
-  await evaluate(`(() => { const set = (name, value) => { const input = document.querySelector('[name="' + name + '"]'); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }; set('title', 'Browser smoke workspace'); set('topic', 'Agent OS security'); document.querySelector('#project-form button[type="submit"]').click(); })()`);
+  await evaluate(`(() => { const form = document.querySelector('#project-form'); const set = (name, value) => { const input = form.querySelector('[name="' + name + '"]'); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }; set('title', 'Browser smoke workspace'); set('topic', 'Agent OS security'); form.querySelector('button[type="submit"]').click(); })()`);
   await waitFor(`document.querySelector('#modal').classList.contains('hidden') || document.querySelector('#form-error').textContent.length > 0`);
   if (await evaluate(`document.querySelector('#form-error').textContent.length > 0`)) throw new Error(`Browser workspace form failed: ${await evaluate(`JSON.stringify(document.querySelector('#form-error').textContent)`)}`);
   await waitFor(`document.querySelector('#view-workspace').classList.contains('active-view')`);
@@ -171,7 +179,7 @@ try {
   await waitFor(`document.querySelector('.artifact-content').textContent.includes('Interview preparation') && document.querySelector('.artifact-content').textContent.includes('Capstone project')`);
   await evaluate(`document.querySelector('[data-artifact-tab="graph"]').click()`);
   await waitFor(`document.querySelectorAll('.artifact-content .node').length >= 10`);
-  console.log(`browser-smoke: created=${result.title}, status=${result.status}, pricing=ready, agent-session=ready, agent-mode=${activeMode}, viewer-ui=ready, knowledge-search=ready, rag-context=ready, versions=${versionResult.count}, comparison=ready, continuous-update=ready, knowledge-delete=ready, markdown-export=${result.exportStatus}, paper-svg=ready, paper-gap=ready, publication-templates=ready, research-suite=ready`);
+  console.log(`browser-smoke: created=${result.title}, status=${result.status}, pricing=ready, agent-session=ready, agent-mode=${activeMode}, agent-skills=ready, viewer-ui=ready, knowledge-search=ready, rag-context=ready, versions=${versionResult.count}, comparison=ready, continuous-update=ready, knowledge-delete=ready, markdown-export=${result.exportStatus}, paper-svg=ready, paper-gap=ready, publication-templates=ready, research-suite=ready`);
 } finally {
   socket.close(); chrome.kill('SIGTERM'); await new Promise((resolve) => server.close(resolve));
   for (const [key, value] of Object.entries(previous)) { const name = { auth: 'NOVI_AUTH_REQUIRED', worker: 'NOVI_JOB_WORKER', refresh: 'NOVI_REFRESH_WORKER', verify: 'NOVI_VERIFY_SOURCES', file: 'NOVI_DATA_FILE' }[key]; if (value === undefined) delete process.env[name]; else process.env[name] = value; }

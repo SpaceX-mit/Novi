@@ -15,6 +15,7 @@
 - `src/agent-runtime.mjs`：LangGraph.js 自适应有向图；Router 进入固定流水线、ReAct controller、Planner 或 Supervisor，controller 可切换模式，阶段 fallback 会升级到 Supervisor。每个 Specialist 建立有界 prompt、单独调用模型、校验 JSON 和现有字段形状，记录状态/时间/token。最多执行 8 个 Specialist 步骤，单职责最多两次；取消信号终止整条工作流。
 - `src/agent-tools.mjs`：把内置 workspace read/write/web search、自定义 HTTP 和已启用 MCP 工具合并为当次运行的受控注册表；执行输入校验、租户/项目边界、取消检查和最多 6 次调用的硬上限，并把有界 observation/provenance 返回 LangGraph tool node。
 - `src/mcp-runtime.mjs`：使用官方 `@modelcontextprotocol/sdk` 的 Client、StreamableHTTPClientTransport 和 AJV validator；规范化租户 MCP server 配置、加密 Bearer token、验证 endpoint allowlist，执行工具发现/命名空间化/显式授权和有界调用结果转换。
+- `src/skill-runtime.mjs`：校验最多 20 个租户 Skill 的名称、说明、4000 字符指令、产品范围、always/auto 激活和最多 12 个触发词；运行开始时按显式 `/skill name`、always、触发词优先级选出最多 3 个，并产生不含完整指令的哈希 provenance。
 - `src/agent-sessions.mjs`：创建/查找租户项目 Session，追加最多 500 条、单条最多 20000 字符的消息，并维护 queued/running/completed/failed run 生命周期。助手成果消息保存 Artifact ID；失败写入有界错误摘要且幂等，公开响应复制消息数组，避免传输层直接修改持久对象。
 - `src/oidc.mjs`：OIDC discovery、PKCE S256、授权码交换、JWKS/RS256 ID Token 校验；HTTP start/callback 还用短时 HttpOnly 状态 Cookie 将授权响应绑定到发起浏览器。
 - `src/payments.mjs`：checkout provider 边界与 HMAC webhook；事件类型和 active plan 均白名单校验后才改变订阅。
@@ -39,6 +40,7 @@ Workflow { strategy, product, completedAt, runtime?, agents[4]: { order, name, r
 LlmProviderConfig { tenantId, provider, model, baseUrl, apiVersion?, encryptedApiKey?, active, createdBy, updatedBy }
 McpServerConfig { id, tenantId, name, endpoint, encryptedBearerToken?, bearerTokenLast4?, discoveredTools[<=100], updatedAt }
 McpDiscoveredTool { name, alias, title?, description?, inputSchema, enabled, readOnly?, destructive?, unsupportedReason? }
+AgentSkillConfig { id, tenantId, name, title, description, instructions, activation: auto | always, productTypes[], triggerTerms[<=12], enabled, updatedAt }
 SourceSnapshot { id, projectId, tenantId, sources[], changeStatus, changes, autoUpdateStatus?, artifactId? }
 AgentSession { id, tenantId, projectId, createdBy, title, status: idle | running, activeRun?, messages[<=500], createdAt, updatedAt }
 AgentMessage { id, role: user | assistant, kind, content, jobId?, artifactId?, mode?, status?, createdAt }
@@ -57,6 +59,8 @@ Web 端生成使用 `POST /api/projects/:id/generate?async=true`，先取得 Job
 Provider 管理接口只允许 owner/admin。保存时固定厂商忽略客户端 base URL；Azure 只接受批准的 Azure AI hostname，Ollama 只接受回环，自定义非回环 hostname 必须出现在 `NOVI_LLM_ALLOWED_HOSTS` 且使用 HTTPS。API Key 使用 `NOVI_CONFIG_ENCRYPTION_KEY` 派生的 256 位 key 做 AES-GCM；生产缺少稳定密钥时拒绝保存，本地生成数据目录下 0600 key 文件。连接测试只返回 provider/model/latency，不返回凭据。当前 `MemorySaver` 不提供跨进程图恢复；服务重启仍按现有 Job 恢复规则将中断任务失败并退款，而不是从某个 Agent 节点继续。
 
 MCP 管理接口 `GET/PUT /api/agent/mcp` 仅由 owner/admin 修改，viewer 可读取去密钥配置；`POST /api/agent/mcp/servers/:serverId/sync` 在保存的 revision 上执行远端 initialize + 分页 tools/list，提交时复核 `updatedAt`，避免较慢的发现覆盖并发修改。每个租户最多 5 个 server、每个 server 最多接纳 100 个工具；新工具和 task-based 工具默认不可用，只有显式启用的普通即时工具进入生成注册表。重命名 server 会重算 alias，更改 endpoint 会清除旧 token 和发现结果。远端服务必须是 HTTPS 且 hostname 位于 `NOVI_MCP_ALLOWED_HOSTS`，本地开发仅回环 HTTP 例外；schema 最多 16 KB/12 层，SDK AJV validator 在调用前验证输入，协议请求默认 10 秒且上限 30 秒，POST 响应限制 256 KB。文本和结构化结果被截断并作为不可信 observation，图片/音频只记录省略标记，不会进入模型上下文。
+
+Skills 管理接口为 `GET/PUT /api/agent/skills`：组织成员可审查指令，只有 owner/admin 可替换配置。选择在读取 Provider 与运行配置的同一阶段完成；无 Web Provider 时返回空选择，离线生成不记录虚假 Skill provenance。显式 `/skill name` 优先于 always，always 优先于触发词命中，同优先级保持配置顺序；最终最多 3 个。Skill prompt 前置固定边界，明确其不能授权工具/来源或覆盖 policy/schema；即使恶意管理员指令进入模型，Specialist 的字段形状校验、Novi 控制的 sources/evidence 和工具 allowlist 仍保持独立强制。实际 Skill 元数据写入 async Job、Session active run/完成消息和 Artifact runtime。
 
 ## 4. 错误处理
 
@@ -89,6 +93,6 @@ MCP source adapter 使用协议版本 `2025-06-18`，按请求完成 `initialize
 
 项目的 `artifacts` 使用 newest-first 不可变数组。重新生成只追加新 ID/时间戳，不覆盖旧内容；Web 以 `activeArtifactId` 选择版本，将当前版与数组中紧邻的旧版按摘要、章节、方法、实验、图表和来源 URL 比较。导出 API 接受租户项目内的 `artifactId`，不存在或不属于该项目时返回 404，下载文件名携带稳定版本号。
 
-备份、恢复和账户导出包含 Agent Session、MCP server 配置、知识摄取与持续更新数组；账户导出只包含去密钥 MCP 摘要，不包含 Bearer token 的明文或密文。备份/状态文件以 0600 保存，单文档删除清理活跃索引而保留不可变成果 excerpt，工作空间/账户删除则级联清理对应 Session、成果、Job、MCP 配置、文档、chunks、实体/边、watchConfigs 和 sourceSnapshots；未完成 Job 在清理前按原计费周期单次退款。
+备份、恢复和账户导出包含 Agent Session、MCP server、Skills 配置、知识摄取与持续更新数组；账户导出只包含去密钥 MCP 摘要，不包含 Bearer token 的明文或密文。备份/状态文件以 0600 保存，单文档删除清理活跃索引而保留不可变成果 excerpt，工作空间/账户删除则级联清理对应 Session、成果、Job、MCP/Skills 配置、文档、chunks、实体/边、watchConfigs 和 sourceSnapshots；未完成 Job 在清理前按原计费周期单次退款。
 
 发布前运行 `npm run openapi-check`、`npm run sbom-check` 和 `npm run perf-check`；三者分别验证 OpenAPI 3.1 schema/引用/核心路径、CycloneDX/SPDX 的完整与生产依赖边界及许可证元数据、40 次本地 `/api/health` 请求 P95 和小于 500 KB 的首页响应体。`npm run provider-contract-check` 使用本地 HTTP 供应商实现走通 LLM 成功/错误/超时、支付 checkout 与签名 webhook、OIDC discovery/PKCE/RS256/userinfo、Browser Agent 渲染和 MCP initialize/list/call；它验证协议和安全边界，但不替代真实第三方沙盒或目标 worker/MCP server 验收。`npm run infrastructure-integration-check` 对配置的 S3-compatible/Neo4j 做带清理的真实写读删，本地已用 MinIO SigV4 和真实 Neo4j 通过。性能检查不是公网压力测试替代品，生产仍需独立压测；本地 SBOM/镜像扫描快照也不替代持续发布 CI。

@@ -334,6 +334,22 @@ paths:
         '404': { description: MCP server not found }
         '409': { description: Configuration changed while discovery was running }
         '502': { description: MCP protocol discovery failed }
+  /api/agent/skills:
+    get:
+      description: Lists tenant organization Skills. Instructions are visible to organization members because they can affect generated artifacts.
+      responses:
+        '200':
+          description: Tenant Skill settings
+          content: { application/json: { schema: { type: object, required: [settings, configurable], properties: { settings: { $ref: '#/components/schemas/AgentSkillSettings' }, configurable: { type: boolean } } } } }
+    put:
+      description: Replaces tenant Skills. Skills are bounded prompt guidance and cannot grant tools, sources, or policy exceptions.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AgentSkillSettingsInput' } } }
+      responses:
+        '200': { description: Agent Skills saved, content: { application/json: { schema: { type: object, required: [settings], properties: { settings: { $ref: '#/components/schemas/AgentSkillSettings' } } } } } }
+        '403': { description: Admin role required }
+        '422': { description: 'Invalid, duplicated, oversized, or unsupported Skill configuration' }
   /api/search:
     get:
       parameters:
@@ -481,6 +497,7 @@ components:
         mode: { type: string }
         status: { type: string, enum: [queued, running, completed, failed] }
         toolCalls: { type: array, maxItems: 20, items: { type: object }, description: Bounded tool invocation provenance retained with the completed assistant message }
+        skills: { type: array, maxItems: 3, items: { $ref: '#/components/schemas/AppliedAgentSkill' }, description: Skills applied to the completed artifact run }
         createdAt: { type: string, format: date-time }
     AgentSession:
       type: object
@@ -597,6 +614,54 @@ components:
       required: [servers]
       properties:
         servers: { type: array, maxItems: 5, items: { $ref: '#/components/schemas/McpServerConfig' } }
+    AgentSkillInput:
+      type: object
+      required: [name, title, description, instructions, activation, productTypes]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, pattern: '^[a-z][a-z0-9_-]{1,47}$' }
+        title: { type: string, minLength: 1, maxLength: 80 }
+        description: { type: string, minLength: 1, maxLength: 500 }
+        instructions: { type: string, minLength: 1, maxLength: 4000 }
+        activation: { type: string, enum: [auto, always] }
+        productTypes: { type: array, minItems: 1, maxItems: 3, uniqueItems: true, items: { type: string, enum: [knowledge, research, paper] } }
+        triggerTerms: { type: array, maxItems: 12, uniqueItems: true, items: { type: string, minLength: 2, maxLength: 80 } }
+        enabled: { type: boolean, default: true }
+    AgentSkillConfig:
+      allOf:
+        - { $ref: '#/components/schemas/AgentSkillInput' }
+        - type: object
+          required: [id, tenantId, enabled, triggerTerms, createdAt, updatedAt]
+          properties:
+            id: { type: string, format: uuid }
+            tenantId: { type: string }
+            createdBy: { type: string }
+            updatedBy: { type: string }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+    AgentSkillSettingsInput:
+      type: object
+      required: [skills]
+      properties:
+        skills: { type: array, maxItems: 20, items: { $ref: '#/components/schemas/AgentSkillInput' } }
+    AgentSkillSettings:
+      type: object
+      required: [skills]
+      properties:
+        skills: { type: array, maxItems: 20, items: { $ref: '#/components/schemas/AgentSkillConfig' } }
+    AppliedAgentSkill:
+      type: object
+      required: [id, name, title, description, activation, matchReason, productTypes, updatedAt, instructionHash]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        title: { type: string }
+        description: { type: string }
+        activation: { type: string, enum: [auto, always] }
+        matchReason: { type: string }
+        productTypes: { type: array, items: { type: string, enum: [knowledge, research, paper] } }
+        updatedAt: { type: string, format: date-time }
+        instructionHash: { type: string, pattern: '^[a-f0-9]{64}$' }
     LlmProviderInput:
       type: object
       required: [provider, model]

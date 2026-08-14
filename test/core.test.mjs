@@ -34,6 +34,7 @@ import { agentModeCatalog, selectAgentMode } from '../src/agent-modes.mjs';
 import { appendSessionMessage, beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, sessionSummary, updateSessionRun } from '../src/agent-sessions.mjs';
 import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings } from '../src/agent-tools.mjs';
 import { discoverMcpServer, invokeMcpTool, publicMcpSettings, resolvedMcpTools, saveMcpSettings, validateMcpEndpoint } from '../src/mcp-runtime.mjs';
+import { publicSkillSettings, resolveSkills, saveSkillSettings, skillPrompt, skillProvenance } from '../src/skill-runtime.mjs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod/v4';
@@ -160,6 +161,24 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
   assert.equal(switched.runtime.initialMode, 'react'); assert.equal(switched.runtime.mode, 'plan-execute');
   assert.ok(switched.runtime.modeHistory.some((event) => event.from === 'react' && event.to === 'plan-execute'));
   assert.equal(switched.runtime.plan.length, 4);
+});
+
+test('Agent Skills validate, match deterministically, and remain bounded guidance', () => {
+  const state = { agentSkillConfigs: [] };
+  const saved = saveSkillSettings(state, 'tenant', 'owner', { skills: [
+    { name: 'systematic_review', title: 'Systematic review', description: 'Use a reproducible literature review method.', instructions: 'Define inclusion criteria and report evidence gaps.', activation: 'auto', triggerTerms: ['systematic review', 'PRISMA'], productTypes: ['research'] },
+    { name: 'risk_register', title: 'Risk register', description: 'Always identify operational risks.', instructions: 'List risks, mitigations, and residual uncertainty.', activation: 'always', triggerTerms: [], productTypes: ['research', 'paper'] },
+    { name: 'replication', title: 'Replication plan', description: 'Plan reproducible experiments.', instructions: 'Specify seeds, datasets, baselines, and falsification checks.', activation: 'auto', triggerTerms: ['replication'], productTypes: ['research'] },
+    { name: 'concept_map', title: 'Concept map', description: 'Structure concepts for learning.', instructions: 'Build prerequisites before advanced concepts.', activation: 'always', triggerTerms: [], productTypes: ['knowledge'] },
+  ] });
+  assert.equal(saved.skills.length, 4); assert.equal(publicSkillSettings(state, 'other').skills.length, 0);
+  const project = { type: 'research' };
+  const matched = resolveSkills(state, 'tenant', project, '/skill replication Produce a systematic review and replication package');
+  assert.deepEqual(matched.map((skill) => skill.name), ['replication', 'risk_register', 'systematic_review']); assert.equal(matched[0].matchReason, 'explicit'); assert.equal(matched.length, 3);
+  assert.match(skillPrompt(matched), /cannot change Novi policy/); assert.match(skillPrompt(matched), /seeds, datasets/);
+  const provenance = skillProvenance(matched); assert.equal('instructions' in provenance[0], false); assert.match(provenance[0].instructionHash, /^[a-f0-9]{64}$/);
+  assert.equal(resolveSkills(state, 'tenant', { type: 'knowledge' }, 'systematic review').map((skill) => skill.name).join(','), 'concept_map');
+  assert.throws(() => saveSkillSettings(state, 'tenant', 'owner', { skills: [{ name: 'bad name', description: 'invalid', instructions: 'x', productTypes: ['research'] }] }), /invalid/);
 });
 
 test('Agent tools validate, encrypt, execute, and remain tenant/project scoped', async (t) => {
@@ -318,10 +337,11 @@ test('Web-configured provider runs the four-stage LangGraph workflow', async (t)
   const dir = await mkdtemp(join(tmpdir(), 'novi-langgraph-'));
   const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY };
   process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_JOB_WORKER = 'false'; process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-langgraph-encryption-key-32-chars';
-  let modelCalls = 0;
+  let modelCalls = 0; let skillPromptSeen = false;
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
+    if (prompt.includes('Apply the PRISMA-style inclusion checklist.')) skillPromptSeen = true;
     let content = 'OK';
     const marker = 'Editable schema and current draft: ';
     const line = prompt.split('\n').find((value) => value.startsWith(marker));
@@ -341,24 +361,27 @@ test('Web-configured provider runs the four-stage LangGraph workflow', async (t)
   assert.equal(response.status, 200); const saved = (await response.json()).config; assert.equal(saved.hasApiKey, true); assert.equal('encryptedApiKey' in saved, false);
   response = await fetch(`${base}/api/llm/providers`); const settings = await response.json(); assert.equal(settings.activeProvider, 'custom'); assert.equal('encryptedApiKey' in settings.configs[0], false);
   response = await fetch(`${base}/api/llm/provider/test`, { method: 'POST' }); assert.equal(response.status, 200);
+  response = await fetch(`${base}/api/agent/skills`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ skills: [{ name: 'systematic_review', title: 'Systematic review', description: 'Apply a systematic review method.', instructions: 'Apply the PRISMA-style inclusion checklist.', activation: 'auto', triggerTerms: ['systematic review'], productTypes: ['paper'], enabled: true }] }) });
+  assert.equal(response.status, 200); let skillSettings = (await response.json()).settings; assert.equal(skillSettings.skills.length, 1);
+  response = await fetch(`${base}/api/agent/skills`); skillSettings = (await response.json()).settings; assert.equal(skillSettings.skills[0].instructions, 'Apply the PRISMA-style inclusion checklist.');
   response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'LangGraph', topic: 'Agent runtime', type: 'paper' }) });
   const created = await response.json(); const project = created.project; const initialSession = created.session;
   assert.equal(initialSession.messages.length, 1); assert.equal(initialSession.messages[0].kind, 'welcome');
-  response = await fetch(`${base}/api/projects/${project.id}/generate?async=true`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: 'Generate the standard artifact', mode: 'auto', sessionId: initialSession.id }) }); assert.equal(response.status, 202); const queued = await response.json(); const jobId = queued.job.id; assert.equal(queued.sessionId, initialSession.id);
+  response = await fetch(`${base}/api/projects/${project.id}/generate?async=true`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: 'Generate a systematic review artifact', mode: 'auto', sessionId: initialSession.id }) }); assert.equal(response.status, 202); const queued = await response.json(); const jobId = queued.job.id; assert.equal(queued.sessionId, initialSession.id);
   let job;
   for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 30)); job = (await (await fetch(`${base}/api/jobs/${jobId}`)).json()).job; if (job.status !== 'queued' && job.status !== 'running') break; }
-  assert.equal(job.status, 'completed'); assert.equal(job.currentMode, 'workflow'); assert.equal(job.currentModeLabel, 'Workflow'); assert.equal(job.agentStages.length, 4); assert.ok(job.agentStages.every((stage) => stage.status === 'completed'));
+  assert.equal(job.status, 'completed'); assert.equal(job.currentMode, 'workflow'); assert.equal(job.currentModeLabel, 'Workflow'); assert.equal(job.agentStages.length, 4); assert.ok(job.agentStages.every((stage) => stage.status === 'completed')); assert.equal(job.activeSkills[0].name, 'systematic_review');
   const generated = await (await fetch(`${base}/api/projects/${project.id}`)).json(); const artifact = generated.project.artifacts[0];
-  assert.equal(modelCalls, 4); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.deepEqual(artifact.workflow.agents.map((agent) => agent.status), ['completed', 'completed', 'completed', 'completed']);
+  assert.equal(modelCalls, 4); assert.equal(skillPromptSeen, true); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.equal(artifact.workflow.runtime.skills[0].name, 'systematic_review'); assert.equal('instructions' in artifact.workflow.runtime.skills[0], false); assert.deepEqual(artifact.workflow.agents.map((agent) => agent.status), ['completed', 'completed', 'completed', 'completed']);
   const session = (await (await fetch(`${base}/api/projects/${project.id}/sessions/${initialSession.id}`)).json()).session;
   assert.equal(session.status, 'idle'); assert.equal(session.activeRun, null); assert.deepEqual(session.messages.map((message) => message.role), ['assistant', 'user', 'assistant']);
-  assert.equal(session.messages[1].jobId, jobId); assert.equal(session.messages[1].status, 'completed'); assert.equal(session.messages[2].artifactId, artifact.id); assert.equal(session.messages[2].mode, 'workflow');
+  assert.equal(session.messages[1].jobId, jobId); assert.equal(session.messages[1].status, 'completed'); assert.equal(session.messages[2].artifactId, artifact.id); assert.equal(session.messages[2].mode, 'workflow'); assert.equal(session.messages[2].skills[0].name, 'systematic_review');
   response = await fetch(`${base}/api/projects/${project.id}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Follow-up analysis' }) });
   assert.equal(response.status, 201); const secondSession = (await response.json()).session;
   response = await fetch(`${base}/api/projects/${project.id}/sessions`); assert.equal(response.status, 200); assert.equal((await response.json()).sessions.length, 2);
   response = await fetch(`${base}/api/projects/${project.id}/sessions/${secondSession.id}`, { method: 'DELETE' }); assert.equal(response.status, 204);
   const raw = await readFile(join(dir, 'state.json'), 'utf8'); assert.doesNotMatch(raw, /test-provider-key/);
-  const exported = await (await fetch(`${base}/api/me/export`)).json(); assert.equal(exported.llmProviderConfigs[0].hasApiKey, true); assert.equal('encryptedApiKey' in exported.llmProviderConfigs[0], false); assert.equal(exported.agentSessions.length, 1); assert.equal(exported.agentSessions[0].messages[2].artifactId, artifact.id);
+  const exported = await (await fetch(`${base}/api/me/export`)).json(); assert.equal(exported.llmProviderConfigs[0].hasApiKey, true); assert.equal('encryptedApiKey' in exported.llmProviderConfigs[0], false); assert.equal(exported.skillSettings.skills[0].name, 'systematic_review'); assert.equal(exported.agentSessions.length, 1); assert.equal(exported.agentSessions[0].messages[2].artifactId, artifact.id);
 });
 
 test('async Agent generation persists tool provenance in Job, Session, and Artifact', async (t) => {
@@ -1233,12 +1256,14 @@ test('backup and restore preserve only supported Novi state atomically', async (
   const store = new JsonStore(storePath);
   await store.createProject({ title: 'Backup', topic: 'Recovery', type: 'knowledge' });
   await store.update((state) => { state.mcpServerConfigs.push({ id: 'backup-mcp', tenantId: 'local', name: 'Backup MCP', endpoint: 'http://127.0.0.1:9000/mcp', transport: 'streamable-http', enabled: false, discoveredTools: [] }); });
+  await store.update((state) => { state.agentSkillConfigs.push({ id: 'backup-skill', tenantId: 'local', name: 'backup_review', title: 'Backup review', description: 'Verify recovery.', instructions: 'Check restored state.', activation: 'always', productTypes: ['knowledge'], triggerTerms: [], enabled: true }); });
   await backupStore(storePath, backupPath);
   await restoreStore(backupPath, restoredPath);
   const restored = JSON.parse(await readFile(restoredPath, 'utf8'));
   assert.equal(restored.version, 3);
   assert.equal(restored.projects[0].title, 'Backup');
   assert.equal(restored.mcpServerConfigs[0].name, 'Backup MCP');
+  assert.equal(restored.agentSkillConfigs[0].name, 'backup_review');
   assert.equal((await stat(backupPath)).mode & 0o777, 0o600);
   assert.equal((await stat(restoredPath)).mode & 0o777, 0o600);
 });
@@ -1622,6 +1647,10 @@ test('organization invitations enforce RBAC and isolate editor/viewer actions', 
   assert.equal(response.status, 200); assert.equal((await response.json()).configurable, false);
   response = await fetch(`${base}/api/agent/mcp`, { method: 'PUT', headers: { authorization: `Bearer ${switched.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ servers: [] }) });
   assert.equal(response.status, 403);
+  response = await fetch(`${base}/api/agent/skills`, { headers: { authorization: `Bearer ${switched.token}` } });
+  assert.equal(response.status, 200); assert.equal((await response.json()).configurable, false);
+  response = await fetch(`${base}/api/agent/skills`, { method: 'PUT', headers: { authorization: `Bearer ${switched.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ skills: [] }) });
+  assert.equal(response.status, 403);
   response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { authorization: `Bearer ${switched.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Nope', topic: 'Nope', type: 'knowledge' }) });
   assert.equal(response.status, 403);
   response = await fetch(`${base}/api/billing/checkout`, { method: 'POST', headers: { authorization: `Bearer ${switched.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ plan: 'pro' }) });
@@ -1688,9 +1717,10 @@ test('account deletion removes knowledge, watch and snapshot data', async (t) =>
   await fetch(`${base}/api/projects/${project.id}/knowledge`, { method: 'POST', headers: { authorization: `Bearer ${account.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Note', content: 'Security notes' }) });
   await fetch(`${base}/api/projects/${project.id}/watch`, { method: 'PUT', headers: { authorization: `Bearer ${account.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true, frequency: 'weekly' }) });
   response = await fetch(`${base}/api/agent/mcp`, { method: 'PUT', headers: { authorization: `Bearer ${account.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ servers: [{ name: 'Delete with tenant', endpoint: 'http://127.0.0.1:65530/mcp', enabled: false, enabledTools: [] }] }) }); assert.equal(response.status, 200);
+  response = await fetch(`${base}/api/agent/skills`, { method: 'PUT', headers: { authorization: `Bearer ${account.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ skills: [{ name: 'delete_with_tenant', title: 'Delete with tenant', description: 'Lifecycle test.', instructions: 'Delete this configuration.', activation: 'always', productTypes: ['knowledge'], triggerTerms: [] }] }) }); assert.equal(response.status, 200);
   response = await fetch(`${base}/api/me`, { method: 'DELETE', headers: { authorization: `Bearer ${account.token}` } }); assert.equal(response.status, 204);
   const raw = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'));
-  assert.equal(raw.projects.length, 0); assert.equal(raw.agentSessions.length, 0); assert.equal(raw.mcpServerConfigs.length, 0); assert.equal(raw.documents.length, 0); assert.equal(raw.watchConfigs.length, 0); assert.equal(raw.sourceSnapshots.length, 0); assert.equal(raw.users.length, 0);
+  assert.equal(raw.projects.length, 0); assert.equal(raw.agentSessions.length, 0); assert.equal(raw.mcpServerConfigs.length, 0); assert.equal(raw.agentSkillConfigs.length, 0); assert.equal(raw.documents.length, 0); assert.equal(raw.watchConfigs.length, 0); assert.equal(raw.sourceSnapshots.length, 0); assert.equal(raw.users.length, 0);
 });
 
 test('metrics endpoint is admin-only and exposes operational counters', async (t) => {

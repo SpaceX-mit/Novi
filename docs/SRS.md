@@ -46,6 +46,7 @@ Web 浏览器或 Electron 客户端通过 HTTP REST API 访问 Novi 服务。服
 | FR-36 | LangGraph Agent Runtime | 存在租户 Web Provider 时，根据 `{prompt,mode}` 进入 Workflow、ReAct、Plan & Execute 或 Supervisor；auto 模式识别中英文意图，controller 可在运行中切换模式，阶段 fallback 升级到 Supervisor。Specialist 只修改字段白名单内同形数据；Job 和 Web 暴露当前模式、阶段与进度，成果保存计划、模式历史、controller 事件和 token | `src/agent-modes.mjs`, `src/agent-runtime.mjs`, `generateArtifactAsync()`, `agentStages` |
 | FR-37 | 持久 Agent Session | 创建项目时生成默认 Session；可按项目列出、新建、查看和删除空闲 Session。同步/异步生成接受 `sessionId`，保存用户/助手消息、active run 模式/阶段/进度、Job 与 Artifact 关联；Session 按 tenant+project 隔离并随项目/账户删除，运行中删除返回 409，服务重启把中断运行写为失败并解除占用 | `src/agent-sessions.mjs`, `/api/projects/:id/sessions*`, `agentSessions` |
 | FR-38 | Conversation Session 工作区 | 创建项目后直接进入默认 Session；左栏切换/新建/删除 Session，中栏显示持久消息并通过 composer 选择 auto 或四种执行模式，右栏在 Files、LLM Wiki、Document 间查看文件、成果和片段。Generate now 进入当前 Session；页面重开可恢复 active Job 轮询；viewer 只读；桌面和 390px 移动宽度无溢出 | `public/app.js`, `public/styles.css`, `scripts/browser-smoke.mjs` |
+| FR-39 | 组织 Agent Skills | owner/admin 可配置最多 20 个租户 Skill，包括稳定名称、用途、最多 4000 字符指令、产品范围、always/auto 激活和触发词；LangGraph 运行按显式 `/skill name`、always、触发词确定性选择最多 3 个，注入 Planner/Controller/Specialist 但不能增加工具/来源或覆盖字段边界。Job、Session、Artifact 保存选择 provenance 和指令哈希；无 Web Provider 时不宣称应用 | `src/skill-runtime.mjs`, `src/agent-runtime.mjs`, `/api/agent/skills`, `Customize/Skills` |
 
 ## 3. 外部接口
 
@@ -53,6 +54,7 @@ Web 浏览器或 Electron 客户端通过 HTTP REST API 访问 Novi 服务。服
 - `POST /api/projects/:id/generate`：同步生成当前版本成果；请求可传 `{prompt,mode,sessionId}`，异步模式返回的 Job 绑定 Session。
 - `GET/POST /api/projects/:id/sessions`：列出项目 Session 摘要或创建新 Session。
 - `GET/DELETE /api/projects/:id/sessions/:sessionId`：查看完整消息或删除空闲 Session；跨项目/租户返回 404，运行中返回 409。
+- `GET/PUT /api/agent/skills`：审查或由 admin 替换租户 Agent Skills 配置。
 - `PATCH /api/projects/:id/pin`：切换置顶状态。
 - `DELETE /api/projects/:id`：admin 删除项目，并级联取消未完成生成、单次退款及清理 Job/知识/关注数据。
 - `GET /api/projects/:id/export?format=markdown|latex&artifactId=<uuid>&template=article|ieee|acm`：下载指定不可变版本；未传 `artifactId` 时下载最新成果，LaTeX 可选择出版模板。

@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder、Deep Research、Paper Author 三条核心产品路径已经实现并具有本地自动化验证证据。Web 已支持按组织配置主流 LLM Provider；配置后 LangGraph.js 可根据提示词意图选择 Workflow、ReAct、Plan & Execute 或 Supervisor，并在运行中重新调度模式。Agent Session 已完成后端持久化和 Conversation 工作区；Customize 已支持租户级内置/自定义 HTTP 工具和通用 MCP Streamable HTTP 工具，ReAct、Plan & Execute、Supervisor 可在控制循环中调用管理员显式启用的工具并持久化 provenance。正式收费商用发布尚未完成，剩余工作主要是 Skills/Plugins 运行时、持久 Agent checkpoint、目标环境和正式发布门禁。
+Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder、Deep Research、Paper Author 三条核心产品路径已经实现并具有本地自动化验证证据。Web 已支持按组织配置主流 LLM Provider；配置后 LangGraph.js 可根据提示词意图选择 Workflow、ReAct、Plan & Execute 或 Supervisor，并在运行中重新调度模式。Agent Session 已完成后端持久化和 Conversation 工作区；Customize 已支持租户级内置/自定义 HTTP 工具、通用 MCP Streamable HTTP 工具和组织 Skills，运行可调用管理员显式启用的工具、应用匹配的受限 playbook 并持久化 provenance。正式收费商用发布尚未完成，剩余工作主要是 Plugins 运行时、持久 Agent checkpoint、目标环境和正式发布门禁。
 
 当前开发机上的源码位于 NTFS/FUSE 挂载的 `/data`。该文件系统无法保存 Electron `chrome-sandbox` 所需的 `root:root 4755` 权限，因此直接执行 `npm run desktop` 仍不能显示 UI；需要将项目迁移到 ext4，或把 Electron runtime 安装到 `/opt` 后再完成一次真实窗口验收。这是当前环境问题，不是 UI 功能缺失。
 
@@ -13,19 +13,20 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder�
 | 范围 | 已实现内容 | 当前证据 |
 | --- | --- | --- |
 | 核心产品 | Knowledge Builder、Deep Research、Paper Author；成果版本、导出、Research/Knowledge/Writing/Review provenance | 默认测试与浏览器核心旅程覆盖 |
-| Web 与 API | 共享 REST API/UI、工作区、知识导入与检索、异步 Job/Agent 模式与阶段、来源刷新、成果历史、Provider/Tools/MCP 设置、指标 | OpenAPI 3.1 契约共 44 paths / 54 operations；语法检查覆盖 44 modules |
+| Web 与 API | 共享 REST API/UI、工作区、知识导入与检索、异步 Job/Agent 模式与阶段、来源刷新、成果历史、Provider/Tools/MCP/Skills 设置、指标 | OpenAPI 3.1 契约共 45 paths / 56 operations；语法检查覆盖 45 modules |
 | 账户与商业边界 | Cookie-only Web 会话、OIDC 边界、组织与 RBAC、配额、支付 provider 边界、审计与生命周期取消 | 本地 HTTP/provider 契约和领域测试通过；未配置真实支付 provider 时明确返回 503，不创建模拟订单 |
 | 知识与生成 | 文本/Web/PDF/GitHub 导入、离线向量、RAG 上下文、来源连接器、Browser Agent/MCP 接口、连续更新 | 本地契约、集成和浏览器 smoke 已覆盖；真实来源仍需生产级人工核验 |
 | Agent Runtime | 意图路由的 Workflow、ReAct、Plan & Execute、Supervisor 四模式 LangGraph.js StateGraph；controller/阶段 fallback 可运行中切换模式，最多 8 个 Specialist 步骤；字段/形状校验、token、模式历史、计划和 Job 进度可追溯 | 本地 OpenAI-compatible HTTP 验证四种模式和 ReAct → Plan & Execute 运行中切换；72 tests passed + 1 PostgreSQL 条件跳过；Chromium 验证模式显示 |
 | Agent Session | 项目默认 Session、会话 API、同步/异步消息、active run、Job/Artifact 关联、隔离/恢复/清理；Web 左栏 Session、中央对话与 mode composer、右栏 Files/LLM Wiki/Document，viewer 只读 | Session 领域/HTTP/恢复测试通过；1360×900 与 390×844 Chromium 完整旅程验证 Session 创建/删除、Generate now、消息/Artifact、inspector 与 RBAC |
 | Agent Tools | 左侧 Customize/Tools；内置 workspace read/write/web search；最多 10 个 allowlisted 自定义 HTTP 工具、严格标量 input schema、可选 AES-GCM Bearer token；ReAct/Plan/Supervisor 工具节点、最多 6 次调用、超时/32 KB 响应限制、Job/Session/Artifact provenance | 领域测试覆盖端点/schema/加密/租户项目隔离/响应上限；LangGraph 测试覆盖三种自主模式和 6 次硬上限；异步 HTTP 测试验证 Job/Session/Artifact 三处记录；desktop/mobile Chromium 验证 Customize、RBAC 和无横向溢出 |
 | Agent MCP | 左侧 Customize/MCP；最多 5 个租户级 Streamable HTTP server；官方 SDK 发现与调用、最多 100 tools/server、命名空间别名、新工具默认关闭、逐工具授权；AES-GCM Bearer token、endpoint allowlist、schema/超时/256 KB 响应边界；MCP tool 进入同一 LangGraph 工具节点和 provenance | 官方 SDK server/client 集成覆盖 initialize/list/call、输入校验和结果规范化；HTTP/RBAC/加密/备份删除测试通过；desktop/mobile Chromium 验证配置入口、显式授权和 viewer 只读边界 |
+| Agent Skills | 左侧 Customize/Skills；最多 20 个租户 playbook，名称/用途/4000 字符指令、产品范围、always/auto 和触发词；按显式 `/skill`、always、触发词选最多 3 个注入 Planner/Controller/Specialist；不能授权工具/来源或覆盖 schema；Job/Session/Artifact 固化选择与指令哈希 | 领域测试覆盖校验、隔离、匹配优先级和上限；真实 HTTP+LangGraph 测试确认 prompt 注入及四处 provenance；desktop/mobile Chromium 验证保存和无横向溢出 |
 | LLM Provider Web 配置 | OpenAI、Anthropic、Google、DeepSeek、MiniMax、OpenRouter、Mistral、xAI、Groq、Azure OpenAI、Ollama、自定义兼容服务；租户隔离、owner/admin RBAC、连接测试、Offline mode | Chromium smoke 与 API/RBAC 测试通过；API Key AES-256-GCM 加密且不进入 API/导出响应 |
 | 存储接口 | JSON 文件、PostgreSQL/pgvector、对象存储、Neo4j、持久 outbox | 本地 PostgreSQL/MinIO/Neo4j 路径已验证；目标托管实例仍待验收 |
 | Web/容器交付 | Web 本地运行、Docker 多阶段非 root 运行、健康与就绪检查 | Docker 镜像已构建并检查；最近记录的镜像为 `sha256:5af027f80df589bc4f7fe746e3464669576e6c5bf28a3b8fd3b9300f7f0e0cb1` |
 | Electron 构建兼容 | Node.js 商业开发基线设为 22.12+，`.nvmrc` 固定 22.22.2，desktop lifecycle 增加版本预检 | 已消除旧 Node 加载 `@noble/hashes` 时的 `ERR_REQUIRE_ESM` |
 | Linux 桌面制品 | electron-builder 配置、安全 BrowserWindow、Linux unpacked/AppImage 构建与打包态 smoke | AppImage 已生成；最近记录 SHA-256 为 `b956734a2233861e8feb160ae7941142bb87a80559217f33efd715f5a403016d` |
-| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 最近记录：77 passed + 1 PostgreSQL 条件跳过；44 个 JavaScript 模块语法通过；OpenAPI 44 paths / 54 operations；锁文件 SBOM 422 components / 129 runtime；desktop/mobile 浏览器、Provider 与存储契约通过；npm 官方 registry audit 为 0 vulnerabilities |
+| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 最近记录：78 passed + 1 PostgreSQL 条件跳过；45 个 JavaScript 模块语法通过；OpenAPI 45 paths / 56 operations；锁文件 SBOM 422 components / 129 runtime；desktop/mobile 浏览器、Provider 与存储契约通过；npm 官方 registry audit 为 0 vulnerabilities |
 
 ## 未完成
 
@@ -36,7 +37,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder�
 
 ### Agent Runtime 后续
 
-- [ ] 在 Customize 中分别实现 Skills 和 Plugins 运行时；通用 Agent MCP 已实现，既有 `NOVI_MCP_SOURCE_*` 仍是独立的固定来源 adapter。
+- [ ] 在 Customize 中实现 Plugins 运行时；通用 Agent MCP 和受限 Skills 已实现，既有 `NOVI_MCP_SOURCE_*` 仍是独立的固定来源 adapter。
 - [ ] 将 LangGraph `MemorySaver` 换成生产数据库持久 checkpoint，并验证服务重启后的安全节点级恢复；当前只持久化 Novi Job/阶段状态，中断任务仍按失败退款处理。
 - [ ] 使用真实账号评测工具选择质量、失败恢复、调用成本和 workspace write 审批策略；当前工具输出按不可信数据处理，只有 concrete verified sources 可进入 evidence。
 - [ ] 旧 `NOVI_LLM_BASE_URL/API_KEY/MODEL` 环境变量路径仍使用原有单次模型网关；需要迁移为统一 LangGraph 配置或在后续版本弃用。
@@ -63,13 +64,14 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及 Knowledge Builder�
 
 ## 下一步优先级
 
-1. 分别实现 Skills 和 Plugins 运行时，每项独立验证、提交和推送。
+1. 实现 Plugins 运行时并独立验证、提交和推送。
 2. 将 LangGraph MemorySaver 替换为生产数据库 checkpoint，并验证节点级重启恢复。
 3. 完成当前机器 ext4 或 `/opt` Electron runtime 设置并人工确认桌面 UI。
 4. 在已配置的 GitHub 远程仓库运行持续集成门禁并归档结果；随后接入真实供应商/目标基础设施并关闭正式发布门禁。
 
 ## 更新记录
 
+- 2026-08-14：完成组织 Agent Skills 纵向闭环：Customize/Skills 可由 owner/admin 配置最多 20 个租户 playbook，限制名称、用途、4000 字符指令、产品范围、always/auto 和最多 12 个触发词；LangGraph 在运行开始按显式 `/skill name`、always、触发词确定性选择最多 3 个，注入 Planner、ReAct/Supervisor Controller 和四个 Specialist。Skill 不增加工具/来源权限，不覆盖 evidence/schema/运行硬上限；无 Web Provider 时不记录虚假应用。实际选择进入异步 Job、Session active run/完成消息和 Artifact runtime，成果只固化元数据、匹配原因和指令 SHA-256。配置、RBAC、账户导出/删除、JSON/PostgreSQL、备份恢复和 Web provenance 已覆盖。验证：`npm test` 78 passed + 1 PostgreSQL 条件跳过、`npm run check` 45 modules、`npm run openapi-check` 45 paths / 56 operations、desktop/mobile `npm run browser-smoke`、`npm run release-check` 与 SBOM 通过。Plugins 与数据库 checkpoint 仍未实现。
 - 2026-08-14：完成通用 Agent MCP 纵向闭环：Customize/MCP 可由 owner/admin 配置最多 5 个租户级 Streamable HTTP server，通过官方 `@modelcontextprotocol/sdk` 发现最多 100 个工具；新工具默认关闭，逐项授权后才以稳定命名空间进入 ReAct、Plan & Execute、Supervisor 的既有 LangGraph tool node。远端 endpoint 强制 HTTPS/host allowlist，Bearer token AES-GCM 加密且 endpoint 变化时清除；schema 限制 16 KB/12 层并在调用前验证，请求超时最多 30 秒、POST 响应最多 256 KB，二进制结果不进入模型上下文，MCP observation 不自动成为 evidence。配置、发现、调用、RBAC、导出/删除/备份和 Job/Session/Artifact provenance 已覆盖；MCP Tasks、OAuth、stdio、prompts/resources 直接注入明确不支持。验证：`npm test` 77 passed + 1 PostgreSQL 条件跳过、`npm run check` 44 modules、`npm run openapi-check` 44 paths / 54 operations、desktop/mobile `npm run browser-smoke`、`npm run release-check`、SBOM 和 npm 官方 registry audit 通过。Skills、Plugins 与数据库 checkpoint 仍未实现。
 - 2026-08-14：完成 Agent 内置/自定义工具纵向闭环：左侧 Customize/Tools 可由 owner/admin 配置 workspace read/write/web search 和最多 10 个 allowlisted 自定义 HTTP 工具，Bearer token 加密且不进入 API/导出；ReAct、Plan & Execute、Supervisor 已接入 LangGraph tool 节点，调用次数、超时、输入 schema、响应大小、租户/项目写入边界和取消检查受限；Job、完成 Session 消息和 Artifact 保存调用 provenance，Web 显示运行阶段、会话工具标签和 Artifact tool activity。验证：`npm test` 75 passed + 1 PostgreSQL 条件跳过、`npm run check` 43 modules、`npm run openapi-check` 42 paths / 51 operations、`npm run browser-smoke` 在 1360×900 与 390×844 通过、`npm run release-check` 通过。通用 MCP、Skills、Plugins 与数据库 checkpoint 仍未实现。
 - 2026-08-14：完成 Conversation Session Web 工作区：创建项目直接进入默认 Session；左栏支持新建/切换/删除空闲 Session；中央持久显示消息、mode/stage/progress 与 Artifact 链接，composer 支持 Auto/Workflow/ReAct/Plan & Execute/Supervisor，并在 inspector 重绘时保留未发送草稿和 mode；`Generate now` 进入当前 Session；右栏提供 Files、LLM Wiki、Document inspector 并保留版本比较、知识和导出能力；active Job 可在重开页面后恢复轮询，viewer 为只读。验证：`npm test` 72 passed + 1 skip、`npm run check` 42 modules、扩展 `npm run browser-smoke` 在 1360×900 与 390×844 均通过，`npm run release-check` 通过，截图确认无横向溢出或控件遮挡；Tools/MCP/Skills/Plugins Customize 仍未实现。
