@@ -1,0 +1,9 @@
+data/*.json
+data/*.backup.json
+node_modules/
+dist/
+coverage/
+.nyc_output/
+*.log
+.DS_Store
+.env

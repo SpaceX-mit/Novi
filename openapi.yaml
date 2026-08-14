@@ -1,0 +1,493 @@
+openapi: 3.1.0
+info:
+  title: Novi Knowledge Scientist API
+  version: 0.1.0
+  description: Workspace, evidence, usage and asynchronous generation API.
+servers:
+  - url: http://127.0.0.1:4173
+security:
+  - bearerAuth: []
+paths:
+  /api/health:
+    get:
+      security: []
+      responses:
+        '200': { description: Service is alive }
+  /api/ready:
+    get:
+      security: []
+      responses:
+        '200':
+          description: Storage and external projection backends are ready/configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+        '503': { description: Storage is unavailable }
+  /api/metrics:
+    get:
+      responses:
+        '200':
+          description: Authenticated operational metrics, including pending external projections
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [metrics]
+                properties:
+                  metrics:
+                    type: object
+                    properties:
+                      externalProjectionPending: { type: integer, minimum: 0 }
+        '401': { description: Authentication required }
+        '403': { description: Admin role required }
+  /api/auth/register:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Credentials' } } }
+      responses:
+        '201': { description: Account created }
+        '409': { description: Email already exists }
+  /api/auth/login:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Credentials' } } }
+      responses:
+        '200': { description: Session created }
+        '401': { description: Invalid credentials }
+  /api/auth/logout:
+    post:
+      responses: { '204': { description: Session revoked } }
+  /api/auth/me:
+    get:
+      responses: { '200': { description: Current authenticated user }, '401': { description: Authentication required } }
+  /api/auth/oidc/start:
+    get:
+      security: []
+      responses:
+        '302': { description: Redirect to OIDC provider }
+        '503': { description: OIDC is not configured }
+  /api/auth/oidc/callback:
+    get:
+      security: []
+      responses:
+        '302': { description: Set local session and redirect to app }
+        '400': { description: Invalid or expired state }
+  /api/projects:
+    get:
+      responses: { '200': { description: Tenant projects } }
+    post:
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ProjectInput' } } }
+      responses:
+        '201': { description: Workspace created }
+        '422': { description: Validation failed }
+  /api/projects/{id}/generate:
+    post:
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - in: query
+          name: async
+          schema: { type: boolean }
+      responses:
+        '200': { description: Synchronous artifact result }
+        '202': { description: Queued generation job }
+        '402': { description: Usage quota exceeded }
+  /api/projects/{id}:
+    get:
+      parameters: [ { $ref: '#/components/parameters/ProjectId' } ]
+      responses: { '200': { description: Project detail }, '404': { description: Project not found } }
+    delete:
+      parameters: [ { $ref: '#/components/parameters/ProjectId' } ]
+      responses: { '204': { description: 'Project, jobs, knowledge and update data deleted; unfinished generation usage refunded once' }, '403': { description: Admin role required } }
+  /api/projects/{id}/pin:
+    patch:
+      parameters: [ { $ref: '#/components/parameters/ProjectId' } ]
+      responses: { '200': { description: Pin state toggled } }
+  /api/projects/{id}/export:
+    get:
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - in: query
+          name: format
+          schema: { type: string, enum: [markdown, latex], default: markdown }
+        - in: query
+          name: artifactId
+          description: Optional immutable artifact version ID; defaults to the latest version.
+          schema: { type: string, format: uuid }
+        - in: query
+          name: template
+          description: LaTeX document class preset; used only when format is latex.
+          schema: { type: string, enum: [article, ieee, acm], default: article }
+      responses: { '200': { description: Exported artifact }, '404': { description: Artifact not found } }
+  /api/projects/{id}/knowledge:
+    get:
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 500 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+      responses:
+        '200':
+          description: Project knowledge inventory, or semantic passage results when q is supplied
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/KnowledgeResponse' }
+                  - { $ref: '#/components/schemas/KnowledgeSearchResponse' }
+        '404': { description: Project not found }
+        '422': { description: Search query is longer than 500 characters }
+    post:
+      parameters: [ { $ref: '#/components/parameters/ProjectId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeDocumentInput' } } }
+      responses:
+        '201':
+          description: Document ingested and indexed; external projection status is included on document
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KnowledgeIngestResponse' }
+        '422': { description: Invalid document }
+  /api/projects/{id}/knowledge/import:
+    post:
+      parameters: [ { $ref: '#/components/parameters/ProjectId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, url]
+              properties:
+                title: { type: string, maxLength: 200 }
+                url: { type: string, format: uri, pattern: '^https?://' }
+                render: { type: string, enum: [static, browser], default: static, description: Use the configured isolated Browser Agent for JavaScript-rendered pages }
+      responses:
+        '201': { description: 'Remote web/PDF/text, JavaScript-rendered page, or public GitHub repository fetched and indexed' }
+        '409': { description: Document content already indexed }
+        '422': { description: 'Invalid, private, oversized, or non-extractable remote document' }
+        '503': { description: Browser rendering was requested but Browser Agent is not configured }
+  /api/projects/{id}/knowledge/{documentId}:
+    delete:
+      description: Removes the document, chunks, vectors and graph entities from active semantic memory and enqueues durable external object/graph deletion. Existing immutable artifact versions retain excerpts already used; delete the workspace or account for a full purge.
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - in: path
+          name: documentId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Knowledge document removed and external deletion enqueued }
+        '403': { description: Editor role required }
+        '404': { description: Project or knowledge document not found }
+  /api/projects/{id}/watch:
+    get:
+      parameters: [ { $ref: '#/components/parameters/ProjectId' } ]
+      responses:
+        '200':
+          description: Watch configuration
+          content: { application/json: { schema: { type: object, required: [watch], properties: { watch: { $ref: '#/components/schemas/WatchConfig' } } } } }
+    put:
+      parameters: [ { $ref: '#/components/parameters/ProjectId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [enabled], properties: { enabled: { type: boolean }, frequency: { type: string, enum: [manual, daily, weekly], default: manual }, autoUpdate: { type: boolean, default: true, description: Generate a new immutable artifact when source changes are detected } } } } }
+      responses:
+        '200':
+          description: Watch configuration updated
+          content: { application/json: { schema: { type: object, required: [watch], properties: { watch: { $ref: '#/components/schemas/WatchConfig' } } } } }
+        '403': { description: Editor role required }
+        '422': { description: Invalid watch configuration }
+  /api/projects/{id}/refresh:
+    post:
+      parameters: [ { $ref: '#/components/parameters/ProjectId' } ]
+      responses:
+        '200':
+          description: Source snapshot refreshed and, when sources changed and auto-update is enabled, a new immutable artifact generated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [snapshot, update]
+                properties:
+                  snapshot: { $ref: '#/components/schemas/SourceSnapshot' }
+                  update: { $ref: '#/components/schemas/ContinuousUpdateResult' }
+        '402': { description: Source quota exceeded }
+        '403': { description: Editor role required }
+        '409': { description: Refresh already running or lease superseded }
+        '502': { description: Providers unavailable }
+  /api/projects/{id}/snapshots:
+    get:
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 20, default: 20 }
+      responses:
+        '200':
+          description: Tenant-scoped source snapshot history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [snapshots]
+                properties:
+                  snapshots:
+                    type: array
+                    items: { $ref: '#/components/schemas/SourceSnapshot' }
+        '404': { description: Project not found }
+  /api/jobs/{id}:
+    get:
+      parameters: [ { $ref: '#/components/parameters/JobId' } ]
+      responses: { '200': { description: Job status } }
+  /api/search:
+    get:
+      parameters:
+        - in: query
+          name: topic
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 300 }
+      responses: { '200': { description: Normalized source results from built-in API catalogs and the optional MCP source tool }, '402': { description: Source quota exceeded }, '502': { description: Providers unavailable } }
+  /api/usage:
+    get:
+      responses: { '200': { description: Current plan and monthly usage } }
+  /api/billing:
+    get:
+      responses: { '200': { description: Current billing snapshot } }
+  /api/billing/checkout:
+    post:
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [plan], properties: { plan: { type: string, enum: [personal, pro, enterprise] }, returnUrl: { type: string, format: uri } } } } }
+      responses:
+        '200': { description: Checkout URL }
+        '403': { description: Admin role required }
+        '503': { description: Payment provider is not configured }
+  /api/billing/webhook:
+    post:
+      security: []
+      parameters:
+        - in: header
+          name: X-Novi-Signature
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Event accepted }
+        '401': { description: Invalid signature }
+  /api/me/export:
+    get:
+      responses: { '200': { description: Portable tenant data JSON } }
+  /api/me:
+    delete:
+      responses: { '204': { description: Account deleted } }
+  /api/org:
+    get:
+      responses: { '200': { description: Current organization and role } }
+  /api/orgs:
+    get:
+      responses:
+        '200':
+          description: Organizations available to the current user, including role and current selection
+  /api/org/members:
+    get:
+      responses: { '200': { description: Organization members } }
+  /api/org/members/{id}:
+    patch:
+      parameters: [ { $ref: '#/components/parameters/MemberId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [role], properties: { role: { type: string, enum: [viewer, editor, admin] } } } } }
+      responses: { '200': { description: Member role updated }, '403': { description: Insufficient permissions } }
+    delete:
+      parameters: [ { $ref: '#/components/parameters/MemberId' } ]
+      responses: { '200': { description: Member removed }, '403': { description: Insufficient permissions } }
+  /api/org/invitations:
+    post:
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [email, role], properties: { email: { type: string, format: email }, role: { type: string, enum: [viewer, editor, admin] } } } } }
+      responses: { '201': { description: Invitation created } }
+  /api/org/invitations/{id}/accept:
+    post:
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [token], properties: { token: { type: string } } } } }
+      responses: { '200': { description: Invitation accepted }, '400': { description: Invalid invitation } }
+  /api/auth/switch:
+    post:
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [tenantId], properties: { tenantId: { type: string, format: uuid } } } } }
+      responses: { '200': { description: Session switched to organization } }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  parameters:
+    ProjectId: { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    JobId: { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    MemberId: { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+  schemas:
+    Credentials:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 10, maxLength: 200 }
+    ProjectInput:
+      type: object
+      required: [title, topic, type]
+      properties:
+        title: { type: string, maxLength: 120 }
+        topic: { type: string, maxLength: 300 }
+        type: { type: string, enum: [knowledge, research, paper] }
+        description: { type: string, maxLength: 500 }
+    KnowledgeDocumentInput:
+      type: object
+      required: [title, content]
+      properties:
+        title: { type: string, maxLength: 200 }
+        content: { type: string, maxLength: 900000 }
+        sourceUrl: { type: string, format: uri }
+        sourceKind: { type: string, maxLength: 40 }
+        mimeType: { type: string, maxLength: 100 }
+    KnowledgeDocument:
+      type: object
+      required: [id, tenantId, projectId, title, contentHash, chunkCount, entityCount]
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        title: { type: string }
+        sourceUrl: { type: string, format: uri }
+        sourceKind: { type: string }
+        mimeType: { type: string }
+        contentHash: { type: string, pattern: '^[a-f0-9]{64}$' }
+        objectKey: { type: string, nullable: true, description: Tenant-scoped key in configured object storage; null when disabled or projection failed }
+        objectProjection: { type: string, enum: [synced, disabled, failed], description: External object-storage projection status }
+        graphProjection: { type: string, enum: [synced, disabled, failed], description: External Neo4j projection status }
+        projectionUpdatedAt: { type: string, format: date-time, nullable: true }
+        chunkCount: { type: integer, minimum: 0 }
+        entityCount: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+    KnowledgeResponse:
+      type: object
+      required: [documents, chunks, entities, edges]
+      properties:
+        documents: { type: array, items: { $ref: '#/components/schemas/KnowledgeDocument' } }
+        chunks: { type: array, items: { type: object } }
+        entities: { type: array, items: { type: object } }
+        edges: { type: array, items: { type: object } }
+    KnowledgeSearchResult:
+      type: object
+      required: [id, documentId, projectId, text, document, score]
+      properties:
+        id: { type: string, format: uuid }
+        documentId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        text: { type: string }
+        document: { type: string, description: Imported document title }
+        sourceUrl: { type: string, format: uri }
+        sourceKind: { type: string }
+        score: { type: number, description: Cosine similarity score; native pgvector is used when available }
+    KnowledgeSearchResponse:
+      type: object
+      required: [results]
+      properties:
+        results: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/KnowledgeSearchResult' } }
+    KnowledgeIngestResponse:
+      type: object
+      required: [document, chunks, entities, edges]
+      properties:
+        document: { $ref: '#/components/schemas/KnowledgeDocument' }
+        chunks: { type: integer, minimum: 0 }
+        entities: { type: integer, minimum: 0 }
+        edges: { type: integer, minimum: 0 }
+    Readiness:
+      type: object
+      required: [status, storage, objectStore, graphStore, vectorStore, browserAgent, mcpSource]
+      properties:
+        status: { type: string, enum: [ready, not_ready] }
+        storage: { type: string, enum: [ok, error] }
+        objectStore: { type: string, enum: [configured, inline] }
+        graphStore: { type: string, enum: [configured, inline] }
+        vectorStore: { type: string, enum: [pgvector, jsonb-fallback, inline] }
+        browserAgent: { type: string, enum: [configured, disabled] }
+        mcpSource: { type: string, enum: [configured, disabled] }
+    EvidenceSource:
+      type: object
+      required: [name, kind, url, authority, mapped, relevanceScore]
+      properties:
+        name: { type: string }
+        kind: { type: string, description: Normalized connector category such as Papers, Video, Official Docs, or Community }
+        url: { type: string, format: uri, pattern: '^https?://' }
+        authority: { type: number, minimum: 0, maximum: 100 }
+        publishedAt: { type: string, description: Source publication/update date when available }
+        snippet: { type: string }
+        mapped: { type: boolean, description: Whether the concrete result may be used as claim evidence }
+        provider: { type: string, description: Optional adapter provenance such as MCP }
+        relevanceScore: { type: number, minimum: 0, maximum: 1 }
+        contentHash: { type: string, pattern: '^[a-f0-9]{64}$', description: SHA-256 of retrieved source bytes when verification succeeded }
+        verification: { type: string, enum: [source-mapped, verified, unreachable] }
+        verifiedAt: { type: string, format: date-time }
+        httpStatus: { type: integer, minimum: 100, maximum: 599 }
+    SourceSnapshot:
+      type: object
+      required: [id, projectId, tenantId, topic, fetchedAt, sourceCount, sources, trigger, changeStatus, changes]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        tenantId: { type: string, format: uuid }
+        topic: { type: string }
+        fetchedAt: { type: string, format: date-time }
+        sourceCount: { type: integer, minimum: 0 }
+        trigger: { type: string, enum: [manual, scheduled] }
+        changeStatus: { type: string, enum: [changed, unchanged] }
+        changes:
+          type: object
+          required: [changed, added, updated, removed]
+          properties:
+            changed: { type: boolean }
+            added: { type: integer, minimum: 0 }
+            updated: { type: integer, minimum: 0 }
+            removed: { type: integer, minimum: 0 }
+        autoUpdateStatus: { type: string, enum: [running, completed, unchanged, disabled, busy, quota-exceeded, failed] }
+        autoUpdateJobId: { type: string, format: uuid }
+        artifactId: { type: string, format: uuid }
+        autoUpdatedAt: { type: string, format: date-time }
+        autoUpdateError: { type: string }
+        sources:
+          type: array
+          items: { $ref: '#/components/schemas/EvidenceSource' }
+    WatchConfig:
+      type: object
+      required: [projectId, tenantId, enabled, frequency, autoUpdate]
+      properties:
+        projectId: { type: string, format: uuid }
+        tenantId: { type: string, format: uuid }
+        enabled: { type: boolean }
+        frequency: { type: string, enum: [manual, daily, weekly] }
+        autoUpdate: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+        lastRefreshedAt: { type: string, format: date-time }
+        refreshing: { type: boolean }
+        refreshStartedAt: { type: string, format: date-time }
+        lastError: { type: string }
+    ContinuousUpdateResult:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [completed, unchanged, disabled, busy, quota-exceeded, failed, deleted] }
+        artifactId: { type: string, format: uuid }
+        jobId: { type: string, format: uuid }
+        error: { type: string }

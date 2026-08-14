@@ -1,0 +1,126 @@
+{
+  "name": "novi-knowledge-scientist",
+  "version": "0.1.0",
+  "private": true,
+  "main": "desktop/main.cjs",
+  "desktopName": "ai.novi.desktop.desktop",
+  "type": "module",
+  "author": "Novi",
+  "license": "UNLICENSED",
+  "description": "Novi AI Knowledge Scientist - research, learning and paper workspace",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "test": "node --test",
+    "desktop": "electron desktop/main.cjs",
+    "predesktop": "node scripts/desktop-node-check.mjs",
+    "desktop-smoke": "node scripts/desktop-smoke.mjs",
+    "desktop-package-smoke": "node scripts/desktop-package-smoke.mjs",
+    "predesktop:dir": "node scripts/desktop-node-check.mjs",
+    "desktop:dir": "electron-builder --dir --publish never",
+    "predesktop:dist": "node scripts/desktop-node-check.mjs",
+    "desktop:dist": "electron-builder --publish never",
+    "check": "node scripts/syntax-check.mjs",
+    "backup": "node src/backup.mjs backup data/novi.json data/novi.backup.json",
+    "restore": "node src/backup.mjs restore data/novi.backup.json data/novi.json",
+    "release-check": "node scripts/release-check.mjs",
+    "perf-check": "node scripts/perf-check.mjs",
+    "browser-smoke": "node scripts/browser-smoke.mjs",
+    "stress-check": "node scripts/stress-check.mjs",
+    "provider-contract-check": "node scripts/provider-contract-check.mjs",
+    "storage-contract-check": "node scripts/storage-contract-check.mjs",
+    "openapi-check": "node scripts/openapi-check.mjs",
+    "sbom-check": "node scripts/sbom-check.mjs",
+    "infrastructure-integration-check": "node scripts/infrastructure-integration-check.mjs",
+    "live-source-integration-check": "node scripts/live-source-integration-check.mjs"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "pdf-parse": "^2.4.5",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@apidevtools/swagger-parser": "^12.1.0",
+    "electron": "^43.4.0",
+    "electron-builder": "26.15.3",
+    "ws": "^8.21.3"
+  },
+  "build": {
+    "appId": "ai.novi.desktop",
+    "productName": "Novi",
+    "executableName": "novi",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/@napi-rs/canvas*/**/*"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist/desktop"
+    },
+    "files": [
+      "desktop/**/*",
+      "server.mjs",
+      "src/**/*",
+      "public/**/*",
+      "package.json",
+      "!**/*.map",
+      "!**/.DS_Store"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "icon": "build/icon.svg",
+      "category": "public.app-category.education",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.svg",
+      "verifyUpdateCodeSignature": true
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true
+    },
+    "appImage": {
+      "executableArgs": []
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.svg",
+      "category": "Education",
+      "maintainer": "Novi",
+      "syncDesktopName": true,
+      "synopsis": "AI knowledge research and production workspace"
+    }
+  }
+}

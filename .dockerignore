@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.github
+desktop
+build
+docs
+scripts
+test
+*.md
+.env
+.env.*
+npm-debug.log*

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Novi">
+  <rect x="48" y="48" width="928" height="928" rx="224" fill="#101a2b"/>
+  <path d="M300 728V296h94l236 273V296h94v432h-89L394 449v279z" fill="#ffffff"/>
+  <path d="M768 208l15 42 42 15-42 15-15 42-15-42-42-15 42-15z" fill="#6f94ff"/>
+</svg>

@@ -1,0 +1,147 @@
+name: Commercial gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commercial-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core, browser and PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
+        env:
+          POSTGRES_USER: novi
+          POSTGRES_PASSWORD: novi-ci-password
+          POSTGRES_DB: novi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U novi -d novi"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NOVI_PG_URL: postgres://novi:novi-ci-password@127.0.0.1:5432/novi
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run openapi-check
+      - run: npm run provider-contract-check
+      - run: npm run storage-contract-check
+      - run: npm run sbom-check
+      - run: npm audit --audit-level=high --registry=https://registry.npmjs.org
+      - name: Locate Chromium
+        shell: bash
+        run: |
+          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          test -n "$browser"
+          echo "CHROMIUM_BIN=$browser" >> "$GITHUB_ENV"
+      - run: npm run browser-smoke
+      - run: npm run perf-check
+      - run: npm run stress-check
+      - name: Production configuration gate
+        env:
+          NODE_ENV: production
+          NOVI_AUTH_REQUIRED: "true"
+          NOVI_COOKIE_SECURE: "true"
+          NOVI_STORAGE: postgres
+          NOVI_REQUIRE_NATIVE_VECTOR: "true"
+          NOVI_LIVE_SOURCES: "true"
+          NOVI_VERIFY_SOURCES: "true"
+          NOVI_OBJECT_STORE_URL: http://127.0.0.1:9000/novi/
+          NOVI_GRAPH_URL: http://127.0.0.1:7474/db/neo4j/tx
+        run: npm run release-check
+
+  desktop:
+    name: Desktop package (${{ matrix.platform }}-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: windows-latest
+            platform: win
+            arch: x64
+          - os: macos-15
+            platform: mac
+            arch: x64
+          - os: macos-15
+            platform: mac
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Build desktop release artifacts
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run desktop:dist -- --${{ matrix.platform }} --${{ matrix.arch }}
+      - name: Linux packaged-window smoke
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xvfb
+          xvfb-run --auto-servernum npm run desktop-package-smoke -- dist/desktop/linux-unpacked/novi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: novi-${{ matrix.platform }}-${{ matrix.arch }}-unsigned
+          path: dist/desktop/**
+          if-no-files-found: error
+          retention-days: 7
+
+  container:
+    name: Container SBOM and vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build production image
+        run: docker build --tag novi-ci:${{ github.sha }} .
+      - name: Generate image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: novi-ci:${{ github.sha }}
+          format: cyclonedx-json
+          output-file: novi-image.cyclonedx.json
+          artifact-name: novi-image-sbom
+          syft-version: 1.51.0
+      - name: Scan image
+        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
+        with:
+          image: novi-ci:${{ github.sha }}
+          fail-build: true
+          severity-cutoff: high
+          only-fixed: true
+          output-format: json
+          output-file: novi-image-grype.json
+          grype-version: 0.117.0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: novi-image-scan
+          path: novi-image-grype.json
+          if-no-files-found: error
+          retention-days: 30
