@@ -5,6 +5,7 @@ import { validateGraphConfiguration } from '../src/graph-store.mjs';
 import { validatePaymentConfiguration } from '../src/payments.mjs';
 import { validateOidcConfiguration } from '../src/oidc.mjs';
 import { validateSourceAdapterConfiguration } from '../src/source-adapters.mjs';
+import { LOCAL_MONTHLY_GENERATIONS, localMonthlyGenerationLimit } from '../src/billing.mjs';
 
 const required = ['README.md', 'openapi.yaml', 'docs/PRD.md', 'docs/SRS.md', 'docs/ARCHITECTURE.md', 'docs/DETAILED_DESIGN.md', 'docs/GOAL_TRACEABILITY.md', 'docs/COMMERCIAL_READINESS.md', 'docs/RELEASE.md', 'Dockerfile', '.env.example', '.nvmrc', 'package-lock.json'];
 for (const file of required) await access(file);
@@ -14,6 +15,7 @@ if (packageJson.engines?.node !== '>=22.12.0' || packageJson.scripts['predesktop
 if (!/^22\.22\.2\s*$/.test(await readFile('.nvmrc', 'utf8'))) throw new Error('.nvmrc must pin the verified Node 22.22.2 build runtime');
 if (packageJson.main !== 'desktop/main.cjs' || !packageJson.build?.appId || !packageJson.build?.mac || !packageJson.build?.win || !packageJson.build?.linux) throw new Error('Cross-platform Electron packaging configuration is required');
 if (!packageJson.dependencies?.pg) throw new Error('PostgreSQL runtime dependency is required');
+if (LOCAL_MONTHLY_GENERATIONS.development !== 1000 || LOCAL_MONTHLY_GENERATIONS.release !== 100 || localMonthlyGenerationLimit({}) !== 1000 || localMonthlyGenerationLimit({ NODE_ENV: 'production' }) !== 100 || localMonthlyGenerationLimit({ NOVI_RELEASE_BUILD: 'true' }) !== 100) throw new Error('Local generation quotas must be 1000 for development and 100 for releases');
 const lock = JSON.parse(await readFile('package-lock.json', 'utf8'));
 if (lock.lockfileVersion < 3) throw new Error('npm lockfileVersion 3 or newer is required');
 const dockerfile = await readFile('Dockerfile', 'utf8');

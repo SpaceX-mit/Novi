@@ -5,6 +5,8 @@ export const PLANS = {
   enterprise: { label: 'Enterprise', monthlyPriceUsd: 1000, priceQualifier: 'starting at', audience: 'R&D teams and governed knowledge programs', monthlyGenerations: 1000, monthlySourceQueries: 5000 },
 };
 
+export const LOCAL_MONTHLY_GENERATIONS = Object.freeze({ development: 1000, release: 100 });
+
 const period = () => new Date().toISOString().slice(0, 7);
 
 export function usageFor(state, tenantId) {
@@ -15,9 +17,20 @@ export function usageFor(state, tenantId) {
 
 export function planFor(user) { return PLANS[user.plan] ? user.plan : 'free'; }
 
-export function consumeGeneration(state, user) {
+export function localMonthlyGenerationLimit(env = process.env) {
+  return env.NODE_ENV === 'production' || env.NOVI_RELEASE_BUILD === 'true'
+    ? LOCAL_MONTHLY_GENERATIONS.release
+    : LOCAL_MONTHLY_GENERATIONS.development;
+}
+
+export function limitsFor(user, env = process.env) {
+  const limits = PLANS[planFor(user)];
+  return user.tenantId === 'local' ? { ...limits, monthlyGenerations: localMonthlyGenerationLimit(env) } : limits;
+}
+
+export function consumeGeneration(state, user, env = process.env) {
   const plan = planFor(user);
-  const limits = PLANS[plan];
+  const limits = limitsFor(user, env);
   const usage = usageFor(state, user.tenantId);
   if (usage.generations >= limits.monthlyGenerations) return { allowed: false, plan, usage, limits };
   const existing = (state.usage || []).find((entry) => entry.tenantId === user.tenantId && entry.period === usage.period);
@@ -48,5 +61,5 @@ export function refundSourceQuery(state, user, chargedPeriod = period()) {
 export function billingSnapshot(state, user) {
   const plan = planFor(user);
   const subscription = (state.subscriptions || []).find((item) => item.tenantId === user.tenantId) || { status: 'not_configured', plan: 'free' };
-  return { plan, planLabel: PLANS[plan].label, limits: PLANS[plan], catalog: Object.entries(PLANS).map(([id, value]) => ({ id, ...value })), usage: usageFor(state, user.tenantId), period: period(), paymentProvider: process.env.NOVI_PAYMENT_CHECKOUT_URL ? 'configured' : 'not_configured', subscription };
+  return { plan, planLabel: PLANS[plan].label, limits: limitsFor(user), catalog: Object.entries(PLANS).map(([id, value]) => ({ id, ...value })), usage: usageFor(state, user.tenantId), period: period(), paymentProvider: process.env.NOVI_PAYMENT_CHECKOUT_URL ? 'configured' : 'not_configured', subscription };
 }

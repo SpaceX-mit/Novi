@@ -75,6 +75,8 @@ npm run desktop
 
 该命令会启动 Electron、内置本地服务和应用窗口。Linux 上项目与 `node_modules` 应位于 ext4 等支持 Unix owner/mode/setuid 的文件系统；正式启动不会默认关闭 Chromium sandbox。
 
+未启用认证的本地开发租户每月允许 1000 次生成，便于持续调试；`NODE_ENV=production` 的 Web 服务和 electron-builder 打包后的桌面制品自动收紧为每月 100 次。该边界只适用于 `tenantId=local`，不会改变 Free/Personal/Pro/Enterprise 登录账户的套餐额度；不得通过修改本地开发上限改变正式套餐。
+
 生成 Linux x64 目录或 AppImage：
 
 ```bash

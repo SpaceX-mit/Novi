@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { JsonStore } from '../src/store.mjs';
 import { artifactToLatex, artifactToMarkdown, generateArtifact } from '../src/engine.mjs';
-import { PLANS, consumeGeneration, consumeSourceQuery } from '../src/billing.mjs';
+import { LOCAL_MONTHLY_GENERATIONS, PLANS, consumeGeneration, consumeSourceQuery, limitsFor, localMonthlyGenerationLimit } from '../src/billing.mjs';
 import { refundGeneration, refundSourceQuery } from '../src/billing.mjs';
 import { completeArtifact } from '../src/model.mjs';
 import { createServer } from '../server.mjs';
@@ -1508,6 +1508,24 @@ test('billing enforces monthly generation and source-query limits', () => {
   assert.equal(consumeGeneration(state, user).allowed, false);
   for (let i = 0; i < PLANS.free.monthlySourceQueries; i += 1) assert.equal(consumeSourceQuery(state, user).allowed, true);
   assert.equal(consumeSourceQuery(state, user).allowed, false);
+});
+
+test('local development and release generation quotas stay distinct from account plans', () => {
+  const localUser = { tenantId: 'local', plan: 'free' };
+  const accountUser = { tenantId: 'tenant', plan: 'free' };
+  assert.equal(localMonthlyGenerationLimit({}), LOCAL_MONTHLY_GENERATIONS.development);
+  assert.equal(localMonthlyGenerationLimit({ NODE_ENV: 'production' }), LOCAL_MONTHLY_GENERATIONS.release);
+  assert.equal(localMonthlyGenerationLimit({ NOVI_RELEASE_BUILD: 'true' }), LOCAL_MONTHLY_GENERATIONS.release);
+  assert.equal(limitsFor(localUser, {}).monthlyGenerations, 1000);
+  assert.equal(limitsFor(localUser, { NOVI_RELEASE_BUILD: 'true' }).monthlyGenerations, 100);
+  assert.equal(limitsFor(accountUser, {}).monthlyGenerations, PLANS.free.monthlyGenerations);
+
+  const development = { usage: [{ tenantId: 'local', period: new Date().toISOString().slice(0, 7), generations: 999, sourceQueries: 0 }] };
+  assert.equal(consumeGeneration(development, localUser, {}).allowed, true);
+  assert.equal(consumeGeneration(development, localUser, {}).allowed, false);
+  const release = { usage: [{ tenantId: 'local', period: new Date().toISOString().slice(0, 7), generations: 99, sourceQueries: 0 }] };
+  assert.equal(consumeGeneration(release, localUser, { NOVI_RELEASE_BUILD: 'true' }).allowed, true);
+  assert.equal(consumeGeneration(release, localUser, { NOVI_RELEASE_BUILD: 'true' }).allowed, false);
 });
 
 test('billing refunds the period that was charged, not the current period', () => {

@@ -1,6 +1,6 @@
 # Novi 实现进度
 
-最近更新：2026-08-14
+最近更新：2026-08-17
 
 ## 当前结论
 
@@ -14,7 +14,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 | --- | --- | --- |
 | 核心产品 | Knowledge Builder、Deep Research、Paper Author；成果版本、导出、Research/Knowledge/Writing/Review provenance | 默认测试与浏览器核心旅程覆盖 |
 | Web 与 API | 共享 REST API/UI、工作区、知识导入与检索、异步 Job/Agent 模式与阶段、来源刷新、成果历史、Provider/Tools/MCP/Skills/Plugins 设置、指标 | OpenAPI 3.1 契约共 46 paths / 58 operations；语法检查覆盖 46 modules |
-| 账户与商业边界 | Cookie-only Web 会话、OIDC 边界、组织与 RBAC、配额、支付 provider 边界、审计与生命周期取消 | 本地 HTTP/provider 契约和领域测试通过；未配置真实支付 provider 时明确返回 503，不创建模拟订单 |
+| 账户与商业边界 | Cookie-only Web 会话、OIDC 边界、组织与 RBAC、配额、支付 provider 边界、审计与生命周期取消；本地开发租户每月 1000 次生成，生产/打包态自动收紧为 100 次 | 本地 HTTP/provider 契约和领域测试通过；登录账户套餐额度保持独立；未配置真实支付 provider 时明确返回 503，不创建模拟订单 |
 | 知识与生成 | 文本/Web/PDF/GitHub 导入、离线向量、RAG 上下文、来源连接器、Browser Agent/MCP 接口、连续更新 | 本地契约、集成和浏览器 smoke 已覆盖；真实来源仍需生产级人工核验 |
 | Agent Runtime | 意图路由的 Workflow、ReAct、Plan & Execute、Supervisor 四模式 LangGraph.js StateGraph；controller/阶段 fallback 可运行中切换模式，最多 8 个 Specialist 步骤；字段/形状校验、token、模式历史、计划和 Job 进度可追溯 | 本地 OpenAI-compatible HTTP 验证四种模式和 ReAct → Plan & Execute 运行中切换；72 tests passed + 1 PostgreSQL 条件跳过；Chromium 验证模式显示 |
 | Agent Session | 项目默认 Session、会话 API、同步/异步消息、active run、Job/Artifact 关联、隔离/恢复/清理；Web 左栏 Session、中央对话与 mode composer、右栏 Files/LLM Wiki/Document，viewer 只读 | Session 领域/HTTP/恢复测试通过；1360×900 与 390×844 Chromium 完整旅程验证 Session 创建/删除、Generate now、消息/Artifact、inspector 与 RBAC |
@@ -27,7 +27,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 | Web/容器交付 | Web 本地运行、Docker 多阶段非 root 运行、健康与就绪检查 | Docker 镜像已构建并检查；最近记录的镜像为 `sha256:5af027f80df589bc4f7fe746e3464669576e6c5bf28a3b8fd3b9300f7f0e0cb1` |
 | Electron 构建兼容 | Node.js 商业开发基线设为 22.12+，`.nvmrc` 固定 22.22.2，desktop lifecycle 增加版本预检 | 已消除旧 Node 加载 `@noble/hashes` 时的 `ERR_REQUIRE_ESM` |
 | Linux 桌面制品 | electron-builder 配置、安全 BrowserWindow、Linux unpacked/AppImage 构建与打包态 smoke | AppImage 已生成；最近记录 SHA-256 为 `b956734a2233861e8feb160ae7941142bb87a80559217f33efd715f5a403016d` |
-| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 最近记录：79 passed + 1 PostgreSQL 条件跳过；46 个 JavaScript 模块语法通过；OpenAPI 46 paths / 58 operations；锁文件 SBOM 422 components / 129 runtime；desktop/mobile 浏览器、Provider 与存储契约通过 |
+| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 最近记录：80 passed + 1 PostgreSQL 条件跳过；46 个 JavaScript 模块语法通过；OpenAPI 46 paths / 58 operations；锁文件 SBOM 422 components / 129 runtime；开发/打包 Electron、desktop/mobile 浏览器、Provider 与存储契约通过 |
 
 ## 未完成
 
@@ -62,6 +62,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 | `npm run desktop:dist` 后没有出现 UI | `desktop:dist` 是制品构建命令，只生成安装包，不负责启动应用 | 已澄清：开发启动使用 `npm run desktop`，构建后需单独运行产物 |
 | `chrome-sandbox` 即使执行 `chmod 4755` 仍显示 `777` | `/data` 为 `fuseblk`/NTFS，不保存 Linux setuid 权限；Ubuntu AppArmor 同时限制非特权 user namespace | 环境待处理：推荐迁移到 ext4；或使用 README 中 root 管理的 `/opt` runtime。不得把正式启动默认改成 `--no-sandbox` |
 | MiniMax 表单填写后测试显示 `No active LLM provider configured` | 原 UI 的 Test 只测试已激活配置，不保存刚填写的表单；状态文件确认 `llmProviderConfigs` 为空 | 已修复：按钮改为 `Save & test`，先 PUT 加密保存/激活当前表单，再 POST 测试连接；已暴露的旧 Key 必须在供应商侧轮换 |
+| 桌面手动测试提示达到本月限制次数 | 未认证桌面租户沿用 Free Preview 每月 5 次生成额度，开发测试很快耗尽 | 已修复：`tenantId=local` 在开发态为 1000 次；生产 Web 或 Electron 打包态自动为 100 次，登录账户套餐额度不变 |
 
 ## 下一步优先级
 
@@ -72,6 +73,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 
 ## 更新记录
 
+- 2026-08-17：调整未认证本地租户的生成配额：源码开发运行每月 1000 次，`NODE_ENV=production` Web 和 `app.isPackaged` Electron 制品自动使用每月 100 次；Free/Personal/Pro/Enterprise 登录账户套餐保持原值。补充开发/发布边界和 Electron 窗口断言，并将发布后 `/api/billing` 100 次核验写入发布手册。验证：`npm test` 80 passed + 1 PostgreSQL 条件跳过，`npm run check` 46 modules，`npm run openapi-check` 46 paths / 58 operations，`npm run browser-smoke`、`npm run release-check`、图形会话中的 `npm run desktop-smoke`、`npm run desktop:dir -- --linux --x64` 和真实 `linux-unpacked` package smoke 均通过。
 - 2026-08-14：完成 Agent / Workspace 八项目标的逐项审计并补充 `docs/GOAL_TRACEABILITY.md`：四模式意图路由和运行中重新调度、当前模式显示、内置/自定义 Tool、MCP、Skills、声明式 Plugins、默认 Conversation Session、右侧 Files/LLM Wiki/Document、左侧 Customize 与 Generate now Session 旅程均有源码和自动化直接证据。验证：`npm test` 79 passed + 1 PostgreSQL 条件跳过、`npm run check` 46 modules、`npm run openapi-check` 46 paths / 58 operations、desktop/mobile `npm run browser-smoke` 和 `npm run release-check` 通过。OpenHands 仅作为交互与能力分层参考，Novi 保持独立的 LangGraph.js、有界权限和租户隔离实现。生产数据库 checkpoint、远程可执行 Plugin marketplace 和真实供应商验收仍作为后续项，不属于这八项本地功能完成判定。
 - 2026-08-14：完成声明式 Agent Plugins：Customize/Plugins 可配置最多 10 个版本化 manifest，每次按显式 `/plugin`、always、触发词选择 2 个，组合最多 5 个现有 Skill 与 10 个已授权工具；运行时工具引用再次与 registry 取交集，失效引用不获权限。Plugin 不下载包、不执行租户代码、不携带密钥；Job、Session、Artifact 固化实际组合和 manifest SHA-256。引用目录在 Tools/MCP/Skills 保存后即时刷新。验证：`npm test` 79 passed + 1 PostgreSQL 条件跳过、`npm run check` 46 modules、`npm run openapi-check` 46 paths / 58 operations、desktop/mobile browser smoke、release-check/SBOM 通过。远程 marketplace、签名可执行包与持久 checkpoint 仍未实现。
 - 2026-08-14：完成组织 Agent Skills 纵向闭环：Customize/Skills 可由 owner/admin 配置最多 20 个租户 playbook，限制名称、用途、4000 字符指令、产品范围、always/auto 和最多 12 个触发词；LangGraph 在运行开始按显式 `/skill name`、always、触发词确定性选择最多 3 个，注入 Planner、ReAct/Supervisor Controller 和四个 Specialist。Skill 不增加工具/来源权限，不覆盖 evidence/schema/运行硬上限；无 Web Provider 时不记录虚假应用。实际选择进入异步 Job、Session active run/完成消息和 Artifact runtime，成果只固化元数据、匹配原因和指令 SHA-256。配置、RBAC、账户导出/删除、JSON/PostgreSQL、备份恢复和 Web provenance 已覆盖。验证：`npm test` 78 passed + 1 PostgreSQL 条件跳过、`npm run check` 45 modules、`npm run openapi-check` 45 paths / 56 operations、desktop/mobile `npm run browser-smoke`、`npm run release-check` 与 SBOM 通过。Plugins 与数据库 checkpoint 仍未实现。

@@ -41,8 +41,9 @@ async function createWindow() {
   if (!hasSingleInstanceLock) return;
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) port = await freePort();
   const dataFile = process.env.NOVI_DATA_FILE || path.join(app.getPath('userData'), 'novi.json');
+  const releaseBuild = app.isPackaged || process.env.NOVI_RELEASE_BUILD === 'true';
   // Electron's executable needs this flag when reused as the Node runtime.
-  serverProcess = spawn(process.execPath, [path.join(__dirname, '..', 'server.mjs')], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', PORT: String(port), HOST: '127.0.0.1', NOVI_DATA_FILE: dataFile }, stdio: 'inherit' });
+  serverProcess = spawn(process.execPath, [path.join(__dirname, '..', 'server.mjs')], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', NOVI_RELEASE_BUILD: String(releaseBuild), PORT: String(port), HOST: '127.0.0.1', NOVI_DATA_FILE: dataFile }, stdio: 'inherit' });
   await waitForServer(`http://127.0.0.1:${port}/api/health`);
   mainWindow = new BrowserWindow({ width: 1360, height: 900, minWidth: 900, minHeight: 640, title: 'Novi', backgroundColor: '#f7f8fa', webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
   await mainWindow.loadURL(`http://127.0.0.1:${port}`);
@@ -56,8 +57,9 @@ async function createWindow() {
     } catch { event.preventDefault(); }
   });
   if (process.env.NOVI_DESKTOP_SMOKE === 'true') {
-    const result = await mainWindow.webContents.executeJavaScript(`({ title: document.title, ready: Boolean(document.querySelector('#new-project') && document.querySelector('#source-search')) })`);
-    if (!result.ready || !String(result.title).includes('Novi')) throw new Error('Novi desktop DOM smoke failed');
+    const result = await mainWindow.webContents.executeJavaScript(`fetch('/api/billing').then((response) => response.json()).then((billing) => ({ title: document.title, ready: Boolean(document.querySelector('#new-project') && document.querySelector('#source-search')), monthlyGenerations: billing.limits.monthlyGenerations }))`);
+    const expectedMonthlyGenerations = releaseBuild ? 100 : 1000;
+    if (!result.ready || !String(result.title).includes('Novi') || result.monthlyGenerations !== expectedMonthlyGenerations) throw new Error('Novi desktop DOM or quota smoke failed');
     console.log('desktop-smoke: Electron service, secure window and shared UI loaded');
     mainWindow.close(); app.quit();
   }
