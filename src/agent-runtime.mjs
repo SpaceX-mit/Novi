@@ -273,7 +273,8 @@ function referenceNode(retriever, onStage) {
     if (retriever) {
       try {
         const result = await retriever({ expertGoal: state.content.expertGoal, project: state.project, prompt: state.prompt, language: state.language, query });
-        sources = Array.isArray(result) ? result : result?.sources || [];
+        const discovered = Array.isArray(result) ? result : result?.sources || [];
+        sources = mergeUnique(sources, discovered, (item) => String(item.url || `${item.name}:${item.publishedAt || ''}`));
         status = result?.status || 'completed';
       } catch (retrievalError) {
         status = 'fallback';

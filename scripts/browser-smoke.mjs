@@ -97,17 +97,17 @@ try {
   if (preservedComposer.prompt !== 'Preserve this draft' || preservedComposer.mode !== 'plan-execute') throw new Error(`Composer state was lost while switching inspector tabs: ${JSON.stringify(preservedComposer)}`);
   const chatProvider = await evaluate(`fetch('/api/llm/provider', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'custom', model: 'browser-chat', baseUrl: ${JSON.stringify(`http://127.0.0.1:${modelServer.address().port}/v1`)}, apiKey: 'fixture' }) }).then(async (response) => ({ status: response.status, body: await response.json() }))`);
   if (chatProvider.status !== 200) throw new Error(`Browser chat provider setup failed: ${JSON.stringify(chatProvider)}`);
-  await evaluate(`(() => { const prompt = document.querySelector('#agent-prompt'); const mode = document.querySelector('#agent-mode'); prompt.value = 'Answer through the configured Harness'; prompt.dispatchEvent(new Event('input', { bubbles: true })); mode.value = 'workflow'; mode.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('#agent-composer').requestSubmit(); })()`);
-  await waitFor(`document.querySelectorAll('.agent-message').length === 3 && [...document.querySelectorAll('.agent-message.assistant p')].some((node) => node.textContent.includes('Browser Harness response'))`, 15_000);
-  const conversationUi = await evaluate(`(async () => { const projects = await (await fetch('/api/projects')).json(); const project = projects.projects.find((item) => item.title === 'Browser smoke workspace'); return { artifacts: project.artifacts.length, artifactLinks: document.querySelectorAll('.message-artifact').length, lastKind: document.querySelector('.agent-message:last-child').className }; })()`);
-  if (conversationUi.artifacts !== 0 || conversationUi.artifactLinks !== 0 || !conversationUi.lastKind.includes('message')) throw new Error(`Composer did not use the independent LLM conversation path: ${JSON.stringify(conversationUi)}`);
+  await evaluate(`(() => { const prompt = document.querySelector('#agent-prompt'); const mode = document.querySelector('#agent-mode'); prompt.value = 'Research authoritative sources and improve this Wiki'; prompt.dispatchEvent(new Event('input', { bubbles: true })); mode.value = 'workflow'; mode.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('#agent-composer').requestSubmit(); })()`);
+  await waitFor(`document.querySelectorAll('.agent-message').length === 3 && document.querySelector('.message-artifact') !== null`, 15_000);
+  const conversationUi = await evaluate(`(async () => { const projects = await (await fetch('/api/projects')).json(); const project = projects.projects.find((item) => item.title === 'Browser smoke workspace'); const knowledge = await (await fetch('/api/projects/' + encodeURIComponent(project.id) + '/knowledge')).json(); return { artifacts: project.artifacts.length, artifactLinks: document.querySelectorAll('.message-artifact').length, lastKind: document.querySelector('.agent-message:last-child').className, wikiDocuments: knowledge.documents.filter((document) => document.sourceKind === 'agent-wiki').length }; })()`);
+  if (conversationUi.artifacts !== 1 || conversationUi.artifactLinks !== 1 || !conversationUi.lastKind.includes('artifact') || conversationUi.wikiDocuments !== 1) throw new Error(`Composer did not create and index a cumulative Wiki artifact: ${JSON.stringify(conversationUi)}`);
   await evaluate(`fetch('/api/llm/provider', { method: 'DELETE' })`);
   await evaluate(`(() => { const prompt = document.querySelector('#agent-prompt'); const mode = document.querySelector('#agent-mode'); prompt.value = ''; prompt.dispatchEvent(new Event('input', { bubbles: true })); mode.value = 'auto'; mode.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('[data-context-panel="wiki"]').click(); })()`);
-  await evaluate(`document.querySelector('#generate-empty').click()`);
+  await evaluate(`document.querySelector('#generate').click()`);
   await waitFor(`document.querySelector('#agent-run-status') !== null && document.querySelector('#agent-run-mode').textContent.trim().length > 0`);
   const activeMode = await evaluate(`document.querySelector('#agent-run-mode').textContent.trim()`);
   if (activeMode !== 'Workflow') throw new Error(`Agent execution mode is not visible or was routed incorrectly: ${activeMode}`);
-  if (!await evaluate(`document.querySelector('#generate-empty')?.disabled === true`)) throw new Error('Empty workspace generate action remains enabled during an active Agent run');
+  if (!await evaluate(`document.querySelector('#generate')?.disabled === true`)) throw new Error('Workspace generate action remains enabled during an active Agent run');
   if (process.env.NOVI_BROWSER_AGENT_MODE_SCREENSHOT) {
     const screenshot = await command('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     await writeFile(process.env.NOVI_BROWSER_AGENT_MODE_SCREENSHOT, Buffer.from(screenshot.data, 'base64'));
@@ -150,12 +150,12 @@ try {
   await evaluate(`document.querySelector('#knowledge-close').click()`);
   await waitFor(`document.querySelector('#knowledge-modal').classList.contains('hidden')`);
   await evaluate(`document.querySelector('#generate').click()`);
-  await waitFor(`document.querySelectorAll('#artifact-version option').length === 2`, 15_000);
+  await waitFor(`document.querySelectorAll('#artifact-version option').length === 3`, 15_000);
   await waitFor(`document.querySelector('.artifact-knowledge-context') !== null && document.querySelector('.artifact-knowledge-context').textContent.includes('Browser security notes')`);
   await evaluate(`document.querySelector('#compare-version').click()`);
   await waitFor(`document.querySelector('.version-comparison') !== null`);
   const versionResult = await evaluate(`({ count: document.querySelectorAll('#artifact-version option').length, comparison: document.querySelector('.version-comparison').textContent })`);
-  if (versionResult.count !== 2 || !versionResult.comparison.includes('Version 2 compared with Version 1') || !versionResult.comparison.includes('Workspace knowledge used')) throw new Error(`Artifact version comparison failed: ${JSON.stringify(versionResult)}`);
+  if (versionResult.count !== 3 || !versionResult.comparison.includes('Version 3 compared with Version 2') || !versionResult.comparison.includes('Workspace knowledge used')) throw new Error(`Artifact version comparison failed: ${JSON.stringify(versionResult)}`);
   const networkFetch = global.fetch;
   global.fetch = async (input) => {
     const url = String(input);
@@ -165,19 +165,19 @@ try {
   let continuousUpdate;
   try {
     await evaluate(`document.querySelector('#refresh-sources').click()`);
-    await waitFor(`document.querySelectorAll('#artifact-version option').length === 3`, 15_000);
+    await waitFor(`document.querySelectorAll('#artifact-version option').length === 4`, 15_000);
     await evaluate(`document.querySelector('#show-snapshots').click()`);
     await waitFor(`!document.querySelector('#snapshot-modal').classList.contains('hidden') && document.querySelector('#snapshot-list').textContent.includes('Workspace updated')`);
     continuousUpdate = await evaluate(`({ versions: document.querySelectorAll('#artifact-version option').length, history: document.querySelector('#snapshot-list').textContent })`);
-    if (continuousUpdate.versions !== 3 || !continuousUpdate.history.includes('Changed') || !continuousUpdate.history.includes('Workspace updated')) throw new Error(`Continuous update UI failed: ${JSON.stringify(continuousUpdate)}`);
+    if (continuousUpdate.versions !== 4 || !continuousUpdate.history.includes('Changed') || !continuousUpdate.history.includes('Workspace updated')) throw new Error(`Continuous update UI failed: ${JSON.stringify(continuousUpdate)}`);
     await evaluate(`document.querySelector('#snapshot-close').click()`);
   } finally { global.fetch = networkFetch; }
   await evaluate(`document.querySelector('#knowledge-library').click()`);
   await waitFor(`!document.querySelector('#knowledge-modal').classList.contains('hidden') && document.querySelector('[data-delete-document]') !== null`);
   await evaluate(`(() => { window.confirm = () => true; document.querySelector('[data-delete-document]').click(); })()`);
-  await waitFor(`document.querySelector('#knowledge-results').textContent.includes('No imported knowledge yet')`);
-  const knowledgeDelete = await evaluate(`(async () => { const response = await fetch('/api/projects/' + encodeURIComponent(${JSON.stringify(knowledgeImport.projectId)}) + '/knowledge?q=sandbox'); const payload = await response.json(); return { status: response.status, results: payload.results.length, retained: document.querySelector('.artifact-knowledge-context')?.textContent.includes('Browser security notes') || false }; })()`);
-  if (knowledgeDelete.status !== 200 || knowledgeDelete.results !== 0 || !knowledgeDelete.retained) throw new Error(`Knowledge deletion failed: ${JSON.stringify(knowledgeDelete)}`);
+  await waitFor(`document.querySelector('#knowledge-results').textContent.includes('Wiki iteration') && !document.querySelector('#knowledge-results').textContent.includes('Browser security notes')`);
+  const knowledgeDelete = await evaluate(`(async () => { const response = await fetch('/api/projects/' + encodeURIComponent(${JSON.stringify(knowledgeImport.projectId)}) + '/knowledge?q=adversarial%20recovery%20tests'); const payload = await response.json(); return { status: response.status, documents: payload.results.map((item) => item.document), retained: document.querySelector('.artifact-knowledge-context')?.textContent.includes('Browser security notes') || false }; })()`);
+  if (knowledgeDelete.status !== 200 || knowledgeDelete.documents.includes('Browser security notes') || !knowledgeDelete.documents.some((title) => title.startsWith('Wiki iteration')) || !knowledgeDelete.retained) throw new Error(`Knowledge deletion failed: ${JSON.stringify(knowledgeDelete)}`);
   await evaluate(`document.querySelector('#knowledge-close').click()`);
   await waitFor(`document.querySelector('#knowledge-modal').classList.contains('hidden')`);
   if (process.env.NOVI_BROWSER_SCREENSHOT) {
@@ -207,7 +207,7 @@ try {
   await waitFor(`document.querySelector('.artifact-content').textContent.includes('Interview preparation') && document.querySelector('.artifact-content').textContent.includes('Capstone project')`);
   await evaluate(`document.querySelector('[data-artifact-tab="graph"]').click()`);
   await waitFor(`document.querySelectorAll('.artifact-content .node').length >= 10`);
-  console.log(`browser-smoke: created=${result.title}, status=${result.status}, pricing=ready, agent-session=ready, agent-chat=llm-harness, agent-mode=${activeMode}, agent-skills=ready, agent-plugins=ready, viewer-ui=ready, knowledge-search=ready, rag-context=ready, versions=${versionResult.count}, comparison=ready, continuous-update=ready, knowledge-delete=ready, markdown-export=${result.exportStatus}, paper-svg=ready, expert-wiki=ready, paper-gap=ready, publication-templates=ready, research-suite=ready`);
+  console.log(`browser-smoke: created=${result.title}, status=${result.status}, pricing=ready, agent-session=ready, conversation-wiki=versioned, agent-mode=${activeMode}, agent-skills=ready, agent-plugins=ready, viewer-ui=ready, knowledge-search=ready, rag-context=ready, versions=${versionResult.count}, comparison=ready, continuous-update=ready, knowledge-delete=ready, markdown-export=${result.exportStatus}, paper-svg=ready, expert-wiki=ready, paper-gap=ready, publication-templates=ready, research-suite=ready`);
 } finally {
   socket.close(); chrome.kill('SIGTERM'); await new Promise((resolve) => server.close(resolve)); await new Promise((resolve) => modelServer.close(resolve));
   for (const [key, value] of Object.entries(previous)) { const name = { auth: 'NOVI_AUTH_REQUIRED', worker: 'NOVI_JOB_WORKER', refresh: 'NOVI_REFRESH_WORKER', verify: 'NOVI_VERIFY_SOURCES', file: 'NOVI_DATA_FILE' }[key]; if (value === undefined) delete process.env[name]; else process.env[name] = value; }

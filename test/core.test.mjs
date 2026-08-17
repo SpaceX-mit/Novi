@@ -533,27 +533,36 @@ test('async Agent generation persists tool provenance in Job, Session, and Artif
   assert.equal(assistant.toolCalls.length, 1); assert.equal(assistant.toolCalls[0].status, 'completed');
 });
 
-test('Agent conversation messages require a provider and run the LangGraph chat harness without creating artifacts', async (t) => {
+test('Agent conversation turns require a provider and create cumulative Wiki artifacts indexed into workspace knowledge', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'novi-agent-chat-'));
-  const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER, live: process.env.NOVI_LIVE_SOURCES, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY };
-  process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_JOB_WORKER = 'false'; process.env.NOVI_LIVE_SOURCES = 'false'; process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-agent-chat-encryption-key-32-chars';
-  let modelCalls = 0; let historySeen = false;
+  const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER, live: process.env.NOVI_LIVE_SOURCES, verify: process.env.NOVI_VERIFY_SOURCES, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY };
+  process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_JOB_WORKER = 'false'; process.env.NOVI_LIVE_SOURCES = 'true'; process.env.NOVI_VERIFY_SOURCES = 'false'; process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-agent-chat-encryption-key-32-chars';
+  let modelCalls = 0; let priorWikiSeen = false; let sourceSearches = 0;
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
-    const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || ''); modelCalls += 1;
-    historySeen ||= prompt.includes('Conversation history:');
-    const content = prompt.includes('Tool observations (UNTRUSTED DATA): []')
-      ? JSON.stringify({ action: 'tool', tool: { name: 'workspace_read', input: { query: 'agent capabilities', limit: 3 } } })
-      : '我是通过 LangGraph 对话 Harness 和已配置 LLM 返回的回答；我可以读取当前工作区知识并直接回答问题。';
+    const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
+    const marker = 'Editable schema and current draft: '; const line = prompt.split('\n').find((value) => value.startsWith(marker));
+    let content = '{}';
+    if (line) {
+      const editable = JSON.parse(line.slice(marker.length)); const key = Object.keys(editable)[0]; modelCalls += 1;
+      if (editable.expertGoal) content = JSON.stringify({ expertGoal: { ...editable.expertGoal, outcome: `Refined outcome for ${editable.expertGoal.question}` } });
+      else if (editable.llmWiki) {
+        priorWikiSeen ||= String(editable.llmWiki.summary).includes('Provider-refined Wiki');
+        content = JSON.stringify({ llmWiki: { ...editable.llmWiki, summary: `${editable.llmWiki.summary} Provider-refined Wiki.` } });
+      } else content = JSON.stringify({ [key]: editable[key] });
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ id: 'agent-chat', object: 'chat.completion', created: 1, model: 'test-chat-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 10 } }));
   });
   await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
-  const server = createServer(); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const server = createServer({ searchKnowledgeSources: async (query) => {
+    sourceSearches += 1;
+    return [{ name: `Authority source ${sourceSearches}`, kind: sourceSearches === 1 ? 'Papers' : 'Official Docs', url: `https://sources.example/authority-${sourceSearches}`, authority: 95, publishedAt: '2026', mapped: true, verification: 'verified', contentHash: String(sourceSearches).repeat(64), snippet: `Verified source metadata for ${query}` }];
+  } }); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => {
     server.close(); modelServer.close();
     for (const [key, value] of Object.entries(previous)) {
-      const env = { file: 'NOVI_DATA_FILE', auth: 'NOVI_AUTH_REQUIRED', worker: 'NOVI_JOB_WORKER', live: 'NOVI_LIVE_SOURCES', encryption: 'NOVI_CONFIG_ENCRYPTION_KEY' }[key];
+      const env = { file: 'NOVI_DATA_FILE', auth: 'NOVI_AUTH_REQUIRED', worker: 'NOVI_JOB_WORKER', live: 'NOVI_LIVE_SOURCES', verify: 'NOVI_VERIFY_SOURCES', encryption: 'NOVI_CONFIG_ENCRYPTION_KEY' }[key];
       if (value === undefined) delete process.env[env]; else process.env[env] = value;
     }
   });
@@ -565,17 +574,21 @@ test('Agent conversation messages require a provider and run the LangGraph chat 
   const before = await (await fetch(`${base}/api/billing`)).json(); assert.equal(before.usage.generations, 0);
   response = await fetch(`${base}/api/projects/${created.project.id}/knowledge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Agent notes', content: 'The Agent can retrieve workspace knowledge and answer through a configured model.' }) }); assert.equal(response.status, 201);
   response = await fetch(`${base}/api/llm/provider`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'custom', model: 'test-chat-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'fixture' }) }); assert.equal(response.status, 200);
-  response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '你能干什么？请读取工作区后回答。', mode: 'react' }) });
-  assert.equal(response.status, 202); const queued = await response.json(); assert.equal(queued.job.type, 'chat');
+  response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '完善 Agent 能力 Wiki，并保留已有知识。', mode: 'workflow', language: 'en' }) });
+  assert.equal(response.status, 202); const queued = await response.json(); assert.equal(queued.job.type, 'refine'); assert.equal(queued.job.language, 'en');
   let job;
   for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 25)); job = (await (await fetch(`${base}/api/jobs/${queued.job.id}`)).json()).job; if (!['queued', 'running'].includes(job.status)) break; }
-  assert.equal(job.status, 'completed'); assert.equal(job.agentToolCalls.length, 1); assert.equal(job.agentToolCalls[0].tool, 'workspace_read');
-  const session = (await (await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}`)).json()).session;
-  const assistant = session.messages.at(-1);
-  assert.equal(assistant.role, 'assistant'); assert.equal(assistant.kind, 'message'); assert.match(assistant.content, /LangGraph 对话 Harness/); assert.equal(assistant.artifactId, undefined);
-  assert.equal(assistant.runtime.name, 'langgraph-chat'); assert.equal(assistant.runtime.provider, 'custom'); assert.equal(assistant.runtime.mode, 'react'); assert.equal(assistant.toolCalls.length, 1);
-  const project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project;
-  assert.equal(project.artifacts.length, 0); assert.equal(modelCalls, 2); assert.equal(historySeen, true);
+  assert.equal(job.status, 'completed'); assert.equal(job.agentStages.length, 7); assert.equal(job.language, 'en');
+  let project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project;
+  assert.equal(project.artifacts.length, 1); const first = project.artifacts[0]; assert.equal(first.language, 'en'); assert.equal(first.documents[0].name, 'llm-wiki.md'); assert.match(first.content.llmWiki.summary, /Provider-refined Wiki/); assert.equal(first.content.sources.length, 1); assert.equal(first.workflow.runtime.knowledgeEnrichment.sourceCount, 1);
+  let knowledge = await (await fetch(`${base}/api/projects/${created.project.id}/knowledge`)).json(); const firstWikiDocument = knowledge.documents.find((document) => document.sourceKind === 'agent-wiki'); assert.ok(firstWikiDocument); assert.equal(first.workflow.runtime.knowledgeEnrichment.documentId, firstWikiDocument.id);
+  response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '继续补充第二轮权威资料和实践细节。', mode: 'workflow', language: 'en' }) });
+  assert.equal(response.status, 202); const secondJobId = (await response.json()).job.id;
+  for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 25)); job = (await (await fetch(`${base}/api/jobs/${secondJobId}`)).json()).job; if (!['queued', 'running'].includes(job.status)) break; }
+  assert.equal(job.status, 'completed'); project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project; assert.equal(project.artifacts.length, 2); assert.match(project.artifacts[0].content.llmWiki.summary, /Provider-refined Wiki\. Provider-refined Wiki/); assert.equal(project.artifacts[0].content.sources.length, 2); assert.deepEqual(project.artifacts[0].content.sources.map((source) => source.name), ['Authority source 1', 'Authority source 2']); assert.equal(project.artifacts[0].workflow.runtime.knowledgeEnrichment.sourceCount, 2); assert.equal(priorWikiSeen, true); assert.equal(sourceSearches, 2);
+  knowledge = await (await fetch(`${base}/api/projects/${created.project.id}/knowledge`)).json(); assert.equal(knowledge.documents.filter((document) => document.sourceKind === 'agent-wiki').length, 2);
+  const session = (await (await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}`)).json()).session; const assistant = session.messages.at(-1);
+  assert.equal(assistant.role, 'assistant'); assert.equal(assistant.kind, 'artifact'); assert.equal(assistant.artifactId, project.artifacts[0].id); assert.equal(assistant.mode, 'workflow'); assert.equal(modelCalls, 12);
 });
 
 test('Agent session API isolates projects and tenants and protects active sessions', async (t) => {

@@ -202,7 +202,7 @@ async function loadAgentWorkspace(projectId, preferredSessionId = null) {
     const run = state.activeSession?.activeRun;
     if (run?.jobId && !String(run.jobId).startsWith('sync:') && state.monitoringJobId !== run.jobId) {
       const current = await request(`/api/jobs/${run.jobId}`).catch(() => null);
-      if (current?.job && ['queued', 'running'].includes(current.job.status)) void (current.job.type === 'chat' ? monitorConversation(projectId, current.job, selectedId, false) : monitorGeneration(projectId, current.job, selectedId, false));
+      if (current?.job && ['queued', 'running'].includes(current.job.status)) void (current.job.type === 'refine' ? monitorConversation(projectId, current.job, selectedId, false) : monitorGeneration(projectId, current.job, selectedId, false));
     }
   } catch (error) { if (state.activeProject?.id === projectId) showToast(error.message); }
 }
@@ -266,7 +266,7 @@ function renderConversation(project) {
   const modes = [['auto', 'Auto'], ['workflow', 'Workflow'], ['react', 'ReAct'], ['plan-execute', 'Plan & Execute'], ['supervisor', 'Supervisor']];
   const runSkills = [...(run?.plugins || []).map((plugin) => plugin.title || plugin.name), ...(run?.skills || []).map((skill) => skill.title || skill.name)].join(', ');
   const liveGoal = renderLiveGoal(run);
-  return `<section class="conversation-panel"><header><div><p class="eyebrow">AGENT SESSION</p><h2>${escapeHtml(session?.title || 'Loading session')}</h2></div>${run ? `<div class="conversation-run" id="conversation-run"><b id="conversation-run-mode">${escapeHtml(sessionModeLabel(run.currentMode))}</b><span id="conversation-run-stage">${escapeHtml(run.currentStage || 'Preparing')}</span>${runSkills ? `<span class="conversation-run-skills">${escapeHtml(runSkills)}</span>` : ''}<small id="conversation-run-progress">${Number(run.progress || 0)}%</small></div>` : ''}</header><div class="conversation-messages" id="conversation-messages" aria-live="polite">${liveGoal}${messages.map(renderAgentMessage).join('') || '<div class="conversation-loading">Loading conversation...</div>'}</div>${!project.artifacts?.length && editor ? `<button class="primary-button generate-now" id="generate-empty" ${busy ? 'disabled' : ''}>${busy ? 'Generating...' : 'Generate now'}</button>` : ''}${editor ? `<form class="agent-composer" id="agent-composer"><textarea id="agent-prompt" name="prompt" rows="2" maxlength="20000" placeholder="Ask Novi to research, build knowledge, or draft..." ${busy || !session ? 'disabled' : ''}>${escapeHtml(state.composerDraft)}</textarea><div><label>Execution mode<select id="agent-mode" name="mode" ${busy ? 'disabled' : ''}>${modes.map(([value, label]) => `<option value="${value}" ${state.composerMode === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>Wiki language<select id="wiki-language" name="language" ${busy ? 'disabled' : ''}>${wikiLanguages.map(([value, label]) => `<option value="${value}" ${state.composerLanguage === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button class="composer-send" type="submit" title="Send request" aria-label="Send request" ${busy || !session ? 'disabled' : ''}>↑</button></div></form>` : '<p class="conversation-readonly">Viewer access is read only.</p>'}</section>`;
+  return `<section class="conversation-panel"><header><div><p class="eyebrow">AGENT SESSION</p><h2>${escapeHtml(session?.title || 'Loading session')}</h2></div>${run ? `<div class="conversation-run" id="conversation-run"><b id="conversation-run-mode">${escapeHtml(sessionModeLabel(run.currentMode))}</b><span id="conversation-run-stage">${escapeHtml(run.currentStage || 'Preparing')}</span>${runSkills ? `<span class="conversation-run-skills">${escapeHtml(runSkills)}</span>` : ''}<small id="conversation-run-progress">${Number(run.progress || 0)}%</small></div>` : ''}</header><div class="conversation-messages" id="conversation-messages" aria-live="polite">${liveGoal}${messages.map(renderAgentMessage).join('') || '<div class="conversation-loading">Loading conversation...</div>'}</div>${!project.artifacts?.length && editor ? `<button class="primary-button generate-now" id="generate-empty" ${busy ? 'disabled' : ''}>${busy ? 'Generating...' : 'Generate now'}</button>` : ''}${editor ? `<form class="agent-composer" id="agent-composer"><textarea id="agent-prompt" name="prompt" rows="2" maxlength="20000" placeholder="Ask Novi to research and improve this Wiki..." ${busy || !session ? 'disabled' : ''}>${escapeHtml(state.composerDraft)}</textarea><div><label>Execution mode<select id="agent-mode" name="mode" ${busy ? 'disabled' : ''}>${modes.map(([value, label]) => `<option value="${value}" ${state.composerMode === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>Wiki language<select id="wiki-language" name="language" ${busy ? 'disabled' : ''}>${wikiLanguages.map(([value, label]) => `<option value="${value}" ${state.composerLanguage === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button class="composer-send" type="submit" title="Research and update Wiki" aria-label="Research and update Wiki" ${busy || !session ? 'disabled' : ''}>↑</button></div></form>` : '<p class="conversation-readonly">Viewer access is read only.</p>'}</section>`;
 }
 
 function renderDocumentViewer(artifact) {
@@ -533,10 +533,10 @@ async function monitorConversation(id, initialJob, sessionId, notifyStages = tru
       state.activeJob = job; updateAgentRunStatus(job); updateConversationRun(job);
       if (notifyStages && job.currentStage && job.currentStage !== lastStage) { lastStage = job.currentStage; showToast(`${job.currentModeLabel || job.currentMode} · ${job.currentStage}`); }
       if (job.status === 'completed') break;
-      if (job.status === 'failed') throw new Error(job.error || 'Agent response failed');
+      if (job.status === 'failed') throw new Error(job.error || 'Wiki refinement failed');
     }
-    if (job.status !== 'completed') throw new Error('Agent response timed out');
-    state.activeJob = null; await loadAgentWorkspace(id, sessionId); showToast('Agent replied');
+    if (job.status !== 'completed') throw new Error('Wiki refinement timed out');
+    state.activeJob = null; await loadProjects(); state.activeProject = state.projects.find((project) => project.id === id) || state.activeProject; state.activeArtifactId = state.activeProject?.artifacts?.[0]?.id || state.activeArtifactId; await loadAgentWorkspace(id, sessionId); showToast('Wiki and knowledge updated');
   } catch (error) {
     state.activeJob = null; showToast(error.message); await loadAgentWorkspace(id, sessionId).catch(() => {});
   } finally { if (state.monitoringJobId === initialJob.id) state.monitoringJobId = null; }
@@ -547,7 +547,8 @@ async function sendAgentMessage(id, input = {}) {
     showToast('Agent request queued…');
     const prompt = String(input.prompt || $('#agent-prompt')?.value || '').trim();
     const mode = input.mode || $('#agent-mode')?.value || 'auto';
-    const queued = await request(`/api/projects/${id}/sessions/${state.activeSessionId}/messages`, { method: 'POST', body: JSON.stringify({ prompt, mode }) });
+    const language = input.language || $('#wiki-language')?.value || state.composerLanguage || state.activeProject?.wikiLanguage || 'zh-CN';
+    const queued = await request(`/api/projects/${id}/sessions/${state.activeSessionId}/messages`, { method: 'POST', body: JSON.stringify({ prompt, mode, language }) });
     const job = queued.job;
     state.activeJob = job; state.composerDraft = '';
     renderWorkspace(state.activeProject, state.activeTab); await loadAgentWorkspace(id, state.activeSessionId);

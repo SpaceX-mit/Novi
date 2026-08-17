@@ -61,7 +61,7 @@ Web 中保存的租户配置优先于 `NOVI_LLM_BASE_URL`、`NOVI_LLM_API_KEY`�
 
 Skill 只在已配置 Web LLM Provider 的 LangGraph 运行中生效；完全离线的确定性生成不会伪装成已应用 Skill。Skill 指令会进入 Planner、ReAct/Supervisor controller 和 Research/Knowledge/Writing/Review prompt，但始终低于 Novi 的安全与数据边界：不能增加工具权限、添加来源、绕过字段 schema 或把 observation 变成 evidence。实际选择结果写入异步 Job、Session 和 Artifact，只固化 Skill 元数据、匹配原因与指令 SHA-256，不复制完整指令到成果 provenance。配置 API 为 `GET/PUT /api/agent/skills`；所有组织成员可审查会影响成果的指令，只有 owner/admin 可修改。
 
-Workspace 中的对话框与成果按钮是两条独立路径：发送对话调用 `POST /api/projects/:id/sessions/:sessionId/messages`，必须先在当前 Web/桌面实例中配置并激活 LLM Provider，由 LangGraph chat Harness 返回自然语言消息；ReAct、Plan & Execute 和 Supervisor 可使用已授权 Tool/MCP，但不会创建 Artifact。`Generate now`、`Generate asset` 和 `Regenerate` 调用成果生成 API，产出 Knowledge/Research/Paper Artifact；没有 Provider 时允许离线确定性成果，但不会把模板摘要伪装成 LLM 对话。Web 的 `data/novi.json` 与 Electron OS `userData/novi.json` 是独立状态，Provider 必须在实际使用的实例内 `Save & test`。
+Workspace Composer 是累积式研究入口：发送每一轮消息都会调用 `POST /api/projects/:id/sessions/:sessionId/messages`，以最新 Artifact 为编辑基线，依次执行 Goal、Reference Discovery、Research/Knowledge/Writing/Review 和 Finalizer，合并本轮新增权威来源，创建新的不可变 Artifact 与 `llm-wiki.md`。该 Markdown 同时以 `agent-wiki` 文档索引回当前 Workspace knowledge，下一轮会检索并继续完善；重复内容按内容哈希复用知识文档。Composer 必须先在当前 Web/桌面实例中配置并激活 LLM Provider，且每轮消耗一次生成额度；`NOVI_LIVE_SOURCES=true` 时还消耗一次来源查询额度并检索论文、GitHub 和 Web。`Generate now`、`Generate asset` 和 `Regenerate` 仍可直接创建 Knowledge/Research/Paper Artifact，但不会自动把结果索引为对话知识迭代。Web 的 `data/novi.json` 与 Electron OS `userData/novi.json` 是独立状态，Provider 必须在实际使用的实例内 `Save & test`。
 
 ### 配置 Agent Plugins
 

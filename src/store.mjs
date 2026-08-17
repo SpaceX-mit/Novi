@@ -113,7 +113,7 @@ export class JsonStore {
           if (usage && job.generationCharged && !job.generationRefunded) usage.generations = Math.max(0, usage.generations - 1);
           const sourceUsage = (state.usage || []).find((entry) => entry.tenantId === job.tenantId && entry.period === job.sourcePeriod);
           if (sourceUsage && job.sourceCharged && !job.sourceRefunded) sourceUsage.sourceQueries = Math.max(0, sourceUsage.sourceQueries - 1);
-          const interruption = job.type === 'chat' ? 'Agent response interrupted by service restart' : 'Generation interrupted by service restart';
+          const interruption = job.type === 'refine' ? 'Wiki refinement interrupted by service restart' : 'Generation interrupted by service restart';
           job.status = 'failed'; job.progress = 100; job.error = interruption; job.updatedAt = new Date().toISOString();
           job.usageRefunded = Boolean(job.generationCharged || job.sourceCharged);
           job.generationRefunded ||= Boolean(job.generationCharged);

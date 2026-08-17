@@ -24,8 +24,7 @@ import { enqueueDocumentDeletion, enqueueDocumentProjection, externalProjectionP
 import { providerCatalog, publicProviderConfig, resolvedProviderConfig, saveProviderConfig, testProviderConnection } from './src/llm-providers.mjs';
 import { browserAgentConfigured, mcpSourceConfigured, renderWithBrowserAgent, validateSourceAdapterConfiguration } from './src/source-adapters.mjs';
 import { agentModeCatalog, publicMode, selectAgentMode, validateRequestedMode } from './src/agent-modes.mjs';
-import { beginSessionRun, completeSessionConversation, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun, updateSessionToolCall } from './src/agent-sessions.mjs';
-import { runAgentConversation } from './src/agent-chat.mjs';
+import { beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun, updateSessionToolCall } from './src/agent-sessions.mjs';
 import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings, sourceAccessTool } from './src/agent-tools.mjs';
 import { discoverMcpServer, publicMcpSettings, resolvedMcpTools, saveMcpSettings } from './src/mcp-runtime.mjs';
 import { publicSkillSettings, resolveSkills, saveSkillSettings, skillProvenance } from './src/skill-runtime.mjs';
@@ -944,6 +943,9 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
     let requestedMode;
     try { requestedMode = validateRequestedMode(input.mode || 'auto'); }
     catch (error) { return send(res, error.status || 422, { error: error.message, code: 'AGENT_MODE_INVALID' }); }
+    let language;
+    try { language = normalizeWikiLanguage(input.language || project.wikiLanguage); }
+    catch (error) { return send(res, error.status || 422, { error: error.message, code: error.code || 'WIKI_LANGUAGE_INVALID' }); }
     const providerConfig = await resolvedProviderConfig(state, user.tenantId);
     if (!providerConfig) return send(res, 409, { error: 'No active LLM provider configured', code: 'LLM_PROVIDER_REQUIRED' });
     const selectedMode = selectAgentMode(prompt, { requestedMode });
@@ -967,8 +969,10 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
         if (!currentProject || !currentSession) return null;
         if (currentProject.status === 'generating' || currentSession.status === 'running') return { conflict: true };
         const createdAt = new Date().toISOString();
-        const created = { id: randomUUID(), type: 'chat', projectId, sessionId, userId: user.id, tenantId: user.tenantId, prompt, requestedMode, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, status: 'queued', progress: 0, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
+        const created = { id: randomUUID(), type: 'refine', projectId, sessionId, userId: user.id, tenantId: user.tenantId, prompt, requestedMode, language, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, previousStatus: currentProject.status, status: 'queued', progress: 0, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
         const message = beginSessionRun(currentSession, { jobId: created.id, prompt, requestedMode, currentMode: selectedMode.mode });
+        updateSessionRun(currentSession, { language });
+        currentProject.status = 'generating'; currentProject.updatedAt = createdAt;
         created.userMessageId = message.id; next.jobs.unshift(created); return created;
       });
     } catch (error) {
@@ -980,7 +984,7 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
       return send(res, job?.conflict ? 409 : 404, { error: job?.conflict ? 'Agent session or workspace is already running' : 'Agent session not found', code: job?.conflict ? 'AGENT_SESSION_ACTIVE' : 'AGENT_SESSION_NOT_FOUND' });
     }
     metrics.generationStarted += 1;
-    void runConversation(store, job.id, project, user, metrics);
+    void runGeneration(store, auth, job.id, project, user, job.previousStatus, sourceCharged, generationPeriod, sourcePeriod, metrics, dependencies);
     return send(res, 202, { job, sessionId });
   }
 
@@ -1066,7 +1070,7 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
         await store.update((state) => { refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod); });
         return send(res, job?.sessionMissing ? 404 : 409, { error: job?.sessionMissing ? 'Agent session not found' : 'Generation already in progress', code: job?.sessionMissing ? 'AGENT_SESSION_NOT_FOUND' : 'GENERATION_IN_PROGRESS' });
       }
-      void runGeneration(store, auth, job.id, current, user, job.previousStatus, sourceCharged, generationPeriod, sourcePeriod, metrics);
+      void runGeneration(store, auth, job.id, current, user, job.previousStatus, sourceCharged, generationPeriod, sourcePeriod, metrics, dependencies);
       return send(res, 202, { job, sessionId: selectedSession.id });
     }
     const knowledgeContext = await retrieveWorkspaceKnowledge(store, current, user);
@@ -1124,7 +1128,7 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
       });
       const referenceRetriever = sourceCharged ? async ({ query }) => {
         try {
-          let sources = await searchKnowledgeSources(query, 6);
+          let sources = await (dependencies.searchKnowledgeSources || searchKnowledgeSources)(query, 6);
           if (process.env.NOVI_VERIFY_SOURCES !== 'false') sources = await verifyEvidenceSources(sources);
           return { sources, status: 'completed' };
         } catch (error) {
@@ -1225,7 +1229,25 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
   return send(res, 405, { error: 'Method not allowed' });
 }
 
-async function runGeneration(store, auth, jobId, project, user, previousStatus = 'draft', sourceCharged = false, generationPeriod = null, sourcePeriod = null, metrics = null) {
+function indexWikiIteration(state, project, artifact, job) {
+  const markdown = (artifact.documents || []).find((document) => document.name === 'llm-wiki.md')?.content;
+  if (!markdown) return null;
+  const sourceCount = (artifact.content?.sources || []).filter((source) => source.mapped === true).length;
+  const title = `Wiki iteration ${project.artifacts.length + 1}: ${project.title}`.slice(0, 200);
+  const ingested = ingestDocument({ title, content: markdown, sourceKind: 'agent-wiki', mimeType: 'text/markdown' }, { projectId: project.id, tenantId: project.tenantId });
+  if (ingested.error) throw new Error(ingested.error);
+  state.documents ||= []; state.chunks ||= []; state.knowledgeEntities ||= []; state.knowledgeEdges ||= [];
+  const duplicate = state.documents.find((document) => document.projectId === project.id && document.tenantId === project.tenantId && document.contentHash === ingested.document.contentHash);
+  const document = duplicate || ingested.document;
+  if (!duplicate) {
+    state.documents.unshift(ingested.document); state.chunks.push(...ingested.chunks); state.knowledgeEntities.push(...ingested.entities); state.knowledgeEdges.push(...ingested.edges);
+    enqueueDocumentProjection(state, ingested);
+  }
+  artifact.workflow.runtime.knowledgeEnrichment = { documentId: document.id, contentHash: document.contentHash, sourceCount, reused: Boolean(duplicate), indexedAt: new Date().toISOString(), jobId: job.id };
+  return document;
+}
+
+async function runGeneration(store, auth, jobId, project, user, previousStatus = 'draft', sourceCharged = false, generationPeriod = null, sourcePeriod = null, metrics = null, dependencies = {}) {
   let committed = false;
   try {
     const claimed = store.claimJob ? await store.claimJob(jobId, `worker-${process.pid}`) : await store.updateJob(jobId, { status: 'running', progress: 10 });
@@ -1304,7 +1326,7 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
     });
     const referenceRetriever = sourceCharged ? async ({ query }) => {
       try {
-        let sources = await searchKnowledgeSources(query, 6);
+        let sources = await (dependencies.searchKnowledgeSources || searchKnowledgeSources)(query, 6);
         if (process.env.NOVI_VERIFY_SOURCES !== 'false') sources = await verifyEvidenceSources(sources);
         return { sources, status: 'completed' };
       } catch (error) {
@@ -1319,11 +1341,13 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
         throw error;
       }
     } : null;
-    const artifact = await generateArtifactAsync(project, { sources: [], knowledgeContext, providerConfig, prompt: runPrompt, language: claimed.language, mode: claimed.requestedMode || 'auto', referenceRetriever, onStage, onMode, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:${jobId}` });
+    const refining = claimed.type === 'refine';
+    const artifact = await generateArtifactAsync(project, { sources: [], knowledgeContext, providerConfig, prompt: runPrompt, language: claimed.language, mode: claimed.requestedMode || 'auto', refineFromLatest: refining, referenceRetriever, onStage, onMode, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:${jobId}` });
     const result = await store.update((state) => {
       const item = state.projects.find((entry) => entry.id === project.id && owned(entry, user));
       const job = (state.jobs || []).find((entry) => entry.id === jobId && entry.status === 'running');
       if (!item || !job || !activePrincipal(state, user)) return null;
+      if (refining) indexWikiIteration(state, item, artifact, job);
       item.artifacts.unshift(artifact); item.status = 'ready'; item.updatedAt = new Date().toISOString();
       completeSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { jobId, artifact, mode: artifact.workflow?.runtime?.mode || job.currentMode });
       return item;
@@ -1351,81 +1375,14 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
   return committed;
 }
 
-async function runConversation(store, jobId, project, user, metrics = null) {
-  let committed = false;
-  try {
-    const claimed = store.claimJob ? await store.claimJob(jobId, `chat-worker-${process.pid}`) : await store.updateJob(jobId, { status: 'running', progress: 10 });
-    if (!claimed) return false;
-    const runtimeState = await store.read();
-    const providerConfig = await resolvedProviderConfig(runtimeState, user.tenantId);
-    if (!providerConfig) throw new Error('No active LLM provider configured');
-    const session = findAgentSession(runtimeState, claimed.sessionId, project.id, user.tenantId);
-    if (!session) throw new Error('Agent session is unavailable');
-    const history = (session.messages || []).filter((message) => message.jobId !== jobId);
-    const selectedPlugins = resolvePlugins(runtimeState, user.tenantId, project, claimed.prompt);
-    const skills = resolveSkills(runtimeState, user.tenantId, project, claimed.prompt, { pluginSkillNames: selectedPlugins.flatMap((plugin) => plugin.skillNames || []) });
-    const tools = [...(await resolvedTools(runtimeState, user.tenantId)).filter((tool) => !sourceAccessTool(tool.name) || claimed.sourceCharged), ...await resolvedMcpTools(runtimeState, user.tenantId)];
-    const plugins = bindPluginTools(selectedPlugins, tools);
-    const appliedSkills = skillProvenance(skills); const appliedPlugins = pluginProvenance(plugins);
-    if (!await store.update((state) => {
-      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
-      if (!job) return false;
-      job.activeSkills = appliedSkills; job.activePlugins = appliedPlugins; job.currentStage = 'Preparing conversation'; job.progress = 15; job.updatedAt = new Date().toISOString();
-      updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { skills: appliedSkills, plugins: appliedPlugins, currentStage: job.currentStage, progress: job.progress });
-      return true;
-    })) throw Object.assign(new Error('Agent conversation was cancelled'), { code: 'AGENT_CANCELLED' });
-    const knowledgeContext = await retrieveWorkspaceKnowledge(store, project, user);
-    const toolExecutor = createToolExecutor({ store, project, principal: user, allowSourceAccess: Boolean(claimed.sourceCharged) });
-    const onProgress = async (event) => store.update((state) => {
-      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
-      if (!job) return false;
-      job.currentMode = event.mode || job.currentMode; job.currentModeLabel = publicMode(job.currentMode).name; job.currentStage = event.stage; job.progress = Math.max(job.progress || 0, event.progress || 0); job.updatedAt = new Date().toISOString();
-      updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress });
-      return true;
-    });
-    const onTool = async (call) => store.update((state) => {
-      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
-      if (!job) return false;
-      job.agentToolCalls ||= [];
-      const existing = job.agentToolCalls.find((item) => item.id === call.id);
-      if (existing) Object.assign(existing, call); else job.agentToolCalls.push(call);
-      job.currentStage = call.status === 'running' ? `Using ${call.tool}` : `${call.tool} ${call.status}`; job.updatedAt = new Date().toISOString();
-      updateSessionToolCall(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), call); return true;
-    });
-    const result = await runAgentConversation(project, session, providerConfig, { prompt: claimed.prompt, mode: claimed.requestedMode, history, knowledgeContext, tools, skills, plugins, toolExecutor, onProgress, onTool, threadId: `${user.tenantId}:${jobId}` });
-    const saved = await store.update((state) => {
-      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
-      const currentSession = job ? findAgentSession(state, job.sessionId, job.projectId, job.tenantId) : null;
-      if (!job || !currentSession || !activePrincipal(state, user)) return null;
-      const message = completeSessionConversation(currentSession, { jobId, response: result.response, runtime: result.runtime, mode: result.runtime.mode });
-      job.status = 'completed'; job.progress = 100; job.currentStage = null; job.resultMessageId = message.id; job.currentMode = result.runtime.mode; job.currentModeLabel = publicMode(job.currentMode).name; job.agentToolCalls = result.runtime.toolCalls || job.agentToolCalls || []; job.updatedAt = new Date().toISOString();
-      return message;
-    });
-    if (!saved) throw new Error('Agent conversation was cancelled');
-    committed = true; if (metrics) metrics.generationCompleted += 1;
-    await store.audit({ action: 'agent.message.completed', userId: user.id, tenantId: user.tenantId, resourceId: saved.id, projectId: project.id });
-  } catch (error) {
-    if (metrics) metrics.generationFailed += 1;
-    if (!committed) await store.update((state) => {
-      const job = (state.jobs || []).find((item) => item.id === jobId);
-      if (!job) return;
-      refundUnfinishedJob(state, job);
-      failSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { jobId, mode: job.currentMode, error: error?.message === 'No active LLM provider configured' ? 'No active LLM provider configured' : 'Agent response failed' });
-      job.status = 'failed'; job.progress = 100; job.error = error?.message === 'No active LLM provider configured' ? 'No active LLM provider configured' : 'Agent response failed'; job.updatedAt = new Date().toISOString();
-    });
-  }
-  return committed;
-}
-
-async function runQueuedJobs(store, auth, metrics) {
+async function runQueuedJobs(store, auth, metrics, dependencies = {}) {
   const state = await store.read();
   for (const job of (state.jobs || []).filter((item) => item.status === 'queued').slice(0, 10)) {
     const project = state.projects.find((item) => item.id === job.projectId && item.tenantId === job.tenantId);
     if (!project) continue;
     const storedUser = state.users.find((item) => item.id === job.userId && item.tenantId === job.tenantId);
     const user = storedUser ? { id: storedUser.id, tenantId: storedUser.tenantId, plan: storedUser.plan || 'free' } : { id: job.userId || 'local', tenantId: job.tenantId || 'local', plan: 'free' };
-    if (job.type === 'chat') void runConversation(store, job.id, project, user, metrics);
-    else void runGeneration(store, auth, job.id, project, user, job.previousStatus || 'draft', Boolean(job.sourceCharged), job.generationPeriod, job.sourcePeriod, metrics);
+    void runGeneration(store, auth, job.id, project, user, job.previousStatus || 'draft', Boolean(job.sourceCharged), job.generationPeriod, job.sourcePeriod, metrics, dependencies);
   }
 }
 
@@ -1461,9 +1418,9 @@ export function createServer(dependencies = {}) {
       if (store.recoverInterruptedJobs) await store.recoverInterruptedJobs();
       if (process.env.NOVI_REFRESH_WORKER !== 'false') worker = startRefreshWorker(store);
       if (process.env.NOVI_JOB_WORKER !== 'false') {
-        const timer = setInterval(() => runQueuedJobs(store, null, metrics).catch((error) => console.warn(`Queued job worker failed: ${error.message}`)), Math.max(250, Number(process.env.NOVI_JOB_INTERVAL_MS || 1_000)));
+        const timer = setInterval(() => runQueuedJobs(store, null, metrics, dependencies).catch((error) => console.warn(`Queued job worker failed: ${error.message}`)), Math.max(250, Number(process.env.NOVI_JOB_INTERVAL_MS || 1_000)));
         timer.unref?.(); jobWorker = { stop: () => clearInterval(timer) };
-        void runQueuedJobs(store, null, metrics).catch((error) => console.warn(`Queued job worker failed: ${error.message}`));
+        void runQueuedJobs(store, null, metrics, dependencies).catch((error) => console.warn(`Queued job worker failed: ${error.message}`));
       }
       const projectionTimer = setInterval(() => flushExternalProjectionJobs(store, { limit: 10 }).catch((error) => console.warn(`External projection worker failed: ${error.message}`)), Math.max(1_000, Number(process.env.NOVI_PROJECTION_INTERVAL_MS || 5_000)));
       projectionTimer.unref?.();

@@ -36,7 +36,7 @@
 | 内置工具与新增工具 | `src/agent-tools.mjs` 提供 workspace read/write/web search/paper search/paper fetch 和 allowlisted 自定义 HTTP Tool；论文工具覆盖 DOI、arXiv、公开 URL、学术目录检索及公开全文/摘要/不可访问状态；三种自主模式进入同一有界 Tool node；领域、HTTP 和 provenance 测试覆盖 | 已实现 |
 | MCP | `src/mcp-runtime.mjs` 使用官方 SDK 接入 Streamable HTTP discovery/call，逐工具授权、命名空间、加密凭据和调用边界完整；Customize/MCP 与协议集成测试覆盖 | 已实现 |
 | Skills 与 Plugins | `src/skill-runtime.mjs` 提供有界 playbook 选择和 prompt 注入；`src/plugin-runtime.mjs` 以声明式 manifest 组合现有 Skill 与已授权 Tool；两者均进入 LangGraph、provenance 和 Customize UI | 已实现 |
-| Workspace 默认进入对话 Session，右侧提供 Files、LLM Wiki、Document | 项目创建即创建默认 Session；`public/app.js` 渲染 Session rail、conversation composer 和三页 inspector；Files 包含生成的 `llm-wiki.md`，Document 以转义纯文本预览；desktop/mobile Chromium smoke 验证布局与核心交互 | 已实现 |
+| Workspace 默认进入对话 Session，右侧提供 Files、LLM Wiki、Document | 项目创建即创建默认 Session；Composer 每轮以最新成果和累计来源执行完整 Wiki refinement，生成新 Artifact/`llm-wiki.md` 并索引回 Workspace knowledge；`public/app.js` 渲染 Session rail 和三页 inspector，Document 以转义纯文本预览；desktop/mobile Chromium smoke 验证布局与核心交互 | 已实现 |
 | 左侧 Customize 可设置 MCP、Skills、Plugins | `public/index.html` 提供权限控制的 Customize 导航；`public/app.js` 提供 Tools/MCP/Skills/Plugins 四个配置页；Chromium smoke 验证保存与响应式布局 | 已实现 |
 | Generate now 进入并留在当前对话 Session | 创建 Workspace 后直接 `showWorkspace` 并加载默认 Session；`Generate now` 携带当前 `sessionId` 异步生成，运行消息、模式、Artifact 链接回写当前 Session；Chromium smoke 覆盖完整旅程 | 已实现 |
 

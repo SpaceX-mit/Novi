@@ -154,12 +154,13 @@ export class PostgresStore {
           if (usage && job.generationCharged && !job.generationRefunded) usage.generations = Math.max(0, usage.generations - 1);
           const sourceUsage = (state.usage || []).find((entry) => entry.tenantId === job.tenantId && entry.period === job.sourcePeriod);
           if (sourceUsage && job.sourceCharged && !job.sourceRefunded) sourceUsage.sourceQueries = Math.max(0, sourceUsage.sourceQueries - 1);
-          job.status = 'failed'; job.progress = 100; job.error = 'Generation interrupted by service restart'; job.updatedAt = new Date().toISOString();
+          const interruption = job.type === 'refine' ? 'Wiki refinement interrupted by service restart' : 'Generation interrupted by service restart';
+          job.status = 'failed'; job.progress = 100; job.error = interruption; job.updatedAt = new Date().toISOString();
           job.usageRefunded = Boolean(job.generationCharged || job.sourceCharged);
           job.generationRefunded ||= Boolean(job.generationCharged);
           job.sourceRefunded ||= Boolean(job.sourceCharged);
           job.generationCharged = false; job.sourceCharged = false;
-          failSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { jobId: job.id, mode: job.currentMode, error: 'Generation interrupted by service restart' });
+          failSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { jobId: job.id, mode: job.currentMode, error: interruption });
           interrupted.add(job.projectId);
         }
       }

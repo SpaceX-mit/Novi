@@ -134,7 +134,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/AgentConversationInput' }
       responses:
-        '202': { description: Queued LangGraph conversation response job }
+        '202': { description: Queued cumulative Wiki refinement job; completion creates a new Artifact and indexes its Markdown into workspace knowledge }
         '402': { description: Usage quota exceeded }
         '403': { description: Editor role required }
         '404': { description: Project or session not found }
@@ -525,6 +525,7 @@ components:
       properties:
         prompt: { type: string, minLength: 1, maxLength: 20000 }
         mode: { type: string, enum: [auto, workflow, react, plan-execute, supervisor], default: auto }
+        language: { $ref: '#/components/schemas/WikiLanguage' }
     AgentMessage:
       type: object
       required: [id, role, kind, content, createdAt]
@@ -541,7 +542,7 @@ components:
         toolCalls: { type: array, maxItems: 20, items: { type: object }, description: Bounded tool invocation provenance retained with the completed assistant message }
         skills: { type: array, maxItems: 3, items: { $ref: '#/components/schemas/AppliedAgentSkill' }, description: Skills applied to the completed artifact run }
         plugins: { type: array, maxItems: 2, items: { $ref: '#/components/schemas/AppliedAgentPlugin' }, description: Declarative Plugins applied to the completed artifact run }
-        runtime: { type: object, description: LangGraph conversation runtime provenance without credentials }
+        runtime: { type: object, description: Optional LangGraph runtime provenance without credentials }
         createdAt: { type: string, format: date-time }
     AgentSession:
       type: object
