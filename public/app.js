@@ -112,6 +112,11 @@ function comparableArtifactFields(artifact) {
   };
   add('Summary', c.summary);
   add('Abstract', c.abstract);
+  add('Expert Goal', c.expertGoal ? `${c.expertGoal.question}\n${c.expertGoal.outcome}\n${(c.expertGoal.successCriteria || []).join('\n')}` : '');
+  add('Expert roles', (c.expertRoles || []).map((role) => `${role.title}: ${role.responsibility}`));
+  add('Knowledge system', (c.knowledgeSystem?.layers || []).map((layer) => `${layer.title}: ${layer.objective}; dependencies: ${(layer.dependencies || []).join(', ')}`));
+  add('System document', (c.systemDocument?.sections || []).map((section) => `${section.title}: ${section.body}`));
+  add('LLM Wiki summary', c.llmWiki?.summary);
   for (const section of c.sections || []) add(`Section · ${section.title}`, section.body);
   for (const section of c.wikiSections || []) add(`Wiki · ${section.title}`, section.body);
   add('Contributions', c.contributions);
@@ -333,11 +338,22 @@ function renderWorkspaceKnowledgeContext(items) {
 function tabsFor(type) {
   if (type === 'knowledge') return [{ key: 'wiki', label: 'LLM WIKI' }, { key: 'path', label: 'LEARNING PATH' }, { key: 'practice', label: 'PRACTICE LAB' }, { key: 'graph', label: 'KNOWLEDGE GRAPH' }, { key: 'sources', label: 'SOURCES' }];
   if (type === 'research') return [{ key: 'report', label: 'REPORT' }, { key: 'wiki', label: 'LLM WIKI' }, { key: 'graph', label: 'KNOWLEDGE GRAPH' }, { key: 'sota', label: 'SOTA ANALYSIS' }, { key: 'opportunities', label: 'OPPORTUNITIES' }, { key: 'sources', label: 'SOURCES' }];
-  return [{ key: 'draft', label: 'DRAFT' }, { key: 'novelty', label: 'GAP & NOVELTY' }, { key: 'method', label: 'METHOD' }, { key: 'experiments', label: 'EXPERIMENTS' }, { key: 'figures', label: 'FIGURES' }, { key: 'review', label: 'REVIEW' }, { key: 'sources', label: 'SOURCES' }];
+  return [{ key: 'draft', label: 'DRAFT' }, { key: 'wiki', label: 'LLM WIKI' }, { key: 'novelty', label: 'GAP & NOVELTY' }, { key: 'method', label: 'METHOD' }, { key: 'experiments', label: 'EXPERIMENTS' }, { key: 'figures', label: 'FIGURES' }, { key: 'review', label: 'REVIEW' }, { key: 'sources', label: 'SOURCES' }];
+}
+
+function renderLlmWiki(c) {
+  const wiki = c.llmWiki || { title: c.title || 'LLM Wiki', summary: c.summary, sections: c.wikiSections || [] };
+  const goal = c.expertGoal ? `<section class="wiki-goal"><h3>Expert Goal</h3><p><b>${escapeHtml(c.expertGoal.domain)}</b> · ${escapeHtml(c.expertGoal.outcome)}</p><small>${escapeHtml(c.expertGoal.question)}</small><ul>${(c.expertGoal.successCriteria || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul></section>` : '';
+  const roles = c.expertRoles?.length ? `<h3>Coordinated experts</h3><div class="path-list">${c.expertRoles.map((role) => `<div class="path-item"><strong>${escapeHtml(role.title)}</strong><span class="duration">${escapeHtml(role.stage)}</span><p>${escapeHtml(role.responsibility)}</p><small>${escapeHtml(role.expertise)}</small></div>`).join('')}</div>` : '';
+  const knowledgeSystem = c.knowledgeSystem ? `<h3>Knowledge system</h3><p>${escapeHtml(c.knowledgeSystem.purpose)}</p><div class="path-list">${(c.knowledgeSystem.layers || []).map((layer) => `<div class="path-item"><strong>${escapeHtml(layer.title)}</strong><p>${escapeHtml(layer.objective)}</p><small>Depends on: ${escapeHtml((layer.dependencies || []).join(', ') || 'foundation')}</small></div>`).join('')}</div>` : '';
+  const systemDocument = c.systemDocument ? `<h3>System document</h3><p>${escapeHtml(c.systemDocument.executiveSummary)}</p>${(c.systemDocument.sections || []).map((section) => `<h4>${escapeHtml(section.title)}</h4><p>${escapeHtml(section.body)}</p>`).join('')}` : '';
+  const glossary = wiki.glossary?.length ? `<h3>Glossary</h3><div class="opportunity-list">${wiki.glossary.map((item) => `<div class="opportunity"><b>${escapeHtml(item.term)}</b><p>${escapeHtml(item.definition)}</p></div>`).join('')}</div>` : '';
+  const nextQuestions = wiki.nextQuestions?.length ? `<h3>Next questions</h3><ul>${wiki.nextQuestions.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '';
+  return `<h2>${escapeHtml(wiki.title)}</h2><div class="summary"><p>${escapeHtml(wiki.summary)}</p></div><div class="evidence-badge ${c.evidence?.status === 'source-mapped' ? 'mapped' : ''}">Evidence: ${escapeHtml(c.evidence?.status || 'unverified')} · ${c.evidence?.sources?.length || 0} mapped sources</div>${goal}${roles}${knowledgeSystem}${systemDocument}<h3>Final Wiki</h3>${(wiki.sections || []).map((section) => `<h4>${escapeHtml(section.title)}</h4><p>${escapeHtml(section.body)}</p>`).join('')}${glossary}${nextQuestions}${renderEvidenceClaims(c.evidence)}`;
 }
 
 function renderArtifact(project, selected, c) {
-  if (selected === 'wiki' && c.wikiSections) c = { ...c, sections: c.wikiSections, abstract: null, contributions: null };
+  if (selected === 'wiki') return renderLlmWiki(c);
   if (selected === 'wiki' || selected === 'report' || selected === 'draft') return `<h2>${escapeHtml(c.title || (selected === 'wiki' ? 'LLM Wiki' : selected === 'report' ? 'Research Report' : 'Paper Draft'))}</h2><div class="summary"><p>${escapeHtml(c.summary)}</p></div><div class="evidence-badge ${c.evidence?.status === 'source-mapped' ? 'mapped' : ''}">Evidence: ${escapeHtml(c.evidence?.status || 'unverified')} · ${c.evidence?.sources?.length || 0} mapped sources</div>${c.abstract ? `<h3>Abstract</h3><p>${escapeHtml(c.abstract)}</p>` : ''}${(c.sections || []).map((s) => `<h3>${escapeHtml(s.title)}</h3><p>${escapeHtml(s.body)}</p>`).join('')}${c.contributions ? `<h3>Proposed contributions</h3><div class="opportunity-list">${c.contributions.map((x) => `<div class="opportunity">${escapeHtml(x)}</div>`).join('')}</div>` : ''}${renderEvidenceClaims(c.evidence)}`;
   if (selected === 'path') return `<h2>Four-week learning path</h2><div class="summary"><p>Move from vocabulary to an original, evidence-backed position with deliberate practice each week.</p></div><div class="path-list">${c.learningPath.map((item) => `<div class="path-item"><strong>${escapeHtml(item.stage)}</strong><span class="duration">${escapeHtml(item.duration)}</span><p>${escapeHtml(item.outcome)}</p><ul>${item.tasks.map((task) => `<li>${escapeHtml(task)}</li>`).join('')}</ul></div>`).join('')}</div>`;
   if (selected === 'practice') return `<h2>Practice lab</h2><div class="summary"><p>Convert understanding into decisions, debugging skill, and production evidence.</p></div><div class="path-list">${(c.caseStudies || []).map((item) => `<div class="path-item"><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.scenario)}</p><small><b>Deliverable:</b> ${escapeHtml(item.deliverable)}</small></div>`).join('')}</div><h3>Practice questions</h3><div class="opportunity-list">${(c.practiceQuestions || []).map((item) => `<div class="opportunity"><b>${escapeHtml(item.level)}</b><p>${escapeHtml(item.question)}</p><small>Success: ${escapeHtml(item.successCriteria)}</small></div>`).join('')}</div>`;

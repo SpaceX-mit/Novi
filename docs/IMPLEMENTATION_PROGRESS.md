@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品路径已经实现并具有本地自动化验证证据。Web 支持主流 LLM Provider、自适应 LangGraph 模式、持久 Agent Session、内置/自定义/MCP 工具、组织 Skills 和声明式 Plugins。正式收费商用发布尚未完成，剩余工作主要是持久 Agent checkpoint、目标环境和正式发布门禁。
+Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品路径已经实现并具有本地自动化验证证据。Web 支持主流 LLM Provider、自适应 LangGraph 模式、Goal 驱动的领域专家协作、最终 LLM Wiki、持久 Agent Session、内置/自定义/MCP 工具、组织 Skills 和声明式 Plugins。正式收费商用发布尚未完成，剩余工作主要是持久 Agent checkpoint、目标环境和正式发布门禁。
 
 当前开发机上的源码位于 NTFS/FUSE 挂载的 `/data`。该文件系统无法保存 Electron `chrome-sandbox` 所需的 `root:root 4755` 权限，因此直接执行 `npm run desktop` 仍不能显示 UI；需要将项目迁移到 ext4，或把 Electron runtime 安装到 `/opt` 后再完成一次真实窗口验收。这是当前环境问题，不是 UI 功能缺失。
 
@@ -15,8 +15,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 | 核心产品 | Knowledge Builder、Deep Research、Paper Author；成果版本、导出、Research/Knowledge/Writing/Review provenance | 默认测试与浏览器核心旅程覆盖 |
 | Web 与 API | 共享 REST API/UI、工作区、知识导入与检索、异步 Job/Agent 模式与阶段、来源刷新、成果历史、Provider/Tools/MCP/Skills/Plugins 设置、指标 | OpenAPI 3.1 契约共 46 paths / 58 operations；语法检查覆盖 46 modules |
 | 账户与商业边界 | Cookie-only Web 会话、OIDC 边界、组织与 RBAC、配额、支付 provider 边界、审计与生命周期取消；本地开发租户每月 1000 次生成，生产/打包态自动收紧为 100 次 | 本地 HTTP/provider 契约和领域测试通过；登录账户套餐额度保持独立；未配置真实支付 provider 时明确返回 503，不创建模拟订单 |
-| 知识与生成 | 文本/Web/PDF/GitHub 导入、离线向量、RAG 上下文、来源连接器、Browser Agent/MCP 接口、连续更新 | 本地契约、集成和浏览器 smoke 已覆盖；真实来源仍需生产级人工核验 |
-| Agent Runtime | 意图路由的 Workflow、ReAct、Plan & Execute、Supervisor 四模式 LangGraph.js StateGraph；独立 LangGraph chat Harness；controller/阶段 fallback 可运行中切换模式，最多 8 个 Specialist 步骤；字段/形状校验、token、模式历史、计划和 Job 进度可追溯 | 本地 OpenAI-compatible HTTP 验证四种成果模式、ReAct → Plan & Execute 运行中切换，以及对话模型调用/工具循环；Chromium 验证模式显示 |
+| 知识与生成 | 文本/Web/PDF/GitHub 导入、离线向量、RAG 上下文、来源连接器、Browser Agent/MCP 接口、Goal/专家角色/Knowledge System/System Document/LLM Wiki 生成、连续更新 | 本地契约、集成和浏览器 smoke 已覆盖；真实来源仍需生产级人工核验 |
+| Agent Runtime | 意图路由的 Workflow、ReAct、Plan & Execute、Supervisor 四模式 LangGraph.js StateGraph；Goal Architect → Research/Knowledge/Writing/Review specialist → 必经 LLM Wiki Finalizer；独立 LangGraph chat Harness；controller/阶段 fallback 可运行中切换模式，最多 8 个 Specialist 步骤；字段/形状校验、token、模式历史、计划和 Job 进度可追溯 | 本地 OpenAI-compatible HTTP 验证四种成果模式、6 节点 Goal/专家协作/Finalizer、提前 finish 仍经 Finalizer、ReAct → Plan & Execute 运行中切换，以及对话模型调用/工具循环；Chromium 验证模式显示和 Paper LLM Wiki |
 | Agent Session | 项目默认 Session、会话 API、异步 LLM 对话与独立 Artifact generation、active run、Job/Artifact 关联、隔离/恢复/清理；Web 左栏 Session、中央对话与 mode composer、右栏 Files/LLM Wiki/Document，viewer 只读 | Session 领域/HTTP/恢复测试通过；Chromium 完整旅程验证 Composer 返回 LLM 消息且不创建 Artifact，Generate now 独立生成成果，Session 创建/删除、inspector 与 RBAC |
 | Agent Tools | 左侧 Customize/Tools；内置 workspace read/write/web search；最多 10 个 allowlisted 自定义 HTTP 工具、严格标量 input schema、可选 AES-GCM Bearer token；ReAct/Plan/Supervisor 工具节点、最多 6 次调用、超时/32 KB 响应限制、Job/Session/Artifact provenance | 领域测试覆盖端点/schema/加密/租户项目隔离/响应上限；LangGraph 测试覆盖三种自主模式和 6 次硬上限；异步 HTTP 测试验证 Job/Session/Artifact 三处记录；desktop/mobile Chromium 验证 Customize、RBAC 和无横向溢出 |
 | Agent MCP | 左侧 Customize/MCP；最多 5 个租户级 Streamable HTTP server；官方 SDK 发现与调用、最多 100 tools/server、命名空间别名、新工具默认关闭、逐工具授权；AES-GCM Bearer token、endpoint allowlist、schema/超时/256 KB 响应边界；MCP tool 进入同一 LangGraph 工具节点和 provenance | 官方 SDK server/client 集成覆盖 initialize/list/call、输入校验和结果规范化；HTTP/RBAC/加密/备份删除测试通过；desktop/mobile Chromium 验证配置入口、显式授权和 viewer 只读边界 |
@@ -73,6 +73,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 4. 在已配置的 GitHub 远程仓库运行持续集成门禁并归档结果；随后接入真实供应商/目标基础设施并关闭正式发布门禁。
 
 ## 更新记录
+
+- 2026-08-17：完成 Generate 的 Goal 驱动专家协作与最终 LLM Wiki 闭环：新增结构化 `expertGoal`、`expertRoles`、`knowledgeSystem`、`systemDocument`、`llmWiki` 契约；LangGraph 统一执行 Goal Architect → Research → Knowledge → Writing → Review → LLM Wiki Finalizer，Workflow/ReAct/Plan & Execute/Supervisor 的提前结束和 specialist 上限路径均强制经过 Finalizer；Goal 阶段校验四个领域角色覆盖，Finalizer 校验 Wiki 完整性并同步兼容 `wikiSections`；离线生成保持同形状基线。Web 为三种产品展示 Goal、专家团队、知识体系、体系文档和最终 Wiki，Paper Author 新增 LLM Wiki 标签；Markdown/LaTeX、版本比较和 claim extraction 覆盖新字段。验证：`npm test` 81 passed + 1 PostgreSQL 条件跳过，`npm run check` 47 modules，`npm run openapi-check` 47 paths / 59 operations，`npm run browser-smoke` 通过（含 Paper LLM Wiki、研究套件、导出和响应式旅程）。真实供应商质量、生产 checkpoint 和发布门禁仍未完成。
 
 - 2026-08-17：修复 Workspace Composer 未接入 LLM 对话的问题：新增 `POST /api/projects/:id/sessions/:sessionId/messages` 和独立 LangGraph chat Harness，使用当前 Provider、会话历史、Workspace knowledge、Skills/Plugins，并在 ReAct/Plan & Execute/Supervisor 下允许最多 6 次已授权 Tool/MCP 调用；响应保存为普通 Session message 和无凭据 runtime provenance，不创建 Artifact。Generate now/Generate asset 继续走独立成果路径。无激活 Provider 时在扣配额前明确返回 409 `LLM_PROVIDER_REQUIRED`，不再把离线模板摘要伪装为回答；chat/generation 在同一 Session 互斥并支持异步 Job 恢复/失败退款。桌面实际状态审计显示 `~/.config/Electron/novi.json` 的 Provider 列表为空，用户需在桌面实例内重新 `Save & test` MiniMax。验证：`npm test` 81 passed + 1 PostgreSQL 条件跳过，`npm run check` 47 modules，`npm run openapi-check` 47 paths / 59 operations，`npm run browser-smoke` 验证 Composer→LLM 且 Artifact 数不变，`npm run release-check`、隔离 userData 的开发 Electron smoke、`npm run desktop:dir -- --linux --x64` 和真实 packaged smoke 通过。
 - 2026-08-17：调整未认证本地租户的生成配额：源码开发运行每月 1000 次，`NODE_ENV=production` Web 和 `app.isPackaged` Electron 制品自动使用每月 100 次；Free/Personal/Pro/Enterprise 登录账户套餐保持原值。补充开发/发布边界和 Electron 窗口断言，并将发布后 `/api/billing` 100 次核验写入发布手册。验证：`npm test` 80 passed + 1 PostgreSQL 条件跳过，`npm run check` 46 modules，`npm run openapi-check` 46 paths / 58 operations，`npm run browser-smoke`、`npm run release-check`、图形会话中的 `npm run desktop-smoke`、`npm run desktop:dir -- --linux --x64` 和真实 `linux-unpacked` package smoke 均通过。

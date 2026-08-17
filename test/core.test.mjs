@@ -44,8 +44,14 @@ test('engine generates complete artifacts for all product paths', () => {
   const base = { id: 'p', title: 'Agent OS', topic: 'Agent OS security', description: 'Study threat models' };
   const knowledgeContext = [{ id: 'chunk-1', documentId: 'document-1', document: 'Private security notes', sourceUrl: 'https://example.com/notes', text: 'Sandbox boundaries must be tested under adversarial workloads.', score: 0.82 }];
   const knowledge = generateArtifact({ ...base, type: 'knowledge' }, { knowledgeContext });
-  assert.deepEqual(knowledge.workflow.agents.map((agent) => agent.name), ['Research Agent', 'Knowledge Agent', 'Writing Agent', 'Review Agent']);
+  assert.deepEqual(knowledge.workflow.agents.map((agent) => agent.id), ['goal', 'research', 'knowledge', 'writing', 'review', 'finalizer']);
   assert.ok(knowledge.workflow.agents.every((agent) => agent.status === 'completed'));
+  assert.equal(knowledge.content.expertGoal.question, 'Study threat models');
+  assert.equal(knowledge.content.expertRoles.length, 4);
+  assert.deepEqual(knowledge.content.expertRoles.map((role) => role.stage), ['research', 'knowledge', 'writing', 'review']);
+  assert.ok(knowledge.content.knowledgeSystem.layers.length >= 8);
+  assert.ok(knowledge.content.systemDocument.sections.length >= 8);
+  assert.deepEqual(knowledge.content.llmWiki.sections, knowledge.content.wikiSections);
   assert.equal(knowledge.content.learningPath.length, 4);
   assert.ok(knowledge.content.graph.nodes.length >= 10);
   assert.ok(knowledge.content.sections.some((section) => section.title === 'Interview preparation'));
@@ -58,6 +64,9 @@ test('engine generates complete artifacts for all product paths', () => {
   assert.match(artifactToMarkdown(base, knowledge), /## Practice lab/);
   assert.match(artifactToMarkdown(base, knowledge), /Workspace knowledge used/);
   assert.match(artifactToMarkdown(base, knowledge), /## Workflow provenance/);
+  assert.match(artifactToMarkdown(base, knowledge), /## Expert Goal/);
+  assert.match(artifactToMarkdown(base, knowledge), /## Knowledge system/);
+  assert.match(artifactToMarkdown(base, knowledge), /## System document/);
   const research = generateArtifact({ ...base, type: 'research' });
   assert.equal(research.content.sota.length, 3);
   assert.ok(research.content.wikiSections.length >= 8);
@@ -82,6 +91,8 @@ test('engine generates complete artifacts for all product paths', () => {
   assert.match(artifactToLatex(base, paper), /\\begin\{picture\}/);
   assert.match(artifactToLatex(base, paper), /\\section\{Research gap discovery\}/);
   assert.match(artifactToLatex(base, paper), /\\section\{Novelty analysis\}/);
+  assert.match(artifactToLatex(base, paper), /\\section\{Expert Goal\}/);
+  assert.match(artifactToLatex(base, paper), /\\section\{LLM Wiki\}/);
   assert.match(artifactToLatex(base, paper), /Workspace knowledge used/);
   assert.match(artifactToLatex(base, paper, 'ieee'), /^\\documentclass\[conference\]\{IEEEtran\}/);
   assert.match(artifactToLatex(base, paper, 'acm'), /^\\documentclass\[sigconf\]\{acmart\}/);
@@ -133,7 +144,7 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
       content = JSON.stringify({ steps: ['research', 'knowledge', 'writing', 'review'].map((stage) => ({ stage, objective: `Complete ${stage}` })) });
     } else if (prompt.includes('Allowed next values:')) {
       const completed = JSON.parse(prompt.match(/Completed stages: (\[[^\]]*\])/u)?.[1] || '[]');
-      const next = ['research', 'knowledge', 'writing', 'review'].find((stage) => !completed.includes(stage)) || 'finish';
+      const next = prompt.includes('finish early') && completed.includes('research') ? 'finish' : ['research', 'knowledge', 'writing', 'review'].find((stage) => !completed.includes(stage)) || 'finish';
       const requestedSwitch = prompt.includes('switch runtime') && completed.length === 0;
       content = JSON.stringify({ next, mode: requestedSwitch ? 'plan-execute' : system.includes('ReAct') ? 'react' : 'supervisor', reason: requestedSwitch ? 'complex-task-replan' : 'next bounded specialist' });
     } else {
@@ -154,7 +165,8 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
   for (const mode of ['workflow', 'react', 'plan-execute', 'supervisor']) {
     const result = await runAgentWorkflow(project, fallback, config, { mode, prompt: `Run in ${mode}` });
     assert.equal(result.runtime.initialMode, mode); assert.equal(result.runtime.mode, mode);
-    assert.ok(result.stages.length >= 4); assert.ok(result.stages.every((stage) => stage.status === 'completed'));
+    assert.ok(result.stages.length >= 6); assert.ok(result.stages.every((stage) => stage.status === 'completed'));
+    assert.equal(result.stages[0].id, 'goal'); assert.equal(result.stages.at(-1).id, 'finalizer');
     if (mode === 'plan-execute') assert.equal(result.runtime.plan.length, 4);
     if (mode === 'react' || mode === 'supervisor') assert.ok(result.runtime.controlEvents.some((event) => event.id === `${mode}-controller`));
   }
@@ -162,6 +174,9 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
   assert.equal(switched.runtime.initialMode, 'react'); assert.equal(switched.runtime.mode, 'plan-execute');
   assert.ok(switched.runtime.modeHistory.some((event) => event.from === 'react' && event.to === 'plan-execute'));
   assert.equal(switched.runtime.plan.length, 4);
+  const early = await runAgentWorkflow(project, fallback, config, { mode: 'react', prompt: 'finish early after one specialist' });
+  assert.deepEqual(early.stages.map((stage) => stage.id), ['goal', 'research', 'finalizer']);
+  assert.equal(early.content.llmWiki.sections.length, early.content.wikiSections.length);
 });
 
 test('Agent Skills validate, match deterministically, and remain bounded guidance', () => {
@@ -346,7 +361,7 @@ test('LLM provider configuration is encrypted, endpoint-restricted, and resolved
   }
 });
 
-test('Web-configured provider runs the four-stage LangGraph workflow', async (t) => {
+test('Web-configured provider runs the Goal, expert collaboration, and Wiki finalization workflow', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'novi-langgraph-'));
   const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY };
   process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_JOB_WORKER = 'false'; process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-langgraph-encryption-key-32-chars';
@@ -359,7 +374,13 @@ test('Web-configured provider runs the four-stage LangGraph workflow', async (t)
     let content = 'OK';
     const marker = 'Editable schema and current draft: ';
     const line = prompt.split('\n').find((value) => value.startsWith(marker));
-    if (line) { const editable = JSON.parse(line.slice(marker.length)); const key = Object.keys(editable)[0]; content = JSON.stringify({ [key]: editable[key] }); modelCalls += 1; }
+    if (line) {
+      const editable = JSON.parse(line.slice(marker.length)); const key = Object.keys(editable)[0];
+      if (editable.expertGoal) content = JSON.stringify({ expertGoal: { ...editable.expertGoal, outcome: 'Provider-defined expert outcome.' }, expertRoles: editable.expertRoles.map((role) => ({ ...role, title: `Provider ${role.title}` })) });
+      else if (editable.llmWiki) content = JSON.stringify({ llmWiki: { ...editable.llmWiki, summary: 'Provider-finalized LLM Wiki.' } });
+      else content = JSON.stringify({ [key]: editable[key] });
+      modelCalls += 1;
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ id: `call-${modelCalls}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 } }));
   });
@@ -385,9 +406,10 @@ test('Web-configured provider runs the four-stage LangGraph workflow', async (t)
   response = await fetch(`${base}/api/projects/${project.id}/generate?async=true`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: 'Generate a systematic review artifact', mode: 'auto', sessionId: initialSession.id }) }); assert.equal(response.status, 202); const queued = await response.json(); const jobId = queued.job.id; assert.equal(queued.sessionId, initialSession.id);
   let job;
   for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 30)); job = (await (await fetch(`${base}/api/jobs/${jobId}`)).json()).job; if (job.status !== 'queued' && job.status !== 'running') break; }
-  assert.equal(job.status, 'completed'); assert.equal(job.currentMode, 'workflow'); assert.equal(job.currentModeLabel, 'Workflow'); assert.equal(job.agentStages.length, 4); assert.ok(job.agentStages.every((stage) => stage.status === 'completed')); assert.equal(job.activeSkills[0].name, 'systematic_review'); assert.equal(job.activePlugins[0].name, 'paper_quality');
+  assert.equal(job.status, 'completed'); assert.equal(job.currentMode, 'workflow'); assert.equal(job.currentModeLabel, 'Workflow'); assert.equal(job.agentStages.length, 6); assert.deepEqual(job.agentStages.map((stage) => stage.id), ['goal', 'research', 'knowledge', 'writing', 'review', 'finalizer']); assert.ok(job.agentStages.every((stage) => stage.status === 'completed')); assert.equal(job.activeSkills[0].name, 'systematic_review'); assert.equal(job.activePlugins[0].name, 'paper_quality');
   const generated = await (await fetch(`${base}/api/projects/${project.id}`)).json(); const artifact = generated.project.artifacts[0];
-  assert.equal(modelCalls, 4); assert.equal(skillPromptSeen, true); assert.equal(pluginPromptSeen, true); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.equal(artifact.workflow.runtime.skills[0].name, 'systematic_review'); assert.equal(artifact.workflow.runtime.plugins[0].name, 'paper_quality'); assert.equal('instructions' in artifact.workflow.runtime.skills[0], false); assert.equal('instructions' in artifact.workflow.runtime.plugins[0], false); assert.deepEqual(artifact.workflow.agents.map((agent) => agent.status), ['completed', 'completed', 'completed', 'completed']);
+  assert.equal(modelCalls, 6); assert.equal(skillPromptSeen, true); assert.equal(pluginPromptSeen, true); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.version, 4); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.equal(artifact.workflow.runtime.skills[0].name, 'systematic_review'); assert.equal(artifact.workflow.runtime.plugins[0].name, 'paper_quality'); assert.equal('instructions' in artifact.workflow.runtime.skills[0], false); assert.equal('instructions' in artifact.workflow.runtime.plugins[0], false); assert.ok(artifact.workflow.agents.every((agent) => agent.status === 'completed'));
+  assert.equal(artifact.content.expertGoal.outcome, 'Provider-defined expert outcome.'); assert.ok(artifact.content.expertRoles.every((role) => role.title.startsWith('Provider '))); assert.equal(artifact.content.llmWiki.summary, 'Provider-finalized LLM Wiki.'); assert.deepEqual(artifact.content.wikiSections, artifact.content.llmWiki.sections);
   const session = (await (await fetch(`${base}/api/projects/${project.id}/sessions/${initialSession.id}`)).json()).session;
   assert.equal(session.status, 'idle'); assert.equal(session.activeRun, null); assert.deepEqual(session.messages.map((message) => message.role), ['assistant', 'user', 'assistant']);
   assert.equal(session.messages[1].jobId, jobId); assert.equal(session.messages[1].status, 'completed'); assert.equal(session.messages[2].artifactId, artifact.id); assert.equal(session.messages[2].mode, 'workflow'); assert.equal(session.messages[2].skills[0].name, 'systematic_review'); assert.equal(session.messages[2].plugins[0].name, 'paper_quality');
@@ -526,7 +548,7 @@ test('evidence exports preserve claim-level source links and disclaimers', () =>
   const artifact = generateArtifact(project, { sources: [{ name: 'Primary paper', kind: 'Papers', url: 'https://example.com/paper', authority: 91, mapped: true, publishedAt: '2025' }] });
   const evidence = artifact.content.evidence;
   assert.equal(evidence.status, 'source-mapped');
-  assert.equal(evidence.claims.length, artifact.content.sections.length + artifact.content.wikiSections.length + artifact.content.sota.length);
+  assert.ok(evidence.claims.length <= 24); assert.ok(evidence.claims.some((claim) => claim.text === artifact.content.expertGoal.outcome)); assert.ok(evidence.claims.some((claim) => claim.text === artifact.content.systemDocument.sections[0].body));
   assert.deepEqual(evidence.claims[0].evidenceIds, ['source-1']);
   const markdown = artifactToMarkdown(project, artifact);
   assert.match(markdown, /Primary paper/);

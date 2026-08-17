@@ -15,7 +15,7 @@
 | Processing pipeline | Document → Parser → Chunk → Embedding → Entity → Graph | `src/knowledge.mjs`、远程导入、PostgreSQL/pgvector/Neo4j 投影 | 已实现 |
 | Knowledge OS memory | Document、Semantic、Graph、Research memory | 文档/片段/向量/实体关系、项目成果与来源快照 | 已实现 |
 | 存储 | PostgreSQL 工作区/任务，Vector DB，Neo4j | PostgreSQL Repository、pgvector HNSW、Neo4j outbox | 已实现；目标托管实例容量/灾备待取证 |
-| 四 Agent 边界 | 仅 Research、Knowledge、Writing、Review 四个有界职责 | 每个不可变 Artifact 的 `workflow.agents` 记录四阶段状态与实际输出计数；无 Agent 间自由对话 | 已实现 |
+| 专家协作与 Agent 边界 | Goal 先生成领域专家团队；Research、Knowledge、Writing、Review 四个 specialist 协作，Finalizer 形成最终 Wiki | `src/agent-runtime.mjs` 的 Goal/四 specialist/Finalizer 图节点；Artifact 的 `expertGoal`、`expertRoles`、`knowledgeSystem`、`systemDocument`、`llmWiki` 和 6 节点 provenance；无 Agent 间自由对话 | 已实现 |
 | Personal Knowledge Asset | 知识库、研究、学习、论文及历史版本持续积累 | 项目持久化、语义记忆、版本比较、指定版本导出 | 已实现 |
 | Workspace / Team / Enterprise | 项目空间、团队空间、企业知识隔离 | 组织、邀请、owner/admin/editor/viewer、组织切换、共享租户项目与 SSO 边界 | 已实现；真实企业 IdP 待取证 |
 | Continuous Update | 每日发现论文、技术和 GitHub 变化后自动更新 Wiki/成果 | snapshot diff → quota/Job → RAG → immutable artifact；busy/quota/failed 重试 | 已实现 |

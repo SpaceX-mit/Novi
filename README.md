@@ -33,13 +33,13 @@ HOST=0.0.0.0 PORT=4173 NOVI_AUTH_REQUIRED=true NOVI_APP_ORIGIN=http://<服务器
 
 以组织 owner/admin 登录后，点击顶部的模型设置按钮即可选择 OpenAI、Anthropic、Google Gemini、DeepSeek、MiniMax、OpenRouter、Mistral、xAI、Groq、Azure OpenAI、Ollama 或自定义 OpenAI-compatible 服务，填写模型和 API Key 后点击 `Save & test`；该操作会先加密保存当前表单，再测试已经激活的配置，避免测试未保存表单时出现 `No active LLM provider`。MiniMax 使用国内官方 OpenAI-compatible endpoint `https://api.minimaxi.com/v1`，默认模型为 `MiniMax-M3`，也可以在 Web 中改成账号可用的模型。viewer/editor 看不到设置入口，服务端也会对 Provider API 返回 403。选择 Offline mode 会停用当前 Web Provider，并恢复离线生成或下述旧环境变量网关。
 
-Web 中保存的租户配置优先于 `NOVI_LLM_BASE_URL`、`NOVI_LLM_API_KEY`、`NOVI_LLM_MODEL` 旧配置。启用 Web Provider 后，LangGraph.js 会根据生成提示词在 Workflow、ReAct、Plan & Execute 和 Supervisor 之间选择有界执行模式；控制节点可在运行中重新调度模式，Research、Knowledge、Writing、Review 仍只能修改各自字段。异步 Job 和工作区显示当前模式、阶段和进度；单阶段调用或响应校验失败时保留受控离线草稿，并转由 Supervisor 进行有界恢复。未保存 Web Provider 时，旧环境变量仍走原有单次 OpenAI-compatible 网关；两者都未配置时完全离线运行。`GET /api/agent/modes` 返回可用模式，生成请求可传 `{prompt,mode}`，其中 `mode=auto` 为默认。
+Web 中保存的租户配置优先于 `NOVI_LLM_BASE_URL`、`NOVI_LLM_API_KEY`、`NOVI_LLM_MODEL` 旧配置。启用 Web Provider 后，LangGraph.js 会根据生成提示词在 Workflow、ReAct、Plan & Execute 和 Supervisor 之间选择有界执行模式；控制节点可在运行中重新调度模式。每次 Generate 都按 `Goal → Research → Knowledge → Writing → Review → LLM Wiki Finalizer` 协作：Goal Agent 先把问题变成专家级目标和四个领域角色，Knowledge/ Writing 分别产出知识体系和体系文档，Finalizer 汇编最终 LLM Wiki；四个 specialist 仍只能修改各自字段白名单。异步 Job 和工作区显示当前模式、阶段和进度；单阶段调用或响应校验失败时保留受控离线草稿，并转由 Supervisor 进行有界恢复。未保存 Web Provider 时，旧环境变量仍走原有单次 OpenAI-compatible 网关；两者都未配置时完全离线运行。`GET /api/agent/modes` 返回可用模式，生成请求可传 `{prompt,mode}`，其中 `mode=auto` 为默认。
 
 每个新项目同时创建一个持久 Agent Session，并直接打开对话式工作区。左栏可新建、切换和删除空闲 Session；中栏保存用户/助手消息，composer 可选择 Auto、Workflow、ReAct、Plan & Execute 或 Supervisor；`Generate now` 和 composer 都在当前 Session 启动任务。右栏通过 Files、LLM Wiki、Document 切换工作区文件、不可变成果与文档片段，原有版本比较、导出、知识导入和来源更新仍可使用。`GET/POST /api/projects/:id/sessions` 可列出或新建会话，`GET/DELETE /api/projects/:id/sessions/:sessionId` 可读取或删除空闲会话；运行中的会话返回 409。同步和异步生成都可传 `{prompt,mode,sessionId}`，并把运行模式/阶段/进度、失败信息以及最终 Artifact 链接写回 Session。Session 按项目和租户双重隔离，随工作空间或账户删除，并包含在账户导出和 v3 备份中；服务重启会把中断 Session 置回 idle、写入失败消息并按原规则退款。
 
 ### 配置 Agent Tools
 
-组织 owner/admin 可从左侧 `Customize` 进入 Tools，启停 `workspace_read`、`workspace_write`、`web_search`，或增加自定义 HTTP 工具。ReAct、Plan & Execute 和 Supervisor 会在控制循环中决定是否调用工具，把观察结果作为不可信数据交给后续 Specialist；Workflow 保持固定四阶段，不自主调用工具。每次运行最多调用 6 次工具，自定义响应最多 32 KB，默认超时 10 秒且最多 30 秒。调用状态和截断后的输入/结果会保存在 Job、完成 Session 消息和 Artifact runtime provenance 中。
+组织 owner/admin 可从左侧 `Customize` 进入 Tools，启停 `workspace_read`、`workspace_write`、`web_search`，或增加自定义 HTTP 工具。ReAct、Plan & Execute 和 Supervisor 会在控制循环中决定是否调用工具，把观察结果作为不可信数据交给后续 Specialist；Workflow 保持固定的四 specialist 顺序，不自主调用工具，外层 Goal 和 Finalizer 仍会执行。每次运行最多调用 6 次工具，自定义响应最多 32 KB，默认超时 10 秒且最多 30 秒。调用状态和截断后的输入/结果会保存在 Job、完成 Session 消息和 Artifact runtime provenance 中。
 
 `workspace_read` 只能检索当前租户、当前工作空间的文档；`workspace_write` 默认关闭，启用后只能向当前工作空间写入受限文本知识；`web_search` 只在 `NOVI_LIVE_SOURCES=true` 且本次来源额度已取得时向模型公布。editor 可以在生成任务中调用管理员已启用的工具，viewer 只读，只有 owner/admin 可以修改配置。配置 API 为 `GET/PUT /api/agent/tools`。
 
@@ -191,7 +191,7 @@ docker run --rm -p 4173:4173 -v novi-data:/app/data novi
 - [商用就绪审计](docs/COMMERCIAL_READINESS.md)：逐项验证证据与仍需目标环境完成的正式发布门禁。
 - [发布手册](docs/RELEASE.md)：三平台打包、签名/公证 Secret、SBOM、校验和及发布后验收。
 
-当前生成器默认是离线确定性实现，目的是让完整产品流程可演示、可测试；实时连接器仅补充来源，不替代生产级引用核验。Knowledge Builder 输出 Wiki/路线/Practice Lab/图谱；Deep Research 分别输出 Report/Wiki/Graph/SOTA/机会；Paper Author 输出完整章节、research gap、novelty、方法、实验、图表和审稿，并可导出 IEEE/ACM LaTeX。每个不可变成果保存 Research/Knowledge/Writing/Review 职责、模式切换、Skill/Plugin 与工具调用 provenance；配置 Web Provider 后由 LangGraph.js 的 Workflow/ReAct/Plan & Execute/Supervisor 调度职责，自主模式可使用管理员启用的工具，四种模式都可应用匹配的组织 Skills 和声明式 Plugins。当前 LangGraph checkpoint 不能跨进程重启恢复图节点；Plugin 不加载第三方可执行包。正式商业发布仍必须完成真实供应商/目标服务验收和其他外部门禁，详见商用就绪审计。
+当前生成器默认是离线确定性实现，目的是让完整产品流程可演示、可测试；实时连接器仅补充来源，不替代生产级引用核验。Knowledge Builder 输出 Wiki/路线/Practice Lab/图谱；Deep Research 分别输出 Report/Wiki/Graph/SOTA/机会；Paper Author 输出完整章节、research gap、novelty、方法、实验、图表和审稿，并可导出 IEEE/ACM LaTeX。每个不可变成果同时保存 Expert Goal、领域专家角色、Knowledge System、System Document、最终 LLM Wiki，以及四个 specialist 的模式切换、Skill/Plugin 与工具调用 provenance；配置 Web Provider 后由 LangGraph.js 的 Workflow/ReAct/Plan & Execute/Supervisor 调度职责，自主模式可使用管理员启用的工具，四种模式都可应用匹配的组织 Skills 和声明式 Plugins。当前 LangGraph checkpoint 不能跨进程重启恢复图节点；Plugin 不加载第三方可执行包。正式商业发布仍必须完成真实供应商/目标服务验收和其他外部门禁，详见商用就绪审计。
 
 Web 操作与组织角色对齐：viewer 可浏览、搜索、查看历史和导出；editor 可创建、生成、置顶、导入知识、刷新来源、删除单个知识文档并在生成中使用已启用工具与匹配 Skills；admin/owner 还可配置组织 LLM Provider、Agent Tools/MCP/Skills、删除工作空间并发起付费 checkout。服务端会对每个写请求重新校验 membership。删除工作空间或发起任务的成员账户会取消关联未完成 Job、按原计费周期只退款一次，并阻止运行中的 worker 在删除后提交成果。
 

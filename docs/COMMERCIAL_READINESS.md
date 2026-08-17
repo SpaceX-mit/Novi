@@ -1,6 +1,6 @@
 # Novi 商用就绪审计
 
-审计日期：2026-08-14。本文只记录可由当前源码、自动化命令或实际服务证明的状态；“已实现”不等于“已在目标生产环境验证”。
+审计日期：2026-08-17。本文只记录可由当前源码、自动化命令或实际服务证明的状态；“已实现”不等于“已在目标生产环境验证”。
 
 ## 1. 需求与交付物追溯
 
@@ -11,7 +11,7 @@
 | 架构与详细设计 | `docs/ARCHITECTURE.md`、`docs/DETAILED_DESIGN.md` | 模块化单体、Repository、PostgreSQL/pgvector HNSW、对象/图谱 outbox、认证/计费/刷新/恢复边界 | 已文档化且与当前模块一致 |
 | API 契约 | `openapi.yaml` | `npm run openapi-check` 通过 OpenAPI 3.1 schema、引用、38 paths/44 operations | 已验证 |
 | Web UI | `public/` | 创建/生成/指定版本导出、历史选择/逐节比较、来源搜索、静态或 Browser Agent JS 渲染知识导入、浏览/语义检索/单文档删除、RAG 上下文核查、变化驱动的持续更新、组织切换、Provider 配置、工作空间删除；Practice Lab、Deep Research Wiki/Graph/SOTA、Paper Gap & Novelty/Sources、IEEE/ACM 下载、套餐定价与真实 checkout 入口 | Chromium smoke 已验证 Provider 设置入口/目录与 viewer 隐藏、知识检索、生成、删除与历史 excerpt 保留闭环、两版本比较、来源变化自动生成第 3 个不可变版本、差异/更新状态、SVG、研究套件、论文缺口和出版模板；Provider API/真实 LangGraph 调用另由 HTTP 集成测试验证 |
-| 生成工作流 | `src/agent-runtime.mjs`、`src/engine.mjs`、不可变 artifact | Web Provider 启用时 LangGraph.js 有界 Research → Knowledge → Writing → Review 四阶段各调用一次模型；每阶段保存状态/token/实际输出计数，Markdown 导出 provenance；来源/evidence 不可由模型改写 | 本地 OpenAI-compatible HTTP 服务验证恰好 4 次阶段调用、Job 状态与 fallback；真实厂商账号仍待验收，checkpoint 目前仅进程内存 |
+| 生成工作流 | `src/agent-runtime.mjs`、`src/engine.mjs`、不可变 artifact | Web Provider 启用时 LangGraph.js 按 Goal → Research → Knowledge → Writing → Review → LLM Wiki Finalizer 执行；Goal 生成领域专家角色，Knowledge/Writing 产出知识体系/体系文档，Finalizer 必经并同步 `llmWiki`/`wikiSections`；每节点保存状态/token/实际输出计数，Markdown/LaTeX 导出 provenance；来源/evidence 不可由模型改写 | 本地 OpenAI-compatible HTTP 服务验证 6 次节点调用、提前 finish 仍经过 Finalizer、Job 状态和 fallback；真实厂商账号仍待验收，checkpoint 目前仅进程内存 |
 | 商业与来源集成 | `src/billing.mjs`、`src/payments.mjs`、`src/connectors.mjs`、`src/source-adapters.mjs`、`public/` | Free preview、Personal Knowledge、Pro Research、Enterprise 四档展示；未配置真实支付供应商时明确 503；IEEE/ACM/Springer 通过 Crossref DOI prefix 查询具体出版物；可选隔离 Browser Agent 和通用 MCP Streamable HTTP source tool 均带 HTTPS/凭据/超时/大小/字段边界 | 定价 UI/checkout、publisher catalogs、Browser Agent、MCP JSON/SSE 协议与运行时接线已测试；真实目标服务仍受第 3 节外部门禁约束 |
 | Electron UI | `desktop/main.cjs`、`package.json` | 内置服务、安全 BrowserWindow、单实例、OS userData、同源导航；electron-builder 三平台配置 | Ubuntu AppImage 窗口 smoke 已通过；Windows/macOS 签名制品仍待托管 CI 取证 |
 
@@ -19,12 +19,12 @@
 
 | 门禁 | 验证范围 | 最近结果 |
 | --- | --- | --- |
-| `npm run check` | server、src、public、desktop、scripts、test 全部 JS 语法 | 40 modules 通过 |
-| `npm test` | 领域引擎、LangGraph 四阶段、Provider 加密/endpoint/RBAC、HTTP、认证、配额、支付、OIDC、摄取、RAG 安全、生成竞态、持续更新、恢复、投影、Browser Agent、MCP 和三条产品输出 | 68 passed，1 个 PostgreSQL 条件跳过 |
+| `npm run check` | server、src、public、desktop、scripts、test 全部 JS 语法 | 47 modules 通过 |
+| `npm test` | 领域引擎、LangGraph Goal/专家协作/Finalizer、Provider 加密/endpoint/RBAC、HTTP、认证、配额、支付、OIDC、摄取、RAG 安全、生成竞态、持续更新、恢复、投影、Browser Agent、MCP 和三条产品输出 | 81 passed，1 个 PostgreSQL 条件跳过 |
 | `NOVI_PG_URL=... npm test` | 同上并包含真实 PostgreSQL 事务、关系、Job 清理和 JSONB 向量回退投影 | 67/67 passed |
 | pgvector 0.8.6 实例测试 | 原生扩展、24 维表、HNSW cosine 索引、租户/项目过滤 `<=>` 查询及生命周期清理 | 固定 digest `sha256:ccc6e83d…d6b` 的真实 `pgvector/pgvector:pg16` 临时实例 67/67 通过；删除后 document/chunk/JSONB vector/native vector/项目 Job rows 均为 0，临时容器已删除 |
-| `npm run openapi-check` | OpenAPI 3.1 schema 和引用 | 38 paths、44 operations 通过 |
-| `npm run browser-smoke` | Chromium 角色感知控件、创建、知识导入/浏览/语义搜索、检索上下文生成、两次异步生成、版本比较、可控来源刷新/自动版本、单文档删除、历史 excerpt 保留、Markdown 导出、Paper SVG、定价、研究套件、论文缺口和出版模板 | 通过；输出 `pricing=ready`、`viewer-ui=ready`、`continuous-update=ready`、`knowledge-delete=ready`、`paper-svg=ready`、`paper-gap=ready`、`publication-templates=ready`、`research-suite=ready`；来源变化生成第 3 个不可变版本，历史显示 changed 和 workspace updated，viewer 写控件隐藏，删除后搜索为空且不可变成果上下文仍可见 |
+| `npm run openapi-check` | OpenAPI 3.1 schema 和引用 | 47 paths、59 operations 通过 |
+| `npm run browser-smoke` | Chromium 角色感知控件、创建、知识导入/浏览/语义搜索、检索上下文生成、两次异步生成、版本比较、可控来源刷新/自动版本、单文档删除、历史 excerpt 保留、Markdown 导出、Paper SVG、Expert Goal/专家团队/知识体系/体系文档/最终 Wiki、定价、研究套件、论文缺口和出版模板 | 通过；输出 `pricing=ready`、`viewer-ui=ready`、`continuous-update=ready`、`knowledge-delete=ready`、`paper-svg=ready`、`expert-wiki=ready`、`paper-gap=ready`、`publication-templates=ready`、`research-suite=ready`；来源变化生成第 3 个不可变版本，历史显示 changed 和 workspace updated，viewer 写控件隐藏，删除后搜索为空且不可变成果上下文仍可见 |
 | `npm run desktop-smoke` | Electron 内置服务、安全窗口和共享 UI DOM | Electron 43.4.0 在当前 Ubuntu + 无 root 解包 Xvfb 下通过 |
 | `npm run desktop-package-smoke` | `app.asar` 内置服务、OS userData、安全窗口和 UI | Linux unpacked 与 AppImage 均通过；正式 AppImage `.desktop` 不默认关闭 sandbox |
 | `npm run perf-check` | 首页大小与本机 health P95 | 首页 10,547 bytes，P95 1.2 ms |
