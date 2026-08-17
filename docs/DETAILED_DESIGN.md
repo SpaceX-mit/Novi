@@ -5,14 +5,15 @@
 - `server.mjs`：路由、JSON 解析、输入校验、响应、静态文件和错误边界。
 - `server.mjs` 在 API 路由入口执行 Cookie 会话 CSRF 边界：POST/PUT/PATCH/DELETE 检查同源 `Origin` 与 Fetch Metadata；Bearer Authorization 请求跳过该浏览器防护。注册/登录若浏览器带 `Origin` 也执行同源校验；外部 webhook 不依赖浏览器会话。
 - `src/store.mjs`：状态读取、串行事务队列、原子文件替换、项目创建。
-- `src/engine.mjs`：Knowledge Builder 的 Wiki/路线/Practice Lab/图谱、Deep Research 的 Report/Wiki/Graph/SOTA/机会、Paper Author 的完整章节/gap/novelty/方法/实验/审稿；提供 Expert Goal、领域角色、知识体系、体系文档、最终 LLM Wiki、来源建议、六节点 workflow provenance、Markdown Mermaid 和 article/IEEE/ACM LaTeX picture 序列化；Web 将同一节点/边模型渲染为内联 SVG。
+- `src/engine.mjs`：Knowledge Builder 的 Wiki/路线/Practice Lab/图谱、Deep Research 的 Report/Wiki/Graph/SOTA/机会、Paper Author 的完整章节/gap/novelty/方法/实验/审稿；提供 Expert Goal、领域角色、知识体系、体系文档、最终 LLM Wiki、Goal 驱动参考发现、七节点 workflow provenance、Markdown Mermaid 和 article/IEEE/ACM LaTeX picture 序列化；每个 Artifact 固化与导出一致的 `llm-wiki.md`，Web 将图模型渲染为内联 SVG、将 Markdown 作为转义纯文本预览。
 - `public/app.js`：单页状态、API 客户端、视图渲染、表单和交互。
 - `desktop/main.cjs`：默认选择空闲回环端口，使用单实例锁，管理服务子进程，将默认状态写入 Electron OS `userData`，等待 200 健康响应，创建 sandbox/contextIsolation 安全窗口并限制导航/外链，在窗口或应用退出时终止子进程。electron-builder 从同一代码生成 Windows NSIS、macOS DMG/ZIP 和 Linux AppImage；`desktop-package-smoke` 从真实 `app.asar`/AppImage 验证服务、userData、窗口和 UI。
 - `src/auth.mjs`：账户注册、scrypt 密码哈希、可撤销 Bearer/HttpOnly 会话和租户身份解析；组织切换原子轮换 token，Web 客户端只接收新 HttpOnly Cookie。
 - `src/model.mjs`：OpenAI-compatible 结构化 JSON 网关，超时、未知字段、类型/数组边界或 schema 错误时回退离线生成；模型不能改写来源、工作区检索上下文和证据。最多 6 个、每个 700 字符的检索片段以明确的 UNTRUSTED DATA 边界传入，system message 禁止执行片段指令。
 - `src/llm-providers.mjs`：租户 Provider 目录、输入规范化、endpoint allowlist、AES-256-GCM API Key 加解密、LangChain 模型构造和连接测试。支持 OpenAI、Anthropic、Google、DeepSeek、MiniMax、OpenRouter、Mistral、xAI、Groq、Azure OpenAI、Ollama 与自定义 OpenAI-compatible 服务；MiniMax 使用国内官方 `https://api.minimaxi.com/v1`。
 - `src/agent-modes.mjs`：维护 Workflow、ReAct、Plan & Execute、Supervisor 目录，校验显式模式并从中英文提示词意图中选择自动模式。
-- `src/agent-runtime.mjs`：LangGraph.js 自适应有向图；Router 进入固定流水线、ReAct controller、Planner 或 Supervisor，controller 可切换模式，阶段 fallback 会升级到 Supervisor。每个 Specialist 建立有界 prompt、单独调用模型、校验 JSON 和现有字段形状，记录状态/时间/token。最多执行 8 个 Specialist 步骤，单职责最多两次；取消信号终止整条工作流。
+- `src/agent-runtime.mjs`：LangGraph.js 自适应有向图；Router 强制先执行 Goal 和无模型调用的 Reference Discovery，再进入固定流水线、ReAct controller、Planner 或 Supervisor。Reference 查询只来自已完成 Goal 的 question/domain/outcome/scope，返回来源仍由 Novi 连接器和 evidence 层控制。controller 可切换模式，Specialist fallback 会升级到 Supervisor。每个 Specialist 建立含目标语言约束的有界 prompt、单独调用模型、校验 JSON 和现有字段形状，记录状态/时间/token。最多执行 8 个 Specialist 步骤，单职责最多两次；取消信号终止整条工作流。
+- `src/wiki-language.mjs`：集中维护生成语言 allowlist，默认 `zh-CN`，项目保存 `wikiLanguage`，单次 Generate 使用 `language` 覆盖。当前生成内容支持中英日韩法德西和巴西葡语；UI 文案本地化不在本能力范围内。
 - `src/agent-tools.mjs`：把内置 workspace read/write/web search、自定义 HTTP 和已启用 MCP 工具合并为当次运行的受控注册表；执行输入校验、租户/项目边界、取消检查和最多 6 次调用的硬上限，并把有界 observation/provenance 返回 LangGraph tool node。
 - `src/mcp-runtime.mjs`：使用官方 `@modelcontextprotocol/sdk` 的 Client、StreamableHTTPClientTransport 和 AJV validator；规范化租户 MCP server 配置、加密 Bearer token、验证 endpoint allowlist，执行工具发现/命名空间化/显式授权和有界调用结果转换。
 - `src/skill-runtime.mjs`：校验最多 20 个租户 Skill 的名称、说明、4000 字符指令、产品范围、always/auto 激活和最多 12 个触发词；运行开始时按显式 `/skill name`、always、触发词优先级选出最多 3 个，并产生不含完整指令的哈希 provenance。
@@ -31,13 +32,13 @@
 
 ```text
 Project {
-  id, title, topic, type, description,
+  id, title, topic, type, description, wikiLanguage,
   status: draft | ready,
   pinned, createdAt, updatedAt,
   artifacts: Artifact[]
 }
-Artifact { id, type, title, createdAt, content: { ..., knowledgeContext[] } }
-Workflow { strategy, product, completedAt, runtime?, agents[4]: { order, name, responsibility, status, usage?, outputs } }
+Artifact { id, type, title, language, createdAt, content: { ..., knowledgeContext[] }, documents[{ name: llm-wiki.md, mediaType, language, content }] }
+Workflow { strategy, product, completedAt, runtime?, agents[7]: { order, name, responsibility, status, usage?, outputs } }
 LlmProviderConfig { tenantId, provider, model, baseUrl, apiVersion?, encryptedApiKey?, active, createdBy, updatedBy }
 McpServerConfig { id, tenantId, name, endpoint, encryptedBearerToken?, bearerTokenLast4?, discoveredTools[<=100], updatedAt }
 McpDiscoveredTool { name, alias, title?, description?, inputSchema, enabled, readOnly?, destructive?, unsupportedReason? }
@@ -48,13 +49,13 @@ AgentSession { id, tenantId, projectId, createdBy, title, status: idle | running
 AgentMessage { id, role: user | assistant, kind, content, jobId?, artifactId?, mode?, status?, createdAt }
 ```
 
-创建后状态为 `draft`；用户生成或持续更新成功后追加成果并变为 `ready`。持续更新成果额外保存 `trigger=continuous-update` 与 `snapshotId`。每个版本的 `workflow` 先记录 Goal/领域专家角色，再记录 Research/Knowledge/Writing/Review 四个 specialist 和 LLM Wiki Finalizer，并保存运行模式、切换历史、计划和 controller 事件；成果内容同时保存 `expertGoal`、`expertRoles`、`knowledgeSystem`、`systemDocument`、`llmWiki`，兼容字段 `wikiSections` 由 Finalizer 同步维护。`knowledgeContext` 保存 chunk/document ID、标题、片段、来源 URL 和相关分数，说明当次生成实际使用的个人知识。UI 默认使用最新成果，也可选择任意不可变历史版本。写操作进入同一 Promise 队列；更新后的完整状态先写 0600 临时文件，再用 rename 原子替换，状态目录使用 0700。
+创建后状态为 `draft`；用户生成或持续更新成功后追加成果并变为 `ready`。持续更新成果额外保存 `trigger=continuous-update` 与 `snapshotId`。每个版本的 `workflow` 先记录 Goal/领域专家角色与 Reference Discovery，再记录 Research/Knowledge/Writing/Review 四个 specialist 和 LLM Wiki Finalizer，并保存目标语言、参考查询/状态/来源类型、运行模式、切换历史、计划和 controller 事件；成果内容同时保存 `expertGoal`、`expertRoles`、`knowledgeSystem`、`systemDocument`、`llmWiki`，兼容字段 `wikiSections` 由 Finalizer 同步维护。`knowledgeContext` 保存 chunk/document ID、标题、片段、来源 URL 和相关分数，说明当次生成实际使用的个人知识。UI 默认使用最新成果，也可选择任意不可变历史版本；`documents` 为每个版本保存独立 Markdown 快照。写操作进入同一 Promise 队列；更新后的完整状态先写 0600 临时文件，再用 rename 原子替换，状态目录使用 0700。
 
 ## 3. 任务与模型调用
 
 Web 端生成使用 `POST /api/projects/:id/generate?async=true`，先取得 Job，再轮询 `/api/jobs/:id`；任务阶段为 queued → running → completed/failed。配置 Web Provider 后，Job 还持久化 `agentStages`、`currentStage` 和 20–100 的实际进度；每个阶段状态为 running → completed/fallback，并保存有界错误摘要与 token usage。项目状态在任务创建前原子切换到 `generating`，同一项目重复请求返回 409；额度扣减与任务创建在同一串行存储队列中完成，Job 保存 generation/source 计费周期，失败或服务重启时按原周期退款且只执行一次。成果提交成功后即使 Job 状态更新失败也不会重复退款。服务启动时会把遗留 queued/running Job 标记失败并恢复项目状态。每个消费者先通过 Repository 的事务性 `claimJob` 将 queued 原子变为 running 并写入 workerId，多个 HTTP 实例不会重复执行同一 Job。删除工作空间或发起任务的成员账户时，删除事务按 Job 的 charged/refunded 标记退款并移除 Job；运行中的 worker 在每个 LangGraph 节点前确认 Job 仍存在，并在成果提交事务再次确认 running Job、项目和 active membership，删除竞态不会重复退款或把成果写回共享项目。同步/异步执行都会以项目 topic + description 查询 `Repository.searchKnowledge`，再把经过字段白名单和长度限制的结果交给领域层。领域层先生成离线结构；租户存在 Web Provider 时优先用 LangGraph Goal/四 specialist/Finalizer 补全，否则由旧 OpenAI-compatible `ModelGateway` 单次补全。外部调用超时、非 2xx 或 schema 不合法时回退到受控离线结构，避免外部服务故障破坏工作区。
 
-上述“LangGraph Goal/专家协作/Wiki Finalizer 补全”的控制层已升级为自适应模式：生成请求接受 `{prompt,mode}`，`auto` 通过 `src/agent-modes.mjs` 识别意图；Job 持久化 `requestedMode`、`currentMode`、`modeHistory`、`agentStages` 和 `currentStage`，工作区实时显示当前模式、阶段和进度。成果 runtime 固化 initial/final mode、plan、controller events 与 token usage；Finalizer 是所有正常结束、提前结束和 specialist 上限路径的必经节点。
+上述控制层采用自适应模式：生成请求接受 `{prompt,mode,language}`，`auto` 通过 `src/agent-modes.mjs` 识别意图；Job 持久化 `language`、`expertGoal`、`referenceDiscovery`、`requestedMode`、`currentMode`、`modeHistory`、`agentStages` 和 `currentStage`，工作区实时显示 Goal、参考检索状态、当前模式、阶段和进度。Goal 完成后 Reference Discovery 才调用可选 `referenceRetriever`；关闭实时来源为 `offline`，已有快照为 `provided`，失败为 `fallback` 且服务器退来源额度。成果 runtime 固化 language、reference provenance、initial/final mode、plan、controller events 与 token usage；Finalizer 是所有正常结束、提前结束和 specialist 上限路径的必经节点。
 
 生成请求还接受项目内 `sessionId`；未提供时选择该项目最近更新的 Session，不存在则创建默认 Session。异步路径在同一存储事务中创建 Job、把项目置为 generating 并调用 `beginSessionRun`；同步路径同样原子设置项目和 Session，避免两步间删除竞态。阶段与模式回调更新 `activeRun`，成功时 `completeSessionRun` 追加带 Artifact ID 的助手消息，失败时 `failSessionRun` 追加一次错误消息并解除 active run。服务启动恢复对 queued/running Job 执行同一失败转换；项目、账户和备份/导出生命周期均包含 `agentSessions`。Session API 先用 tenant+project 查 Project，再以相同复合范围查 Session，避免通过 ID 探测其他租户数据。
 

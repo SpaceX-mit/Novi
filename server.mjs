@@ -30,6 +30,7 @@ import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings
 import { discoverMcpServer, publicMcpSettings, resolvedMcpTools, saveMcpSettings } from './src/mcp-runtime.mjs';
 import { publicSkillSettings, resolveSkills, saveSkillSettings, skillProvenance } from './src/skill-runtime.mjs';
 import { bindPluginTools, pluginProvenance, publicPluginSettings, resolvePlugins, savePluginSettings } from './src/plugin-runtime.mjs';
+import { normalizeWikiLanguage } from './src/wiki-language.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const publicDir = join(root, 'public');
@@ -89,6 +90,8 @@ function validateProject(input = {}) {
   if (String(input.title || '').length > 120) errors.title = 'Title must be 120 characters or less';
   if (String(input.topic || '').length > 300) errors.topic = 'Topic must be 300 characters or less';
   if (String(input.description || '').length > 500) errors.description = 'Description must be 500 characters or less';
+  try { normalizeWikiLanguage(input.wikiLanguage); }
+  catch (error) { errors.wikiLanguage = error.message; }
   return errors;
 }
 
@@ -123,14 +126,14 @@ const privateAddress = (address) => {
   return Boolean(mapped && privateIpv4(mapped)) || lower === '::' || lower === '::1' || lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb') || lower.startsWith('ff') || lower.startsWith('2001:db8:') || lower.startsWith('2001:2:') || lower.startsWith('2001:10:') || lower.startsWith('3fff:');
 };
 
-async function validateImportUrl(value, { skipDns = false } = {}) {
+async function validateImportUrl(value, { skipDns = false, lookupImpl = lookup } = {}) {
   let parsed;
   try { parsed = new URL(String(value)); } catch { throw Object.assign(new Error('url must be a valid URL'), { status: 422 }); }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw Object.assign(new Error('url must use http or https'), { status: 422 });
   if (parsed.username || parsed.password) throw Object.assign(new Error('url credentials are not allowed'), { status: 422 });
   if (!skipDns) {
     const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
-    const addresses = await lookup(hostname, { all: true, verbatim: true });
+    const addresses = await lookupImpl(hostname, { all: true, verbatim: true });
     // Some resolvers return an unspecified IPv6 placeholder alongside the real
     // address. Ignore that non-routable placeholder, but reject if no routable
     // answer remains or any actual answer is private/local.
@@ -140,17 +143,17 @@ async function validateImportUrl(value, { skipDns = false } = {}) {
   return parsed;
 }
 
-async function fetchImport(urlValue) {
+async function fetchImport(urlValue, { lookupImpl = lookup } = {}) {
   let target;
   try { target = new URL(String(urlValue)); } catch { throw Object.assign(new Error('url must be a valid URL'), { status: 422 }); }
-  target = await validateImportUrl(urlValue);
+  target = await validateImportUrl(urlValue, { lookupImpl });
   const githubRepository = await fetchGitHubRepository(target);
   if (githubRepository) return githubRepository;
   for (let redirects = 0; redirects <= 3; redirects += 1) {
     const response = await fetch(target, { redirect: 'manual', signal: AbortSignal.timeout(15_000), headers: { accept: 'text/html, text/plain, application/pdf, application/json, application/octet-stream', 'user-agent': 'Novi/0.1 importer' } });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       if (redirects === 3 || !response.headers.get('location')) throw Object.assign(new Error('too many redirects'), { status: 422 });
-      target = await validateImportUrl(new URL(response.headers.get('location'), target));
+      target = await validateImportUrl(new URL(response.headers.get('location'), target), { lookupImpl });
       continue;
     }
     if (!response.ok) throw Object.assign(new Error(`remote document returned ${response.status}`), { status: 422 });
@@ -328,7 +331,7 @@ async function retrieveWorkspaceKnowledge(store, project, user, limit = 6) {
   }
 }
 
-async function api(req, res, url, store, auth, metrics) {
+async function api(req, res, url, store, auth, metrics, dependencies = {}) {
   metrics.requests += 1;
   const address = req.socket.remoteAddress || 'unknown';
   const now = Date.now();
@@ -618,8 +621,12 @@ async function api(req, res, url, store, auth, metrics) {
     if (!['static', 'browser'].includes(renderMode)) return send(res, 422, { error: 'render must be static or browser' });
     try {
       let fetched;
-      if (renderMode === 'browser') { await validateImportUrl(input.url); fetched = await renderWithBrowserAgent(input.url); }
-      else fetched = await fetchImport(input.url);
+      if (renderMode === 'browser') {
+        await validateImportUrl(input.url, { lookupImpl: dependencies.dnsLookup || lookup });
+        fetched = await renderWithBrowserAgent(input.url, { skipTargetDns: true });
+        await validateImportUrl(fetched.url, { lookupImpl: dependencies.dnsLookup || lookup });
+      }
+      else fetched = await fetchImport(input.url, { lookupImpl: dependencies.dnsLookup || lookup });
       if (!fetched.content) return send(res, 422, { error: 'The remote document did not contain extractable text' });
       const result = ingestDocument({ title, content: fetched.content, sourceUrl: fetched.url, sourceKind: fetched.sourceKind, mimeType: fetched.mimeType }, { projectId, tenantId: user.tenantId });
       if (result.error) return send(res, 422, { error: result.error });
@@ -1002,6 +1009,9 @@ async function api(req, res, url, store, auth, metrics) {
     let requestedMode;
     try { requestedMode = validateRequestedMode(generationInput.mode || 'auto'); }
     catch (error) { return send(res, error.status || 422, { error: error.message, code: 'AGENT_MODE_INVALID' }); }
+    let language;
+    try { language = normalizeWikiLanguage(generationInput.language || current.wikiLanguage); }
+    catch (error) { return send(res, error.status || 422, { error: error.message, code: error.code || 'WIKI_LANGUAGE_INVALID' }); }
     const selectedMode = selectAgentMode(prompt, { requestedMode });
     const requestedSessionId = String(generationInput.sessionId || '').trim();
     if (requestedSessionId.length > 100) return send(res, 422, { error: 'sessionId is invalid' });
@@ -1037,11 +1047,12 @@ async function api(req, res, url, store, auth, metrics) {
           if (!item) return null;
           if (item.status === 'generating') return { conflict: true };
           const createdAt = new Date().toISOString();
-          const created = { id: randomUUID(), type: 'generate', projectId: id, sessionId: selectedSession.id, userId: user.id, tenantId: user.tenantId, prompt, requestedMode, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, modeHistory: [{ from: null, to: selectedMode.mode, reason: selectedMode.reason, at: createdAt }], status: 'queued', progress: 0, previousStatus: item.status, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
+          const created = { id: randomUUID(), type: 'generate', projectId: id, sessionId: selectedSession.id, userId: user.id, tenantId: user.tenantId, prompt, requestedMode, language, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, modeHistory: [{ from: null, to: selectedMode.mode, reason: selectedMode.reason, at: createdAt }], status: 'queued', progress: 0, previousStatus: item.status, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
           const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
           if (!session) return { sessionMissing: true };
           if (session.status === 'running') return { conflict: true };
           const message = beginSessionRun(session, { jobId: created.id, prompt, requestedMode, currentMode: selectedMode.mode });
+          updateSessionRun(session, { language });
           created.userMessageId = message.id;
           item.status = 'generating'; item.updatedAt = new Date().toISOString();
           state.jobs.unshift(created);
@@ -1058,11 +1069,6 @@ async function api(req, res, url, store, auth, metrics) {
       void runGeneration(store, auth, job.id, current, user, job.previousStatus, sourceCharged, generationPeriod, sourcePeriod, metrics);
       return send(res, 202, { job, sessionId: selectedSession.id });
     }
-    let liveSources = [];
-    if (process.env.NOVI_LIVE_SOURCES === 'true') {
-      try { liveSources = await searchKnowledgeSources(current.topic, 5); if (process.env.NOVI_VERIFY_SOURCES !== 'false') liveSources = await verifyEvidenceSources(liveSources); }
-      catch (error) { await store.update((state) => { refundSourceQuery(state, user, sourcePeriod); }); sourceCharged = false; console.warn(`Live source search failed: ${error.message}`); }
-    }
     const knowledgeContext = await retrieveWorkspaceKnowledge(store, current, user);
     let marked;
     const syncRunId = `sync:${randomUUID()}`;
@@ -1075,6 +1081,7 @@ async function api(req, res, url, store, auth, metrics) {
         if (!session) return { sessionMissing: true };
         if (session.status === 'running') return { conflict: true };
         beginSessionRun(session, { jobId: syncRunId, prompt, requestedMode, currentMode: selectedMode.mode });
+        updateSessionRun(session, { language });
         item.status = 'generating';
         item.updatedAt = new Date().toISOString();
         return { ...item, artifacts: [...item.artifacts] };
@@ -1109,7 +1116,24 @@ async function api(req, res, url, store, auth, metrics) {
         if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
         updateSessionToolCall(session, call); return true;
       });
-      artifact = await generateArtifactAsync(marked, { sources: liveSources, knowledgeContext, providerConfig, prompt, mode: requestedMode, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
+      const onStage = async (stage) => store.update((state) => {
+        const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
+        if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
+        updateSessionRun(session, { currentMode: stage.mode || selectedMode.mode, currentStage: stage.name, progress: stage.progress || session.activeRun.progress, ...(stage.expertGoal ? { expertGoal: stage.expertGoal, expertRoles: stage.expertRoles || [] } : {}), ...(stage.id === 'references' ? { referenceDiscovery: { query: stage.query, status: stage.status, sourceCount: stage.sourceCount || 0, sourceKinds: stage.sourceKinds || [] } } : {}) });
+        return true;
+      });
+      const referenceRetriever = sourceCharged ? async ({ query }) => {
+        try {
+          let sources = await searchKnowledgeSources(query, 6);
+          if (process.env.NOVI_VERIFY_SOURCES !== 'false') sources = await verifyEvidenceSources(sources);
+          return { sources, status: 'completed' };
+        } catch (error) {
+          await store.update((state) => { refundSourceQuery(state, user, sourcePeriod); });
+          sourceCharged = false;
+          throw error;
+        }
+      } : null;
+      artifact = await generateArtifactAsync(marked, { sources: [], knowledgeContext, providerConfig, prompt, language, mode: requestedMode, referenceRetriever, onStage, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
     } catch (error) {
       await store.update((state) => {
         refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod);
@@ -1220,24 +1244,12 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
         const message = beginSessionRun(session, { jobId: job.id, prompt: job.prompt, requestedMode: job.requestedMode, currentMode: job.currentMode });
         job.userMessageId = message.id;
       }
-      return { sessionId: session.id, prompt: job.prompt, requestedMode: job.requestedMode, currentMode: job.currentMode };
+      job.language ||= normalizeWikiLanguage(project.wikiLanguage);
+      updateSessionRun(session, { language: job.language });
+      return { sessionId: session.id, prompt: job.prompt, requestedMode: job.requestedMode, currentMode: job.currentMode, language: job.language };
     });
     if (!sessionState) throw new Error('Agent session is unavailable');
     Object.assign(claimed, sessionState);
-    let liveSources = [];
-    if (process.env.NOVI_LIVE_SOURCES === 'true') {
-      try { liveSources = await searchKnowledgeSources(project.topic, 5); if (process.env.NOVI_VERIFY_SOURCES !== 'false') liveSources = await verifyEvidenceSources(liveSources); }
-      catch {
-        await store.update((state) => {
-          const job = (state.jobs || []).find((item) => item.id === jobId);
-          if (job?.sourceCharged && !job.sourceRefunded) {
-            refundSourceQuery(state, user, sourcePeriod);
-            job.sourceCharged = false; job.sourceRefunded = true; job.updatedAt = new Date().toISOString();
-          }
-        });
-        sourceCharged = false;
-      }
-    }
     const knowledgeContext = await retrieveWorkspaceKnowledge(store, project, user);
     if (!await store.updateJob(jobId, { progress: 20, currentStage: 'Preparing agent workflow' })) throw new Error('Generation was cancelled');
     const runtimeState = await store.read();
@@ -1262,10 +1274,12 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       if (!job) return false;
       job.agentStages ||= [];
       const index = job.agentStages.findIndex((item) => item.id === stage.id);
-      const publicStage = { id: stage.id, name: stage.name, mode: stage.mode || job.currentMode, status: stage.status, ...(stage.startedAt ? { startedAt: stage.startedAt } : {}), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}) };
+      const publicStage = { id: stage.id, name: stage.name, mode: stage.mode || job.currentMode, status: stage.status, ...(stage.startedAt ? { startedAt: stage.startedAt } : {}), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}), ...(stage.query ? { query: stage.query } : {}), ...(Number.isFinite(stage.sourceCount) ? { sourceCount: stage.sourceCount } : {}), ...(stage.sourceKinds ? { sourceKinds: stage.sourceKinds } : {}) };
       if (index >= 0) job.agentStages[index] = publicStage; else job.agentStages.push(publicStage);
+      if (stage.expertGoal) { job.expertGoal = stage.expertGoal; job.expertRoles = stage.expertRoles || []; }
+      if (stage.id === 'references') job.referenceDiscovery = { query: stage.query, status: stage.status, sourceCount: stage.sourceCount || 0, sourceKinds: stage.sourceKinds || [] };
       job.progress = Math.max(job.progress || 0, stage.progress || 0); job.currentStage = stage.name; job.currentMode = stage.mode || job.currentMode; job.currentModeLabel = publicMode(job.currentMode).name; job.updatedAt = new Date().toISOString();
-      updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress });
+      updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress, ...(stage.expertGoal ? { expertGoal: stage.expertGoal, expertRoles: stage.expertRoles || [] } : {}), ...(stage.id === 'references' ? { referenceDiscovery: job.referenceDiscovery } : {}) });
       return true;
     });
     const onMode = async (event) => store.update((state) => {
@@ -1288,7 +1302,24 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       updateSessionToolCall(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), call);
       return true;
     });
-    const artifact = await generateArtifactAsync(project, { sources: liveSources, knowledgeContext, providerConfig, prompt: runPrompt, mode: claimed.requestedMode || 'auto', onStage, onMode, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:${jobId}` });
+    const referenceRetriever = sourceCharged ? async ({ query }) => {
+      try {
+        let sources = await searchKnowledgeSources(query, 6);
+        if (process.env.NOVI_VERIFY_SOURCES !== 'false') sources = await verifyEvidenceSources(sources);
+        return { sources, status: 'completed' };
+      } catch (error) {
+        await store.update((state) => {
+          const job = (state.jobs || []).find((item) => item.id === jobId);
+          if (job?.sourceCharged && !job.sourceRefunded) {
+            refundSourceQuery(state, user, sourcePeriod);
+            job.sourceCharged = false; job.sourceRefunded = true; job.updatedAt = new Date().toISOString();
+          }
+        });
+        sourceCharged = false;
+        throw error;
+      }
+    } : null;
+    const artifact = await generateArtifactAsync(project, { sources: [], knowledgeContext, providerConfig, prompt: runPrompt, language: claimed.language, mode: claimed.requestedMode || 'auto', referenceRetriever, onStage, onMode, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:${jobId}` });
     const result = await store.update((state) => {
       const item = state.projects.find((entry) => entry.id === project.id && owned(entry, user));
       const job = (state.jobs || []).find((entry) => entry.id === jobId && entry.status === 'running');
@@ -1417,7 +1448,7 @@ async function staticFile(req, res, url) {
   }
 }
 
-export function createServer() {
+export function createServer(dependencies = {}) {
   const dataFile = process.env.NOVI_DATA_FILE || join(root, 'data', 'novi.json');
   const storePromise = process.env.NOVI_STORAGE === 'postgres'
     ? createPostgresStore(process.env.NOVI_PG_URL)
@@ -1451,7 +1482,7 @@ export function createServer() {
       const store = await getStore();
       const auth = new AuthService(store);
       if (url.pathname.startsWith('/api/')) {
-        const handled = await api(req, res, url, store, auth, metrics);
+        const handled = await api(req, res, url, store, auth, metrics, dependencies);
         if (handled === false) send(res, 404, { error: 'API route not found' });
       } else await staticFile(req, res, url);
     } catch (error) {

@@ -507,11 +507,17 @@ components:
     MemberId: { in: path, name: id, required: true, schema: { type: string, format: uuid } }
     McpServerId: { in: path, name: serverId, required: true, schema: { type: string, format: uuid } }
   schemas:
+    WikiLanguage:
+      type: string
+      enum: [zh-CN, en, ja, ko, fr, de, es, pt-BR]
+      default: zh-CN
+      description: Language for generated Wiki reader-facing content; this does not localize the full Novi UI
     AgentGenerationInput:
       type: object
       properties:
         prompt: { type: string, minLength: 1, maxLength: 20000 }
         mode: { type: string, enum: [auto, workflow, react, plan-execute, supervisor], default: auto }
+        language: { $ref: '#/components/schemas/WikiLanguage' }
         sessionId: { type: string, format: uuid, description: Existing project Agent session; defaults to the most recently updated session }
     AgentConversationInput:
       type: object
@@ -806,6 +812,7 @@ components:
         topic: { type: string, maxLength: 300 }
         type: { type: string, enum: [knowledge, research, paper] }
         description: { type: string, maxLength: 500 }
+        wikiLanguage: { $ref: '#/components/schemas/WikiLanguage' }
     KnowledgeDocumentInput:
       type: object
       required: [title, content]

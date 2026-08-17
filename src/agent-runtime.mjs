@@ -4,16 +4,18 @@ import { allowedAgentMode, publicMode, selectAgentMode, validateRequestedMode } 
 import { toolDefinitionFor } from './agent-tools.mjs';
 import { skillPrompt, skillProvenance } from './skill-runtime.mjs';
 import { pluginPrompt, pluginProvenance } from './plugin-runtime.mjs';
+import { normalizeWikiLanguage, wikiLanguageInstruction } from './wiki-language.mjs';
 
 const goalStage = Object.freeze({ id: 'goal', name: 'Expert Goal Architect', progress: 30, fields: ['expertGoal', 'expertRoles'] });
+const referenceStage = Object.freeze({ id: 'references', name: 'Reference Discovery', progress: 42, fields: [] });
 const specialistStageDefinitions = Object.freeze([
-  { id: 'research', name: 'Research Agent', progress: 42, fields: ['summary', 'researchGaps', 'sota', 'opportunities'] },
-  { id: 'knowledge', name: 'Knowledge Agent', progress: 58, fields: ['sections', 'wikiSections', 'learningPath', 'caseStudies', 'practiceQuestions', 'graph', 'knowledgeSystem'] },
-  { id: 'writing', name: 'Writing Agent', progress: 74, fields: ['summary', 'title', 'abstract', 'sections', 'contributions', 'noveltyAnalysis', 'method', 'experiments', 'figures', 'systemDocument'] },
-  { id: 'review', name: 'Review Agent', progress: 86, fields: ['review'] },
+  { id: 'research', name: 'Research Agent', progress: 54, fields: ['summary', 'researchGaps', 'sota', 'opportunities'] },
+  { id: 'knowledge', name: 'Knowledge Agent', progress: 66, fields: ['sections', 'wikiSections', 'learningPath', 'caseStudies', 'practiceQuestions', 'graph', 'knowledgeSystem'] },
+  { id: 'writing', name: 'Writing Agent', progress: 78, fields: ['summary', 'title', 'abstract', 'sections', 'contributions', 'noveltyAnalysis', 'method', 'experiments', 'figures', 'systemDocument'] },
+  { id: 'review', name: 'Review Agent', progress: 88, fields: ['review'] },
 ]);
 const finalizerStage = Object.freeze({ id: 'finalizer', name: 'LLM Wiki Finalizer', progress: 96, fields: ['llmWiki', 'wikiSections'] });
-const stageDefinitions = Object.freeze([goalStage, ...specialistStageDefinitions, finalizerStage]);
+const stageDefinitions = Object.freeze([goalStage, referenceStage, ...specialistStageDefinitions, finalizerStage]);
 
 const reviewTemplate = [
   { area: 'Evidence', verdict: 'Needs review', note: 'Check every factual claim against the controlled evidence set.' },
@@ -26,6 +28,8 @@ const AgentState = Annotation.Root({
   content: Annotation(),
   sources: Annotation(),
   knowledgeContext: Annotation(),
+  language: Annotation(),
+  referenceDiscovery: Annotation(),
   prompt: Annotation(),
   requestedMode: Annotation(),
   initialMode: Annotation(),
@@ -160,12 +164,30 @@ function collaborationContext(state) {
   };
 }
 
+function observableGoal(content) {
+  const boundedText = (value, limit = 2_000) => String(value || '').slice(0, limit);
+  const goal = content.expertGoal || {};
+  return {
+    expertGoal: {
+      question: boundedText(goal.question), domain: boundedText(goal.domain, 500), outcome: boundedText(goal.outcome),
+      scope: (goal.scope || []).slice(0, 20).map((item) => boundedText(item, 1_000)),
+      deliverables: (goal.deliverables || []).slice(0, 20).map((item) => boundedText(item, 1_000)),
+      successCriteria: (goal.successCriteria || []).slice(0, 20).map((item) => boundedText(item, 1_000)),
+      constraints: (goal.constraints || []).slice(0, 20).map((item) => boundedText(item, 1_000)),
+    },
+    expertRoles: (content.expertRoles || []).slice(0, 4).map((role) => ({
+      id: boundedText(role.id, 100), title: boundedText(role.title, 500), expertise: boundedText(role.expertise), responsibility: boundedText(role.responsibility), stage: boundedText(role.stage, 30), expectedOutputs: (role.expectedOutputs || []).slice(0, 20).map((item) => boundedText(item, 1_000)),
+    })),
+  };
+}
+
 function stagePrompt(stage, state, editable) {
   const role = roleForStage(state, stage.id);
   return [
     `You are Novi's ${role?.title || stage.name}.`,
     `Your bounded responsibility is the ${stage.id} stage for a ${state.project.type} artifact.`,
     `Execution mode: ${state.activeMode}. User request: ${state.prompt || state.project.topic}`,
+    wikiLanguageInstruction(state.language),
     ...(role ? [`Assigned expertise: ${role.expertise}`, `Assigned responsibility: ${role.responsibility}`, `Expected outputs: ${JSON.stringify(role.expectedOutputs)}`] : []),
     ...(state.plan?.length ? [`Execution plan: ${JSON.stringify(state.plan)}`] : []),
     'Return ONLY one valid JSON object. Use exactly the editable keys and preserve the provided value shapes.',
@@ -199,7 +221,8 @@ function stageNode(stage, model, config, onStage) {
       validateCollaborativeCandidate(stage, candidate);
       const content = reconcileStageContent(stage, mergeStageContent(state.content, editable, candidate), candidate);
       const result = { id: stage.id, name, mode: state.activeMode, status: 'completed', startedAt, completedAt: new Date().toISOString(), outputKeys: Object.keys(editable), usage: usageFor(response) };
-      if (onStage && await onStage({ ...result, progress: stage.progress }) === false) throw Object.assign(new Error('Generation was cancelled'), { code: 'AGENT_CANCELLED' });
+      const observable = stage.id === 'goal' ? observableGoal(content) : {};
+      if (onStage && await onStage({ ...result, ...observable, progress: stage.progress }) === false) throw Object.assign(new Error('Generation was cancelled'), { code: 'AGENT_CANCELLED' });
       const attempts = { ...(state.stageAttempts || {}), [stage.id]: (state.stageAttempts?.[stage.id] || 0) + 1 };
       const completedStages = state.completedStages.includes(stage.id) ? state.completedStages : [...state.completedStages, stage.id];
       const planCursor = state.activeMode === 'plan-execute' && state.plan?.[state.planCursor]?.stage === stage.id ? state.planCursor + 1 : state.planCursor;
@@ -207,12 +230,61 @@ function stageNode(stage, model, config, onStage) {
     } catch (error) {
       if (error.code === 'AGENT_CANCELLED') throw error;
       const result = { id: stage.id, name, mode: state.activeMode, status: 'fallback', startedAt, completedAt: new Date().toISOString(), outputKeys: Object.keys(editable), error: safeError(error, config.apiKey), usage: { inputTokens: 0, outputTokens: 0 } };
-      if (onStage && await onStage({ ...result, progress: stage.progress }) === false) throw Object.assign(new Error('Generation was cancelled'), { code: 'AGENT_CANCELLED' });
+      const observable = stage.id === 'goal' ? observableGoal(state.content) : {};
+      if (onStage && await onStage({ ...result, ...observable, progress: stage.progress }) === false) throw Object.assign(new Error('Generation was cancelled'), { code: 'AGENT_CANCELLED' });
       const attempts = { ...(state.stageAttempts || {}), [stage.id]: (state.stageAttempts?.[stage.id] || 0) + 1 };
       const completedStages = state.completedStages.includes(stage.id) ? state.completedStages : [...state.completedStages, stage.id];
       const planCursor = state.activeMode === 'plan-execute' && state.plan?.[state.planCursor]?.stage === stage.id ? state.planCursor + 1 : state.planCursor;
       return { content: state.content, stages: [result], completedStages, stageAttempts: attempts, planCursor };
     }
+  };
+}
+
+export function referenceQueryForGoal(expertGoal = {}, project = {}) {
+  return [expertGoal.question, expertGoal.domain, expertGoal.outcome, ...(expertGoal.scope || []), project.topic]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .slice(0, 300);
+}
+
+function referenceKinds(sources = []) {
+  const kinds = new Set();
+  for (const source of sources) {
+    const value = `${source.kind || ''} ${source.url || ''}`.toLowerCase();
+    if (/arxiv|openalex|crossref|doi|paper|journal|conference|ieee|acm|springer/.test(value)) kinds.add('paper');
+    else if (/github|repository|code/.test(value)) kinds.add('github');
+    else kinds.add('web');
+  }
+  return [...kinds];
+}
+
+function referenceNode(retriever, onStage) {
+  return async (state) => {
+    const startedAt = new Date().toISOString();
+    const query = referenceQueryForGoal(state.content.expertGoal, state.project);
+    if (onStage && await onStage({ id: referenceStage.id, name: referenceStage.name, mode: state.activeMode, status: 'running', query, progress: referenceStage.progress - 8 }) === false) {
+      throw Object.assign(new Error('Generation was cancelled'), { code: 'AGENT_CANCELLED' });
+    }
+    let sources = state.sources || [];
+    let status = sources.length ? 'provided' : 'offline';
+    let error;
+    if (retriever) {
+      try {
+        const result = await retriever({ expertGoal: state.content.expertGoal, project: state.project, prompt: state.prompt, language: state.language, query });
+        sources = Array.isArray(result) ? result : result?.sources || [];
+        status = result?.status || 'completed';
+      } catch (retrievalError) {
+        status = 'fallback';
+        error = safeError(retrievalError);
+      }
+    }
+    const completedAt = new Date().toISOString();
+    const discovery = { query, status, sourceCount: sources.length, sourceKinds: referenceKinds(sources), startedAt, completedAt };
+    const stage = { id: referenceStage.id, name: referenceStage.name, mode: state.activeMode, status, startedAt, completedAt, outputKeys: ['sources'], usage: { inputTokens: 0, outputTokens: 0 }, ...(error ? { error } : {}) };
+    if (onStage && await onStage({ ...stage, ...discovery, progress: referenceStage.progress }) === false) throw Object.assign(new Error('Generation was cancelled'), { code: 'AGENT_CANCELLED' });
+    return { sources, referenceDiscovery: discovery, stages: [stage], completedStages: [...state.completedStages, referenceStage.id] };
   };
 }
 
@@ -237,13 +309,14 @@ function routerNode(onMode) {
       await notifyMode(onMode, { mode: activeMode, label: publicMode(activeMode).name, reason: selected.reason, status: 'running', progress: 20 });
     }
     if (!state.completedStages.includes(goalStage.id)) return { activeMode, initialMode, evaluatedStageCount: state.evaluatedStageCount || 0, route: goalStage.id, modeHistory: history };
+    if (!state.completedStages.includes(referenceStage.id)) return { activeMode, initialMode, evaluatedStageCount: state.evaluatedStageCount || 0, route: referenceStage.id, modeHistory: history };
     if (state.completedStages.includes(finalizerStage.id)) return { activeMode, initialMode, evaluatedStageCount: state.evaluatedStageCount || 0, route: END, modeHistory: history };
     const latest = state.stages.at(-1);
     const specialistRuns = state.stages.filter((stage) => stageIds.includes(stage.id)).length;
     let evaluatedStageCount = state.evaluatedStageCount || 0;
     if (state.stages.length > evaluatedStageCount) {
       evaluatedStageCount = state.stages.length;
-      if (latest?.status === 'fallback' && activeMode !== 'supervisor' && specialistRuns < MAX_STAGE_RUNS) {
+      if (stageIds.includes(latest?.id) && latest?.status === 'fallback' && activeMode !== 'supervisor' && specialistRuns < MAX_STAGE_RUNS) {
         const from = activeMode; activeMode = 'supervisor';
         const event = { from, to: activeMode, reason: `${latest.id}-fallback`, at: new Date().toISOString() };
         history.push(event);
@@ -265,7 +338,7 @@ function routerNode(onMode) {
 }
 
 function defaultPlan() {
-  return stageDefinitions.map((stage) => ({ stage: stage.id, objective: `Complete the bounded ${stage.name} responsibility.` }));
+  return [...specialistStageDefinitions, finalizerStage].map((stage) => ({ stage: stage.id, objective: `Complete the bounded ${stage.name} responsibility.` }));
 }
 
 function plannerNode(model, config, onMode) {
@@ -383,7 +456,9 @@ export async function runAgentWorkflow(project, fallback, config, options = {}) 
   graph.addNode('react-controller', controllerNode('react', model, config, options.onMode));
   graph.addNode('supervisor-controller', controllerNode('supervisor', model, config, options.onMode));
   graph.addNode('tool', toolNode(options.toolExecutor, options.onTool));
-  for (const stage of stageDefinitions) graph.addNode(stage.id, stageNode(stage, model, config, options.onStage));
+  graph.addNode(goalStage.id, stageNode(goalStage, model, config, options.onStage));
+  graph.addNode(referenceStage.id, referenceNode(options.referenceRetriever, options.onStage));
+  for (const stage of [...specialistStageDefinitions, finalizerStage]) graph.addNode(stage.id, stageNode(stage, model, config, options.onStage));
   const routes = ['planner', 'react-controller', 'supervisor-controller', 'tool', ...stageDefinitions.map((stage) => stage.id), END];
   graph.addEdge(START, 'router');
   graph.addConditionalEdges('router', (state) => state.route, routes);
@@ -392,18 +467,20 @@ export async function runAgentWorkflow(project, fallback, config, options = {}) 
   graph.addConditionalEdges('supervisor-controller', (state) => state.route, ['router', 'tool', ...stageIds, finalizerStage.id]);
   graph.addEdge('tool', 'router');
   graph.addEdge(goalStage.id, 'router');
+  graph.addEdge(referenceStage.id, 'router');
   for (const stage of specialistStageDefinitions) graph.addEdge(stage.id, 'router');
   graph.addEdge(finalizerStage.id, END);
   const app = graph.compile({ checkpointer: new MemorySaver() });
   const threadId = options.threadId || `${project.tenantId || 'local'}:${project.id}:${fallback.id}`;
   const requestedMode = validateRequestedMode(options.mode || 'auto');
   const prompt = String(options.prompt || project.description || project.topic || '').trim().slice(0, 20_000);
-  const result = await app.invoke({ project, content: fallback.content, sources: options.sources || [], knowledgeContext: options.knowledgeContext || [], prompt, requestedMode, initialMode: null, activeMode: null, route: null, plan: null, planCursor: 0, completedStages: [], stageAttempts: {}, evaluatedStageCount: 0, stages: [], modeHistory: [], controlEvents: [], tools: options.tools || [], skills: options.skills || [], plugins: options.plugins || [], pendingToolCalls: [], toolCallCount: 0, toolCalls: [], toolObservations: [] }, { configurable: { thread_id: threadId }, recursionLimit: 60 });
+  const language = normalizeWikiLanguage(options.language || project.wikiLanguage);
+  const result = await app.invoke({ project, content: fallback.content, sources: options.sources || [], knowledgeContext: options.knowledgeContext || [], language, referenceDiscovery: null, prompt, requestedMode, initialMode: null, activeMode: null, route: null, plan: null, planCursor: 0, completedStages: [], stageAttempts: {}, evaluatedStageCount: 0, stages: [], modeHistory: [], controlEvents: [], tools: options.tools || [], skills: options.skills || [], plugins: options.plugins || [], pendingToolCalls: [], toolCallCount: 0, toolCalls: [], toolObservations: [] }, { configurable: { thread_id: threadId }, recursionLimit: 60 });
   const usage = [...result.stages, ...result.controlEvents].reduce((total, stage) => ({ inputTokens: total.inputTokens + (stage.usage?.inputTokens || 0), outputTokens: total.outputTokens + (stage.usage?.outputTokens || 0) }), { inputTokens: 0, outputTokens: 0 });
   return {
     content: { ...result.content, sources: result.sources || result.content.sources || [], knowledgeContext: result.knowledgeContext || result.content.knowledgeContext || [] },
     stages: result.stages,
-    runtime: { name: 'langgraph', version: 4, checkpoint: 'memory', provider: config.provider, model: config.model, threadId, requestedMode, initialMode: result.initialMode, mode: result.activeMode, modeHistory: result.modeHistory, plan: result.plan || [], controlEvents: result.controlEvents, toolCalls: result.toolCalls || [], skills: skillProvenance(result.skills || []), plugins: pluginProvenance(result.plugins || []), usage },
+    runtime: { name: 'langgraph', version: 5, checkpoint: 'memory', provider: config.provider, model: config.model, threadId, language, references: result.referenceDiscovery, requestedMode, initialMode: result.initialMode, mode: result.activeMode, modeHistory: result.modeHistory, plan: result.plan || [], controlEvents: result.controlEvents, toolCalls: result.toolCalls || [], skills: skillProvenance(result.skills || []), plugins: pluginProvenance(result.plugins || []), usage },
   };
 }
 

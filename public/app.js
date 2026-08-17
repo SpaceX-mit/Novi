@@ -1,6 +1,6 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, toolSettings: null, mcpSettings: null, skillSettings: null, pluginSettings: null, customizeTab: 'tools', activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, contextPanel: 'wiki', activeDocumentId: null, monitoringJobId: null, composerDraft: '', composerMode: 'auto' };
+const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, toolSettings: null, mcpSettings: null, skillSettings: null, pluginSettings: null, customizeTab: 'tools', activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, contextPanel: 'wiki', activeDocumentId: null, monitoringJobId: null, composerDraft: '', composerMode: 'auto', composerLanguage: 'zh-CN' };
 let authRegister = false;
 const roleRank = Object.freeze({ viewer: 10, editor: 20, admin: 30, owner: 40 });
 const canRole = (required) => (roleRank[state.role] || 0) >= roleRank[required];
@@ -21,6 +21,7 @@ const typeMeta = {
   research: { label: 'DEEP RESEARCH', color: 'research' },
   paper: { label: 'PAPER AUTHOR', color: 'paper' },
 };
+const wikiLanguages = [['zh-CN', '简体中文'], ['en', 'English'], ['ja', '日本語'], ['ko', '한국어'], ['fr', 'Français'], ['de', 'Deutsch'], ['es', 'Español'], ['pt-BR', 'Português (Brasil)']];
 
 async function request(path, options = {}) {
   // Browser sessions use the HttpOnly SameSite cookie set by the server. Bearer
@@ -175,7 +176,7 @@ function showWorkspace(project) {
   $('#page-label').textContent = project.title;
   $$('.nav-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.view === project.type));
   if (state.sessionProjectId !== project.id) {
-    state.sessionProjectId = project.id; state.sessions = []; state.activeSessionId = null; state.activeSession = null; state.workspaceKnowledge = null; state.contextPanel = 'wiki'; state.activeDocumentId = null; state.composerDraft = ''; state.composerMode = 'auto';
+    state.sessionProjectId = project.id; state.sessions = []; state.activeSessionId = null; state.activeSession = null; state.workspaceKnowledge = null; state.contextPanel = 'wiki'; state.activeDocumentId = null; state.composerDraft = ''; state.composerMode = 'auto'; state.composerLanguage = project.wikiLanguage || 'zh-CN';
     void loadAgentWorkspace(project.id);
   }
   renderWorkspace(project);
@@ -251,6 +252,11 @@ function renderAgentMessage(message) {
   return `<article class="agent-message ${isUser ? 'user' : 'assistant'} ${message.kind || 'message'}"><div class="message-author"><b>${isUser ? 'You' : 'Novi'}</b><span>${escapeHtml(meta)}</span></div><p>${escapeHtml(message.content)}</p>${plugins ? `<div class="message-plugins">${plugins}</div>` : ''}${skills ? `<div class="message-skills">${skills}</div>` : ''}${tools ? `<div class="message-tools">${tools}</div>` : ''}${message.artifactId ? `<button class="message-artifact" data-artifact-id="${escapeHtml(message.artifactId)}">Open generated artifact</button>` : ''}</article>`;
 }
 
+function renderLiveGoal(run) {
+  if (!run?.expertGoal) return '';
+  return `<section class="live-goal"><span>GOAL</span><b>${escapeHtml(run.expertGoal.question)}</b><p>${escapeHtml(run.expertGoal.outcome)}</p>${run.referenceDiscovery ? `<small>References: ${escapeHtml(run.referenceDiscovery.status)} · ${Number(run.referenceDiscovery.sourceCount || 0)} sources${run.referenceDiscovery.sourceKinds?.length ? ` · ${escapeHtml(run.referenceDiscovery.sourceKinds.join(', '))}` : ''}</small>` : '<small>Goal ready · reference discovery follows</small>'}</section>`;
+}
+
 function renderConversation(project) {
   const session = state.activeSession;
   const messages = session?.messages || [];
@@ -259,10 +265,13 @@ function renderConversation(project) {
   const editor = canRole('editor');
   const modes = [['auto', 'Auto'], ['workflow', 'Workflow'], ['react', 'ReAct'], ['plan-execute', 'Plan & Execute'], ['supervisor', 'Supervisor']];
   const runSkills = [...(run?.plugins || []).map((plugin) => plugin.title || plugin.name), ...(run?.skills || []).map((skill) => skill.title || skill.name)].join(', ');
-  return `<section class="conversation-panel"><header><div><p class="eyebrow">AGENT SESSION</p><h2>${escapeHtml(session?.title || 'Loading session')}</h2></div>${run ? `<div class="conversation-run" id="conversation-run"><b id="conversation-run-mode">${escapeHtml(sessionModeLabel(run.currentMode))}</b><span id="conversation-run-stage">${escapeHtml(run.currentStage || 'Preparing')}</span>${runSkills ? `<span class="conversation-run-skills">${escapeHtml(runSkills)}</span>` : ''}<small id="conversation-run-progress">${Number(run.progress || 0)}%</small></div>` : ''}</header><div class="conversation-messages" id="conversation-messages" aria-live="polite">${messages.map(renderAgentMessage).join('') || '<div class="conversation-loading">Loading conversation...</div>'}</div>${!project.artifacts?.length && editor ? `<button class="primary-button generate-now" id="generate-empty" ${busy ? 'disabled' : ''}>${busy ? 'Generating...' : 'Generate now'}</button>` : ''}${editor ? `<form class="agent-composer" id="agent-composer"><textarea id="agent-prompt" name="prompt" rows="2" maxlength="20000" placeholder="Ask Novi to research, build knowledge, or draft..." ${busy || !session ? 'disabled' : ''}>${escapeHtml(state.composerDraft)}</textarea><div><label>Execution mode<select id="agent-mode" name="mode" ${busy ? 'disabled' : ''}>${modes.map(([value, label]) => `<option value="${value}" ${state.composerMode === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button class="composer-send" type="submit" title="Send request" aria-label="Send request" ${busy || !session ? 'disabled' : ''}>↑</button></div></form>` : '<p class="conversation-readonly">Viewer access is read only.</p>'}</section>`;
+  const liveGoal = renderLiveGoal(run);
+  return `<section class="conversation-panel"><header><div><p class="eyebrow">AGENT SESSION</p><h2>${escapeHtml(session?.title || 'Loading session')}</h2></div>${run ? `<div class="conversation-run" id="conversation-run"><b id="conversation-run-mode">${escapeHtml(sessionModeLabel(run.currentMode))}</b><span id="conversation-run-stage">${escapeHtml(run.currentStage || 'Preparing')}</span>${runSkills ? `<span class="conversation-run-skills">${escapeHtml(runSkills)}</span>` : ''}<small id="conversation-run-progress">${Number(run.progress || 0)}%</small></div>` : ''}</header><div class="conversation-messages" id="conversation-messages" aria-live="polite">${liveGoal}${messages.map(renderAgentMessage).join('') || '<div class="conversation-loading">Loading conversation...</div>'}</div>${!project.artifacts?.length && editor ? `<button class="primary-button generate-now" id="generate-empty" ${busy ? 'disabled' : ''}>${busy ? 'Generating...' : 'Generate now'}</button>` : ''}${editor ? `<form class="agent-composer" id="agent-composer"><textarea id="agent-prompt" name="prompt" rows="2" maxlength="20000" placeholder="Ask Novi to research, build knowledge, or draft..." ${busy || !session ? 'disabled' : ''}>${escapeHtml(state.composerDraft)}</textarea><div><label>Execution mode<select id="agent-mode" name="mode" ${busy ? 'disabled' : ''}>${modes.map(([value, label]) => `<option value="${value}" ${state.composerMode === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>Wiki language<select id="wiki-language" name="language" ${busy ? 'disabled' : ''}>${wikiLanguages.map(([value, label]) => `<option value="${value}" ${state.composerLanguage === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button class="composer-send" type="submit" title="Send request" aria-label="Send request" ${busy || !session ? 'disabled' : ''}>↑</button></div></form>` : '<p class="conversation-readonly">Viewer access is read only.</p>'}</section>`;
 }
 
-function renderDocumentViewer() {
+function renderDocumentViewer(artifact) {
+  const generated = (artifact?.documents || []).find((item) => item.id === state.activeDocumentId);
+  if (generated) return `<article class="document-viewer generated-document"><span>${escapeHtml(generated.mediaType)} · ${escapeHtml(generated.language || artifact.language || 'en')}</span><h3>${escapeHtml(generated.name)}</h3><pre>${escapeHtml(generated.content || '')}</pre></article>`;
   const knowledge = state.workspaceKnowledge || { documents: [], chunks: [] };
   const document = knowledge.documents?.find((item) => item.id === state.activeDocumentId) || knowledge.documents?.[0];
   if (!document) return '<div class="context-empty"><b>No document selected</b><p>Import notes or a public URL to inspect it here.</p></div>';
@@ -272,8 +281,12 @@ function renderDocumentViewer() {
 
 function renderContextBody(project, artifact, artifactIndex, selected) {
   const knowledge = state.workspaceKnowledge || { documents: [] };
-  if (state.contextPanel === 'files') return knowledge.documents?.length ? `<div class="context-file-list">${knowledge.documents.map((document) => `<button data-document-id="${escapeHtml(document.id)}"><span>${escapeHtml(document.title)}</span><small>${escapeHtml(document.sourceKind || 'text')} · ${document.chunkCount || 0} chunks</small></button>`).join('')}</div>` : '<div class="context-empty"><b>No files yet</b><p>Import notes, web pages, PDFs, or a GitHub repository.</p></div>';
-  if (state.contextPanel === 'document') return renderDocumentViewer();
+  if (state.contextPanel === 'files') {
+    const generated = (artifact?.documents || []).map((document) => `<button data-generated-document-id="${escapeHtml(document.id)}"><span>${escapeHtml(document.name)}</span><small>Generated Markdown · ${escapeHtml(document.language || artifact.language || 'en')}</small></button>`).join('');
+    const imported = (knowledge.documents || []).map((document) => `<button data-document-id="${escapeHtml(document.id)}"><span>${escapeHtml(document.title)}</span><small>${escapeHtml(document.sourceKind || 'text')} · ${document.chunkCount || 0} chunks</small></button>`).join('');
+    return generated || imported ? `<div class="context-file-list">${generated}${imported}</div>` : '<div class="context-empty"><b>No files yet</b><p>Generate a Wiki or import notes, web pages, PDFs, or a GitHub repository.</p></div>';
+  }
+  if (state.contextPanel === 'document') return renderDocumentViewer(artifact);
   if (!artifact) return '<div class="context-empty"><b>No artifact yet</b><p>Send a request in this Session to create the first knowledge asset.</p></div>';
   const tabs = tabsFor(project.type); const c = artifact.content;
   const toolCalls = artifact.workflow?.runtime?.toolCalls || [];
@@ -308,11 +321,13 @@ function renderWorkspace(project, selected = state.activeTab) {
   $('#agent-composer')?.addEventListener('submit', (event) => { event.preventDefault(); const input = $('#agent-prompt'); const prompt = input.value.trim(); if (!prompt) return showToast('Enter a request for Novi'); sendAgentMessage(project.id, { prompt, mode: $('#agent-mode').value }); });
   $('#agent-prompt')?.addEventListener('input', (event) => { state.composerDraft = event.currentTarget.value; });
   $('#agent-mode')?.addEventListener('change', (event) => { state.composerMode = event.currentTarget.value; });
+  $('#wiki-language')?.addEventListener('change', (event) => { state.composerLanguage = event.currentTarget.value; });
   $('#new-session')?.addEventListener('click', () => createAgentSessionUi(project.id));
   $('#delete-session')?.addEventListener('click', () => deleteAgentSessionUi(project.id, state.activeSessionId));
   $$('[data-session-id]').forEach((button) => button.addEventListener('click', () => selectAgentSession(project.id, button.dataset.sessionId)));
   $$('[data-context-panel]').forEach((button) => button.addEventListener('click', () => { state.contextPanel = button.dataset.contextPanel; renderWorkspace(project, state.activeTab); }));
   $$('[data-document-id]').forEach((button) => button.addEventListener('click', () => { state.activeDocumentId = button.dataset.documentId; state.contextPanel = 'document'; renderWorkspace(project, state.activeTab); }));
+  $$('[data-generated-document-id]').forEach((button) => button.addEventListener('click', () => { state.activeDocumentId = button.dataset.generatedDocumentId; state.contextPanel = 'document'; renderWorkspace(project, state.activeTab); }));
   $$('[data-artifact-id]').forEach((button) => button.addEventListener('click', () => { state.activeArtifactId = button.dataset.artifactId; state.contextPanel = 'wiki'; state.compareVersions = false; renderWorkspace(project, state.activeTab); }));
   $('#pin-workspace')?.addEventListener('click', () => pin(project.id)); $('#copy-summary')?.addEventListener('click', async () => { if (!navigator.clipboard) return showToast('Clipboard is unavailable'); await navigator.clipboard.writeText(c.summary); showToast('Summary copied'); });
   $('#delete-workspace')?.addEventListener('click', () => deleteWorkspace(project));
@@ -375,7 +390,7 @@ function renderEvidenceClaims(evidence) {
 }
 
 async function loadProjects() { state.projects = (await request('/api/projects')).projects; renderProjects(); }
-function resetAgentWorkspaceState() { state.sessions = []; state.activeSessionId = null; state.activeSession = null; state.sessionProjectId = null; state.workspaceKnowledge = null; state.activeDocumentId = null; state.monitoringJobId = null; state.composerDraft = ''; state.composerMode = 'auto'; }
+function resetAgentWorkspaceState() { state.sessions = []; state.activeSessionId = null; state.activeSession = null; state.sessionProjectId = null; state.workspaceKnowledge = null; state.activeDocumentId = null; state.monitoringJobId = null; state.composerDraft = ''; state.composerMode = 'auto'; state.composerLanguage = 'zh-CN'; }
 async function loadBilling() {
   try {
     const org = await request('/api/org');
@@ -469,7 +484,12 @@ function updateConversationRun(job) {
   if (mode) mode.textContent = job.currentModeLabel || sessionModeLabel(job.currentMode);
   if (stage) stage.textContent = job.currentStage || (job.status === 'queued' ? 'Queued' : 'Preparing');
   if (progress) progress.textContent = `${Math.max(0, Math.min(100, Number(job.progress) || 0))}%`;
-  if (state.activeSession?.activeRun?.jobId === job.id) Object.assign(state.activeSession.activeRun, { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress });
+  if (state.activeSession?.activeRun?.jobId === job.id) Object.assign(state.activeSession.activeRun, { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress, ...(job.expertGoal ? { expertGoal: job.expertGoal, expertRoles: job.expertRoles || [] } : {}), ...(job.referenceDiscovery ? { referenceDiscovery: job.referenceDiscovery } : {}) });
+  if (job.expertGoal) {
+    const messages = $('#conversation-messages'); const current = messages?.querySelector('.live-goal');
+    const template = document.createElement('template'); template.innerHTML = renderLiveGoal(job).trim();
+    if (current) current.replaceWith(template.content.firstElementChild); else messages?.prepend(template.content.firstElementChild);
+  }
 }
 
 async function monitorGeneration(id, initialJob, sessionId, notifyStages = true) {
@@ -543,7 +563,8 @@ async function generate(id, input = {}) {
     const sourceProject = state.projects.find((project) => project.id === id) || state.activeProject;
     const prompt = String(input.prompt || $('#agent-prompt')?.value || '').trim() || [sourceProject?.topic, sourceProject?.description].filter(Boolean).join('\n');
     const mode = input.mode || $('#agent-mode')?.value || 'auto';
-    const queued = await request(`/api/projects/${id}/generate?async=true`, { method: 'POST', body: JSON.stringify({ prompt, mode, sessionId: state.activeSessionId }) });
+    const language = input.language || $('#wiki-language')?.value || state.composerLanguage || sourceProject?.wikiLanguage || 'zh-CN';
+    const queued = await request(`/api/projects/${id}/generate?async=true`, { method: 'POST', body: JSON.stringify({ prompt, mode, language, sessionId: state.activeSessionId }) });
     const job = queued.job;
     state.activeJob = job; state.activeSessionId = queued.sessionId || state.activeSessionId; state.composerDraft = '';
     state.projects = state.projects.map((project) => project.id === id ? { ...project, status: 'generating' } : project);

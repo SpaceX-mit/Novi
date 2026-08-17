@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { normalizeWikiLanguage } from './wiki-language.mjs';
 import { embedText, searchProjectKnowledge } from './knowledge.mjs';
 import { failSessionRun, findAgentSession } from './agent-sessions.mjs';
 
@@ -112,7 +113,7 @@ export class PostgresStore {
   }
 
   async createProject(input, owner = null) {
-    return this.update((state) => { const now = new Date().toISOString(); const project = { id: randomUUID(), tenantId: owner?.tenantId || 'local', ownerId: owner?.id || 'local', title: input.title.trim(), topic: input.topic.trim(), type: input.type, description: input.description?.trim() || '', status: 'draft', pinned: false, createdAt: now, updatedAt: now, artifacts: [] }; state.projects.unshift(project); return project; });
+    return this.update((state) => { const now = new Date().toISOString(); const project = { id: randomUUID(), tenantId: owner?.tenantId || 'local', ownerId: owner?.id || 'local', title: input.title.trim(), topic: input.topic.trim(), type: input.type, description: input.description?.trim() || '', wikiLanguage: normalizeWikiLanguage(input.wikiLanguage), status: 'draft', pinned: false, createdAt: now, updatedAt: now, artifacts: [] }; state.projects.unshift(project); return project; });
   }
 
   async searchKnowledge(projectId, tenantId, query, limit = 10) {

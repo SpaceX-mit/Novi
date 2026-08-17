@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { searchProjectKnowledge } from './knowledge.mjs';
 import { failSessionRun, findAgentSession } from './agent-sessions.mjs';
+import { normalizeWikiLanguage } from './wiki-language.mjs';
 
 const initialState = () => ({ version: 3, projects: [], jobs: [], users: [], sessions: [], agentSessions: [], agentToolConfigs: [], mcpServerConfigs: [], agentSkillConfigs: [], agentPluginConfigs: [], audit: [], usage: [], subscriptions: [], paymentEvents: [], organizations: [], memberships: [], invitations: [], oidcStates: [], llmProviderConfigs: [], documents: [], chunks: [], knowledgeEntities: [], knowledgeEdges: [], watchConfigs: [], sourceSnapshots: [], externalProjectionJobs: [] });
 
@@ -54,6 +55,7 @@ export class JsonStore {
         topic: input.topic.trim(),
         type: input.type,
         description: input.description?.trim() || '',
+        wikiLanguage: normalizeWikiLanguage(input.wikiLanguage),
         status: 'draft',
         pinned: false,
         createdAt: now,

@@ -29,7 +29,8 @@ import { getDocumentObject, putDocumentObject } from '../src/object-store.mjs';
 import { syncKnowledgeGraph } from '../src/graph-store.mjs';
 import { enqueueDocumentProjection, flushExternalProjectionJobs } from '../src/external-projection.mjs';
 import { normalizeProviderInput, resolvedProviderConfig, saveProviderConfig } from '../src/llm-providers.mjs';
-import { runAgentWorkflow } from '../src/agent-runtime.mjs';
+import { referenceQueryForGoal, runAgentWorkflow } from '../src/agent-runtime.mjs';
+import { DEFAULT_WIKI_LANGUAGE, normalizeWikiLanguage, WIKI_LANGUAGES } from '../src/wiki-language.mjs';
 import { agentModeCatalog, selectAgentMode } from '../src/agent-modes.mjs';
 import { appendSessionMessage, beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, sessionSummary, updateSessionRun } from '../src/agent-sessions.mjs';
 import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings } from '../src/agent-tools.mjs';
@@ -40,12 +41,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod/v4';
 
+const fixtureDnsLookup = async (hostname) => [{ address: hostname === '127.0.0.1' ? '127.0.0.1' : '93.184.216.34', family: 4 }];
+
 test('engine generates complete artifacts for all product paths', () => {
   const base = { id: 'p', title: 'Agent OS', topic: 'Agent OS security', description: 'Study threat models' };
   const knowledgeContext = [{ id: 'chunk-1', documentId: 'document-1', document: 'Private security notes', sourceUrl: 'https://example.com/notes', text: 'Sandbox boundaries must be tested under adversarial workloads.', score: 0.82 }];
   const knowledge = generateArtifact({ ...base, type: 'knowledge' }, { knowledgeContext });
-  assert.deepEqual(knowledge.workflow.agents.map((agent) => agent.id), ['goal', 'research', 'knowledge', 'writing', 'review', 'finalizer']);
-  assert.ok(knowledge.workflow.agents.every((agent) => agent.status === 'completed'));
+  assert.deepEqual(knowledge.workflow.agents.map((agent) => agent.id), ['goal', 'references', 'research', 'knowledge', 'writing', 'review', 'finalizer']);
+  assert.equal(knowledge.workflow.agents.find((agent) => agent.id === 'references').status, 'offline');
+  assert.ok(knowledge.workflow.agents.filter((agent) => agent.id !== 'references').every((agent) => agent.status === 'completed'));
   assert.equal(knowledge.content.expertGoal.question, 'Study threat models');
   assert.equal(knowledge.content.expertRoles.length, 4);
   assert.deepEqual(knowledge.content.expertRoles.map((role) => role.stage), ['research', 'knowledge', 'writing', 'review']);
@@ -59,6 +63,9 @@ test('engine generates complete artifacts for all product paths', () => {
   assert.equal(knowledge.content.caseStudies.length, 3);
   assert.equal(knowledge.content.practiceQuestions.length, 4);
   assert.equal(knowledge.content.knowledgeContext[0].document, 'Private security notes');
+  assert.equal(knowledge.language, 'en');
+  assert.equal(knowledge.documents[0].name, 'llm-wiki.md');
+  assert.equal(knowledge.documents[0].content, artifactToMarkdown(base, knowledge));
   assert.match(artifactToMarkdown(base, knowledge), /## Learning path/);
   assert.match(artifactToMarkdown(base, knowledge), /## Knowledge graph/);
   assert.match(artifactToMarkdown(base, knowledge), /## Practice lab/);
@@ -96,6 +103,24 @@ test('engine generates complete artifacts for all product paths', () => {
   assert.match(artifactToLatex(base, paper), /Workspace knowledge used/);
   assert.match(artifactToLatex(base, paper, 'ieee'), /^\\documentclass\[conference\]\{IEEEtran\}/);
   assert.match(artifactToLatex(base, paper, 'acm'), /^\\documentclass\[sigconf\]\{acmart\}/);
+});
+
+test('Wiki language selection defaults to Chinese and Goal drives reference discovery', async () => {
+  assert.equal(DEFAULT_WIKI_LANGUAGE, 'zh-CN');
+  assert.equal(WIKI_LANGUAGES.length, 8);
+  assert.equal(normalizeWikiLanguage(undefined), 'zh-CN');
+  assert.throws(() => normalizeWikiLanguage('xx-test'), /language must be one of/);
+  const project = { id: 'localized-project', tenantId: 'tenant', title: '本地化 Wiki', topic: 'Agent 运行时安全', description: '分析沙箱和权限边界', type: 'knowledge', wikiLanguage: 'zh-CN' };
+  const artifact = generateArtifact(project);
+  assert.equal(artifact.language, 'zh-CN');
+  assert.equal(artifact.content.language, 'zh-CN');
+  assert.match(artifact.content.llmWiki.summary, /Wiki/);
+  assert.match(artifact.content.llmWiki.sections[0].title, /定义与边界/);
+  assert.equal(artifact.documents[0].language, 'zh-CN');
+  const query = referenceQueryForGoal(artifact.content.expertGoal, project);
+  assert.match(query, /沙箱和权限边界/);
+  assert.match(query, /Agent 运行时安全/);
+  assert.ok(query.length <= 300);
 });
 
 test('agent mode intent routing selects bounded execution strategies', () => {
@@ -165,17 +190,31 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
   for (const mode of ['workflow', 'react', 'plan-execute', 'supervisor']) {
     const result = await runAgentWorkflow(project, fallback, config, { mode, prompt: `Run in ${mode}` });
     assert.equal(result.runtime.initialMode, mode); assert.equal(result.runtime.mode, mode);
-    assert.ok(result.stages.length >= 6); assert.ok(result.stages.every((stage) => stage.status === 'completed'));
+    assert.ok(result.stages.length >= 7); assert.equal(result.stages.find((stage) => stage.id === 'references').status, 'offline'); assert.ok(result.stages.filter((stage) => stage.id !== 'references').every((stage) => stage.status === 'completed'));
     assert.equal(result.stages[0].id, 'goal'); assert.equal(result.stages.at(-1).id, 'finalizer');
     if (mode === 'plan-execute') assert.equal(result.runtime.plan.length, 4);
     if (mode === 'react' || mode === 'supervisor') assert.ok(result.runtime.controlEvents.some((event) => event.id === `${mode}-controller`));
   }
+  let referenceRequest; const observedStages = [];
+  const referenced = await runAgentWorkflow(project, fallback, config, { mode: 'workflow', prompt: 'Build from Goal-selected evidence', referenceRetriever: async (request) => {
+    referenceRequest = request;
+    return { status: 'completed', sources: [
+      { name: 'Research paper', kind: 'Paper', url: 'https://arxiv.org/abs/2601.00001', mapped: true },
+      { name: 'Reference implementation', kind: 'Code repository', url: 'https://github.com/example/reference', mapped: true },
+      { name: 'Technical guide', kind: 'Web', url: 'https://example.com/guide', mapped: true },
+    ] };
+  }, onStage: async (stage) => { if (stage.status !== 'running') observedStages.push(stage.id); return true; } });
+  assert.match(referenceRequest.query, /Agent systems/);
+  assert.deepEqual(observedStages.slice(0, 2), ['goal', 'references']);
+  assert.equal(referenced.stages.find((stage) => stage.id === 'references').status, 'completed');
+  assert.deepEqual(referenced.runtime.references.sourceKinds.sort(), ['github', 'paper', 'web']);
+  assert.equal(referenced.content.sources.length, 3);
   const switched = await runAgentWorkflow(project, fallback, config, { mode: 'react', prompt: 'switch runtime for this complex task' });
   assert.equal(switched.runtime.initialMode, 'react'); assert.equal(switched.runtime.mode, 'plan-execute');
   assert.ok(switched.runtime.modeHistory.some((event) => event.from === 'react' && event.to === 'plan-execute'));
   assert.equal(switched.runtime.plan.length, 4);
   const early = await runAgentWorkflow(project, fallback, config, { mode: 'react', prompt: 'finish early after one specialist' });
-  assert.deepEqual(early.stages.map((stage) => stage.id), ['goal', 'research', 'finalizer']);
+  assert.deepEqual(early.stages.map((stage) => stage.id), ['goal', 'references', 'research', 'finalizer']);
   assert.equal(early.content.llmWiki.sections.length, early.content.wikiSections.length);
 });
 
@@ -365,12 +404,13 @@ test('Web-configured provider runs the Goal, expert collaboration, and Wiki fina
   const dir = await mkdtemp(join(tmpdir(), 'novi-langgraph-'));
   const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY };
   process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_JOB_WORKER = 'false'; process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-langgraph-encryption-key-32-chars';
-  let modelCalls = 0; let skillPromptSeen = false; let pluginPromptSeen = false;
+  let modelCalls = 0; let skillPromptSeen = false; let pluginPromptSeen = false; let languagePromptSeen = false;
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
     if (prompt.includes('Apply the PRISMA-style inclusion checklist.')) skillPromptSeen = true;
     if (prompt.includes('Require a final reproducibility gate.')) pluginPromptSeen = true;
+    if (prompt.includes('Simplified Chinese (zh-CN)')) languagePromptSeen = true;
     let content = 'OK';
     const marker = 'Editable schema and current draft: ';
     const line = prompt.split('\n').find((value) => value.startsWith(marker));
@@ -406,10 +446,12 @@ test('Web-configured provider runs the Goal, expert collaboration, and Wiki fina
   response = await fetch(`${base}/api/projects/${project.id}/generate?async=true`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: 'Generate a systematic review artifact', mode: 'auto', sessionId: initialSession.id }) }); assert.equal(response.status, 202); const queued = await response.json(); const jobId = queued.job.id; assert.equal(queued.sessionId, initialSession.id);
   let job;
   for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 30)); job = (await (await fetch(`${base}/api/jobs/${jobId}`)).json()).job; if (job.status !== 'queued' && job.status !== 'running') break; }
-  assert.equal(job.status, 'completed'); assert.equal(job.currentMode, 'workflow'); assert.equal(job.currentModeLabel, 'Workflow'); assert.equal(job.agentStages.length, 6); assert.deepEqual(job.agentStages.map((stage) => stage.id), ['goal', 'research', 'knowledge', 'writing', 'review', 'finalizer']); assert.ok(job.agentStages.every((stage) => stage.status === 'completed')); assert.equal(job.activeSkills[0].name, 'systematic_review'); assert.equal(job.activePlugins[0].name, 'paper_quality');
+  assert.equal(job.status, 'completed'); assert.equal(job.currentMode, 'workflow'); assert.equal(job.currentModeLabel, 'Workflow'); assert.equal(job.language, 'zh-CN'); assert.equal(job.agentStages.length, 7); assert.deepEqual(job.agentStages.map((stage) => stage.id), ['goal', 'references', 'research', 'knowledge', 'writing', 'review', 'finalizer']); assert.equal(job.agentStages.find((stage) => stage.id === 'references').status, 'offline'); assert.ok(job.agentStages.filter((stage) => stage.id !== 'references').every((stage) => stage.status === 'completed')); assert.equal(job.activeSkills[0].name, 'systematic_review'); assert.equal(job.activePlugins[0].name, 'paper_quality');
+  assert.equal(job.expertGoal.outcome, 'Provider-defined expert outcome.'); assert.match(job.referenceDiscovery.query, /Provider-defined expert outcome/); assert.equal(job.referenceDiscovery.status, 'offline');
   const generated = await (await fetch(`${base}/api/projects/${project.id}`)).json(); const artifact = generated.project.artifacts[0];
-  assert.equal(modelCalls, 6); assert.equal(skillPromptSeen, true); assert.equal(pluginPromptSeen, true); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.version, 4); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.equal(artifact.workflow.runtime.skills[0].name, 'systematic_review'); assert.equal(artifact.workflow.runtime.plugins[0].name, 'paper_quality'); assert.equal('instructions' in artifact.workflow.runtime.skills[0], false); assert.equal('instructions' in artifact.workflow.runtime.plugins[0], false); assert.ok(artifact.workflow.agents.every((agent) => agent.status === 'completed'));
+  assert.equal(modelCalls, 6); assert.equal(skillPromptSeen, true); assert.equal(pluginPromptSeen, true); assert.equal(languagePromptSeen, true); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.version, 5); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.equal(artifact.workflow.runtime.language, 'zh-CN'); assert.equal(artifact.workflow.runtime.skills[0].name, 'systematic_review'); assert.equal(artifact.workflow.runtime.plugins[0].name, 'paper_quality'); assert.equal('instructions' in artifact.workflow.runtime.skills[0], false); assert.equal('instructions' in artifact.workflow.runtime.plugins[0], false); assert.equal(artifact.workflow.agents.find((agent) => agent.id === 'references').status, 'offline');
   assert.equal(artifact.content.expertGoal.outcome, 'Provider-defined expert outcome.'); assert.ok(artifact.content.expertRoles.every((role) => role.title.startsWith('Provider '))); assert.equal(artifact.content.llmWiki.summary, 'Provider-finalized LLM Wiki.'); assert.deepEqual(artifact.content.wikiSections, artifact.content.llmWiki.sections);
+  assert.equal(artifact.documents[0].name, 'llm-wiki.md'); assert.equal(artifact.documents[0].content, artifactToMarkdown(project, artifact));
   const session = (await (await fetch(`${base}/api/projects/${project.id}/sessions/${initialSession.id}`)).json()).session;
   assert.equal(session.status, 'idle'); assert.equal(session.activeRun, null); assert.deepEqual(session.messages.map((message) => message.role), ['assistant', 'user', 'assistant']);
   assert.equal(session.messages[1].jobId, jobId); assert.equal(session.messages[1].status, 'completed'); assert.equal(session.messages[2].artifactId, artifact.id); assert.equal(session.messages[2].mode, 'workflow'); assert.equal(session.messages[2].skills[0].name, 'systematic_review'); assert.equal(session.messages[2].plugins[0].name, 'paper_quality');
@@ -902,20 +944,26 @@ test('HTTP API validates, creates, generates, exports and deletes projects', asy
   assert.equal(response.status, 422);
   response = await fetch(`${base}/api/ready`);
   assert.equal(response.status, 200);
+  response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Invalid language', topic: 'Vector databases', type: 'research', wikiLanguage: 'xx-test' }) });
+  assert.equal(response.status, 422);
   response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Research', topic: 'Vector databases', type: 'research' }) });
   assert.equal(response.status, 201);
   const { project } = await response.json();
+  assert.equal(project.wikiLanguage, 'zh-CN');
   response = await fetch(`${base}/api/projects/${project.id}/generate`, { method: 'POST' });
   assert.equal(response.status, 200);
   const generated = await response.json();
   assert.equal(generated.project.status, 'ready');
   assert.equal(generated.project.artifacts[0].content.evidence.status, 'unverified');
+  assert.equal(generated.project.artifacts[0].language, 'zh-CN');
+  assert.equal(generated.project.artifacts[0].documents[0].name, 'llm-wiki.md');
   const firstArtifactId = generated.project.artifacts[0].id;
-  response = await fetch(`${base}/api/projects/${project.id}/generate`, { method: 'POST' });
+  response = await fetch(`${base}/api/projects/${project.id}/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ language: 'en' }) });
   assert.equal(response.status, 200);
   const regenerated = await response.json();
   assert.equal(regenerated.project.artifacts.length, 2);
   assert.notEqual(regenerated.project.artifacts[0].id, firstArtifactId);
+  assert.equal(regenerated.project.artifacts[0].language, 'en');
   response = await fetch(`${base}/api/projects/${project.id}/export?format=markdown`);
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-disposition'), /-v2\.md/);
@@ -941,6 +989,30 @@ test('HTTP API validates, creates, generates, exports and deletes projects', asy
   assert.equal(afterDeletion.agentSessions.length, 0);
   response = await fetch(`${base}/api/projects/${project.id}`);
   assert.equal(response.status, 404);
+});
+
+test('Goal-driven reference failure refunds source quota and preserves an offline Wiki', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'novi-reference-fallback-'));
+  const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED, live: process.env.NOVI_LIVE_SOURCES, worker: process.env.NOVI_JOB_WORKER };
+  process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_LIVE_SOURCES = 'true'; process.env.NOVI_JOB_WORKER = 'false';
+  const server = createServer(); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const nativeFetch = global.fetch;
+  t.after(() => {
+    global.fetch = nativeFetch; server.close();
+    for (const [key, value] of Object.entries(previous)) { const name = { file: 'NOVI_DATA_FILE', auth: 'NOVI_AUTH_REQUIRED', live: 'NOVI_LIVE_SOURCES', worker: 'NOVI_JOB_WORKER' }[key]; if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let response = await nativeFetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Reference fallback', topic: 'Goal-driven retrieval', type: 'research' }) });
+  const project = (await response.json()).project;
+  global.fetch = async (input, options) => String(input).startsWith(base) ? nativeFetch(input, options) : Promise.reject(new Error('fixture source outage'));
+  response = await fetch(`${base}/api/projects/${project.id}/generate?async=true`, { method: 'POST' });
+  assert.equal(response.status, 202); const jobId = (await response.json()).job.id;
+  let job;
+  for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 20)); job = (await (await fetch(`${base}/api/jobs/${jobId}`)).json()).job; if (!['queued', 'running'].includes(job.status)) break; }
+  assert.equal(job.status, 'completed'); assert.equal(job.referenceDiscovery.status, 'fallback'); assert.match(job.referenceDiscovery.query, /Goal-driven retrieval/);
+  const usage = await (await fetch(`${base}/api/usage`)).json(); assert.equal(usage.usage.sourceQueries, 0); assert.equal(usage.usage.generations, 1);
+  const generated = await (await fetch(`${base}/api/projects/${project.id}`)).json();
+  assert.equal(generated.project.artifacts[0].workflow.runtime.references.status, 'fallback'); assert.equal(generated.project.artifacts[0].documents[0].name, 'llm-wiki.md');
 });
 
 test('project deletion cancels an active generation without orphan jobs or double refunds', async (t) => {
@@ -1056,7 +1128,7 @@ test('knowledge URL import validates remote content and indexes it idempotently'
   const dir = await mkdtemp(join(tmpdir(), 'novi-knowledge-import-'));
   const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED };
   process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false';
-  const server = createServer(); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const server = createServer({ dnsLookup: fixtureDnsLookup }); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.close(); if (previous.file === undefined) delete process.env.NOVI_DATA_FILE; else process.env.NOVI_DATA_FILE = previous.file; if (previous.auth === undefined) delete process.env.NOVI_AUTH_REQUIRED; else process.env.NOVI_AUTH_REQUIRED = previous.auth; });
   const base = `http://127.0.0.1:${server.address().port}`;
   let response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Import', topic: 'Agent OS', type: 'knowledge' }) });
@@ -1100,7 +1172,7 @@ test('knowledge URL import uses the configured Browser Agent for JavaScript-rend
   });
   await new Promise((resolve) => renderer.listen(0, '127.0.0.1', resolve));
   process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_BROWSER_AGENT_URL = `http://127.0.0.1:${renderer.address().port}`; process.env.NOVI_BROWSER_AGENT_TOKEN = 'render-token';
-  const server = createServer(); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const server = createServer({ dnsLookup: fixtureDnsLookup }); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => {
     server.close(); renderer.close();
     for (const [key, value] of Object.entries(previous)) { const name = key === 'file' ? 'NOVI_DATA_FILE' : key === 'auth' ? 'NOVI_AUTH_REQUIRED' : key === 'browser' ? 'NOVI_BROWSER_AGENT_URL' : 'NOVI_BROWSER_AGENT_TOKEN'; if (value === undefined) delete process.env[name]; else process.env[name] = value; }
@@ -1118,7 +1190,7 @@ test('knowledge URL import can index a bounded public GitHub repository tree', a
   const dir = await mkdtemp(join(tmpdir(), 'novi-github-import-'));
   const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED };
   process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false';
-  const server = createServer(); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const server = createServer({ dnsLookup: fixtureDnsLookup }); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.close(); if (previous.file === undefined) delete process.env.NOVI_DATA_FILE; else process.env.NOVI_DATA_FILE = previous.file; if (previous.auth === undefined) delete process.env.NOVI_AUTH_REQUIRED; else process.env.NOVI_AUTH_REQUIRED = previous.auth; });
   const base = `http://127.0.0.1:${server.address().port}`;
   let response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Repo import', topic: 'Agent OS', type: 'knowledge' }) });
