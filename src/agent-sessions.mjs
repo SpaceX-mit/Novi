@@ -63,6 +63,7 @@ export function appendSessionMessage(session, input) {
     ...(input.toolCalls?.length ? { toolCalls: input.toolCalls.slice(-20).map((call) => ({ ...call })) } : {}),
     ...(input.skills?.length ? { skills: input.skills.slice(0, 3).map((skill) => ({ ...skill, productTypes: [...(skill.productTypes || [])] })) } : {}),
     ...(input.plugins?.length ? { plugins: input.plugins.slice(0, 2).map((plugin) => ({ ...plugin, productTypes: [...(plugin.productTypes || [])], skillNames: [...(plugin.skillNames || [])], recommendedTools: [...(plugin.recommendedTools || [])] })) } : {}),
+    ...(input.runtime ? { runtime: structuredClone(input.runtime) } : {}),
   };
   session.messages.push(message);
   session.messages = session.messages.slice(-500);
@@ -107,6 +108,18 @@ export function completeSessionRun(session, { jobId, artifact, mode }) {
   const skills = artifact?.workflow?.runtime?.skills || (session.activeRun?.jobId === jobId ? session.activeRun.skills || [] : []);
   const plugins = artifact?.workflow?.runtime?.plugins || (session.activeRun?.jobId === jobId ? session.activeRun.plugins || [] : []);
   const message = appendSessionMessage(session, { role: 'assistant', kind: 'artifact', content: summary, runId: jobId, jobId, artifactId: artifact?.id, mode, status: 'completed', toolCalls, skills, plugins });
+  session.status = 'idle'; session.activeRun = null; session.updatedAt = message.createdAt;
+  return message;
+}
+
+export function completeSessionConversation(session, { jobId, response, runtime, mode }) {
+  if (!session) return null;
+  const userMessage = (session.messages || []).find((item) => item.jobId === jobId && item.role === 'user');
+  if (userMessage) { userMessage.status = 'completed'; userMessage.mode = mode || userMessage.mode; }
+  const toolCalls = runtime?.toolCalls || (session.activeRun?.jobId === jobId ? session.activeRun.toolCalls || [] : []);
+  const skills = runtime?.skills || (session.activeRun?.jobId === jobId ? session.activeRun.skills || [] : []);
+  const plugins = runtime?.plugins || (session.activeRun?.jobId === jobId ? session.activeRun.plugins || [] : []);
+  const message = appendSessionMessage(session, { role: 'assistant', kind: 'message', content: response, runId: jobId, jobId, mode, status: 'completed', toolCalls, skills, plugins, runtime });
   session.status = 'idle'; session.activeRun = null; session.updatedAt = message.createdAt;
   return message;
 }

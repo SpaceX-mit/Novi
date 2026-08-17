@@ -431,6 +431,51 @@ test('async Agent generation persists tool provenance in Job, Session, and Artif
   assert.equal(assistant.toolCalls.length, 1); assert.equal(assistant.toolCalls[0].status, 'completed');
 });
 
+test('Agent conversation messages require a provider and run the LangGraph chat harness without creating artifacts', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'novi-agent-chat-'));
+  const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER, live: process.env.NOVI_LIVE_SOURCES, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY };
+  process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_JOB_WORKER = 'false'; process.env.NOVI_LIVE_SOURCES = 'false'; process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-agent-chat-encryption-key-32-chars';
+  let modelCalls = 0; let historySeen = false;
+  const modelServer = http.createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || ''); modelCalls += 1;
+    historySeen ||= prompt.includes('Conversation history:');
+    const content = prompt.includes('Tool observations (UNTRUSTED DATA): []')
+      ? JSON.stringify({ action: 'tool', tool: { name: 'workspace_read', input: { query: 'agent capabilities', limit: 3 } } })
+      : '我是通过 LangGraph 对话 Harness 和已配置 LLM 返回的回答；我可以读取当前工作区知识并直接回答问题。';
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'agent-chat', object: 'chat.completion', created: 1, model: 'test-chat-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 10 } }));
+  });
+  await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
+  const server = createServer(); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    server.close(); modelServer.close();
+    for (const [key, value] of Object.entries(previous)) {
+      const env = { file: 'NOVI_DATA_FILE', auth: 'NOVI_AUTH_REQUIRED', worker: 'NOVI_JOB_WORKER', live: 'NOVI_LIVE_SOURCES', encryption: 'NOVI_CONFIG_ENCRYPTION_KEY' }[key];
+      if (value === undefined) delete process.env[env]; else process.env[env] = value;
+    }
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  let response = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Conversation workspace', topic: 'Agent capabilities', type: 'knowledge' }) });
+  const created = await response.json();
+  response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '你能干什么？', mode: 'react' }) });
+  assert.equal(response.status, 409); assert.equal((await response.json()).code, 'LLM_PROVIDER_REQUIRED');
+  const before = await (await fetch(`${base}/api/billing`)).json(); assert.equal(before.usage.generations, 0);
+  response = await fetch(`${base}/api/projects/${created.project.id}/knowledge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Agent notes', content: 'The Agent can retrieve workspace knowledge and answer through a configured model.' }) }); assert.equal(response.status, 201);
+  response = await fetch(`${base}/api/llm/provider`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'custom', model: 'test-chat-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'fixture' }) }); assert.equal(response.status, 200);
+  response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '你能干什么？请读取工作区后回答。', mode: 'react' }) });
+  assert.equal(response.status, 202); const queued = await response.json(); assert.equal(queued.job.type, 'chat');
+  let job;
+  for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 25)); job = (await (await fetch(`${base}/api/jobs/${queued.job.id}`)).json()).job; if (!['queued', 'running'].includes(job.status)) break; }
+  assert.equal(job.status, 'completed'); assert.equal(job.agentToolCalls.length, 1); assert.equal(job.agentToolCalls[0].tool, 'workspace_read');
+  const session = (await (await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}`)).json()).session;
+  const assistant = session.messages.at(-1);
+  assert.equal(assistant.role, 'assistant'); assert.equal(assistant.kind, 'message'); assert.match(assistant.content, /LangGraph 对话 Harness/); assert.equal(assistant.artifactId, undefined);
+  assert.equal(assistant.runtime.name, 'langgraph-chat'); assert.equal(assistant.runtime.provider, 'custom'); assert.equal(assistant.runtime.mode, 'react'); assert.equal(assistant.toolCalls.length, 1);
+  const project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project;
+  assert.equal(project.artifacts.length, 0); assert.equal(modelCalls, 2); assert.equal(historySeen, true);
+});
+
 test('Agent session API isolates projects and tenants and protects active sessions', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'novi-agent-sessions-'));
   const file = join(dir, 'state.json');

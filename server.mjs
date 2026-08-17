@@ -24,7 +24,8 @@ import { enqueueDocumentDeletion, enqueueDocumentProjection, externalProjectionP
 import { providerCatalog, publicProviderConfig, resolvedProviderConfig, saveProviderConfig, testProviderConnection } from './src/llm-providers.mjs';
 import { browserAgentConfigured, mcpSourceConfigured, renderWithBrowserAgent, validateSourceAdapterConfiguration } from './src/source-adapters.mjs';
 import { agentModeCatalog, publicMode, selectAgentMode, validateRequestedMode } from './src/agent-modes.mjs';
-import { beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun, updateSessionToolCall } from './src/agent-sessions.mjs';
+import { beginSessionRun, completeSessionConversation, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun, updateSessionToolCall } from './src/agent-sessions.mjs';
+import { runAgentConversation } from './src/agent-chat.mjs';
 import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings } from './src/agent-tools.mjs';
 import { discoverMcpServer, publicMcpSettings, resolvedMcpTools, saveMcpSettings } from './src/mcp-runtime.mjs';
 import { publicSkillSettings, resolveSkills, saveSkillSettings, skillProvenance } from './src/skill-runtime.mjs';
@@ -921,6 +922,61 @@ async function api(req, res, url, store, auth, metrics) {
     return send(res, 204, '');
   }
 
+  const conversationMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/messages$/);
+  if (req.method === 'POST' && conversationMatch) {
+    if (!await requireRole(store, res, user, 'editor')) return true;
+    const projectId = decodeURIComponent(conversationMatch[1]); const sessionId = decodeURIComponent(conversationMatch[2]);
+    const state = await store.read(); const project = state.projects.find((item) => item.id === projectId && owned(item, user));
+    if (!project) return send(res, 404, { error: 'Project not found' });
+    const session = findAgentSession(state, sessionId, projectId, user.tenantId);
+    if (!session) return send(res, 404, { error: 'Agent session not found', code: 'AGENT_SESSION_NOT_FOUND' });
+    if (session.status === 'running' || project.status === 'generating') return send(res, 409, { error: 'Agent session or workspace is already running', code: 'AGENT_SESSION_ACTIVE' });
+    const input = await jsonBody(req);
+    const prompt = String(input.prompt || '').trim();
+    if (!prompt || prompt.length > 20_000) return send(res, 422, { error: 'prompt is required and must be 20000 characters or less' });
+    let requestedMode;
+    try { requestedMode = validateRequestedMode(input.mode || 'auto'); }
+    catch (error) { return send(res, error.status || 422, { error: error.message, code: 'AGENT_MODE_INVALID' }); }
+    const providerConfig = await resolvedProviderConfig(state, user.tenantId);
+    if (!providerConfig) return send(res, 409, { error: 'No active LLM provider configured', code: 'LLM_PROVIDER_REQUIRED' });
+    const selectedMode = selectAgentMode(prompt, { requestedMode });
+    const quota = await store.update((next) => consumeGeneration(next, user));
+    if (!quota.allowed) return send(res, 402, { error: 'Monthly generation limit reached', code: 'GENERATION_QUOTA_EXCEEDED', plan: quota.plan, usage: quota.usage, limits: quota.limits });
+    const generationPeriod = quota.usage.period;
+    let sourceCharged = false; let sourcePeriod = null;
+    if (process.env.NOVI_LIVE_SOURCES === 'true') {
+      const sourceQuota = await store.update((next) => consumeSourceQuery(next, user));
+      if (!sourceQuota.allowed) {
+        await store.update((next) => refundGeneration(next, user, generationPeriod));
+        return send(res, 402, { error: 'Monthly source query limit reached', code: 'SOURCE_QUOTA_EXCEEDED', plan: sourceQuota.plan, usage: sourceQuota.usage, limits: sourceQuota.limits });
+      }
+      sourceCharged = true; sourcePeriod = sourceQuota.usage.period;
+    }
+    let job;
+    try {
+      job = await store.update((next) => {
+        const currentProject = next.projects.find((item) => item.id === projectId && owned(item, user));
+        const currentSession = findAgentSession(next, sessionId, projectId, user.tenantId);
+        if (!currentProject || !currentSession) return null;
+        if (currentProject.status === 'generating' || currentSession.status === 'running') return { conflict: true };
+        const createdAt = new Date().toISOString();
+        const created = { id: randomUUID(), type: 'chat', projectId, sessionId, userId: user.id, tenantId: user.tenantId, prompt, requestedMode, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, status: 'queued', progress: 0, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
+        const message = beginSessionRun(currentSession, { jobId: created.id, prompt, requestedMode, currentMode: selectedMode.mode });
+        created.userMessageId = message.id; next.jobs.unshift(created); return created;
+      });
+    } catch (error) {
+      await store.update((next) => { refundGeneration(next, user, generationPeriod); if (sourceCharged) refundSourceQuery(next, user, sourcePeriod); });
+      throw error;
+    }
+    if (!job || job.conflict) {
+      await store.update((next) => { refundGeneration(next, user, generationPeriod); if (sourceCharged) refundSourceQuery(next, user, sourcePeriod); });
+      return send(res, job?.conflict ? 409 : 404, { error: job?.conflict ? 'Agent session or workspace is already running' : 'Agent session not found', code: job?.conflict ? 'AGENT_SESSION_ACTIVE' : 'AGENT_SESSION_NOT_FOUND' });
+    }
+    metrics.generationStarted += 1;
+    void runConversation(store, job.id, project, user, metrics);
+    return send(res, 202, { job, sessionId });
+  }
+
   const jobMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
   if (req.method === 'GET' && jobMatch) {
     const job = (await store.read()).jobs.find((item) => item.id === decodeURIComponent(jobMatch[1]) && item.tenantId === user.tenantId);
@@ -958,6 +1014,7 @@ async function api(req, res, url, store, auth, metrics) {
       error: requestedSessionId ? 'Agent session not found' : 'Project not found',
       code: requestedSessionId ? 'AGENT_SESSION_NOT_FOUND' : 'PROJECT_NOT_FOUND',
     });
+    if (selectedSession.status === 'running') return send(res, 409, { error: 'Agent session is already running', code: 'AGENT_SESSION_ACTIVE' });
     const quota = await store.update((state) => consumeGeneration(state, user));
     if (!quota.allowed) return send(res, 402, { error: 'Monthly generation limit reached', code: 'GENERATION_QUOTA_EXCEEDED', plan: quota.plan, usage: quota.usage, limits: quota.limits });
     const generationPeriod = quota.usage.period;
@@ -983,6 +1040,7 @@ async function api(req, res, url, store, auth, metrics) {
           const created = { id: randomUUID(), type: 'generate', projectId: id, sessionId: selectedSession.id, userId: user.id, tenantId: user.tenantId, prompt, requestedMode, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, modeHistory: [{ from: null, to: selectedMode.mode, reason: selectedMode.reason, at: createdAt }], status: 'queued', progress: 0, previousStatus: item.status, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
           const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
           if (!session) return { sessionMissing: true };
+          if (session.status === 'running') return { conflict: true };
           const message = beginSessionRun(session, { jobId: created.id, prompt, requestedMode, currentMode: selectedMode.mode });
           created.userMessageId = message.id;
           item.status = 'generating'; item.updatedAt = new Date().toISOString();
@@ -1015,6 +1073,7 @@ async function api(req, res, url, store, auth, metrics) {
         if (item.status === 'generating') return { conflict: true };
         const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
         if (!session) return { sessionMissing: true };
+        if (session.status === 'running') return { conflict: true };
         beginSessionRun(session, { jobId: syncRunId, prompt, requestedMode, currentMode: selectedMode.mode });
         item.status = 'generating';
         item.updatedAt = new Date().toISOString();
@@ -1261,6 +1320,72 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
   return committed;
 }
 
+async function runConversation(store, jobId, project, user, metrics = null) {
+  let committed = false;
+  try {
+    const claimed = store.claimJob ? await store.claimJob(jobId, `chat-worker-${process.pid}`) : await store.updateJob(jobId, { status: 'running', progress: 10 });
+    if (!claimed) return false;
+    const runtimeState = await store.read();
+    const providerConfig = await resolvedProviderConfig(runtimeState, user.tenantId);
+    if (!providerConfig) throw new Error('No active LLM provider configured');
+    const session = findAgentSession(runtimeState, claimed.sessionId, project.id, user.tenantId);
+    if (!session) throw new Error('Agent session is unavailable');
+    const history = (session.messages || []).filter((message) => message.jobId !== jobId);
+    const selectedPlugins = resolvePlugins(runtimeState, user.tenantId, project, claimed.prompt);
+    const skills = resolveSkills(runtimeState, user.tenantId, project, claimed.prompt, { pluginSkillNames: selectedPlugins.flatMap((plugin) => plugin.skillNames || []) });
+    const tools = [...(await resolvedTools(runtimeState, user.tenantId)).filter((tool) => tool.name !== 'web_search' || claimed.sourceCharged), ...await resolvedMcpTools(runtimeState, user.tenantId)];
+    const plugins = bindPluginTools(selectedPlugins, tools);
+    const appliedSkills = skillProvenance(skills); const appliedPlugins = pluginProvenance(plugins);
+    if (!await store.update((state) => {
+      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
+      if (!job) return false;
+      job.activeSkills = appliedSkills; job.activePlugins = appliedPlugins; job.currentStage = 'Preparing conversation'; job.progress = 15; job.updatedAt = new Date().toISOString();
+      updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { skills: appliedSkills, plugins: appliedPlugins, currentStage: job.currentStage, progress: job.progress });
+      return true;
+    })) throw Object.assign(new Error('Agent conversation was cancelled'), { code: 'AGENT_CANCELLED' });
+    const knowledgeContext = await retrieveWorkspaceKnowledge(store, project, user);
+    const toolExecutor = createToolExecutor({ store, project, principal: user, allowWebSearch: Boolean(claimed.sourceCharged) });
+    const onProgress = async (event) => store.update((state) => {
+      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
+      if (!job) return false;
+      job.currentMode = event.mode || job.currentMode; job.currentModeLabel = publicMode(job.currentMode).name; job.currentStage = event.stage; job.progress = Math.max(job.progress || 0, event.progress || 0); job.updatedAt = new Date().toISOString();
+      updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress });
+      return true;
+    });
+    const onTool = async (call) => store.update((state) => {
+      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
+      if (!job) return false;
+      job.agentToolCalls ||= [];
+      const existing = job.agentToolCalls.find((item) => item.id === call.id);
+      if (existing) Object.assign(existing, call); else job.agentToolCalls.push(call);
+      job.currentStage = call.status === 'running' ? `Using ${call.tool}` : `${call.tool} ${call.status}`; job.updatedAt = new Date().toISOString();
+      updateSessionToolCall(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), call); return true;
+    });
+    const result = await runAgentConversation(project, session, providerConfig, { prompt: claimed.prompt, mode: claimed.requestedMode, history, knowledgeContext, tools, skills, plugins, toolExecutor, onProgress, onTool, threadId: `${user.tenantId}:${jobId}` });
+    const saved = await store.update((state) => {
+      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
+      const currentSession = job ? findAgentSession(state, job.sessionId, job.projectId, job.tenantId) : null;
+      if (!job || !currentSession || !activePrincipal(state, user)) return null;
+      const message = completeSessionConversation(currentSession, { jobId, response: result.response, runtime: result.runtime, mode: result.runtime.mode });
+      job.status = 'completed'; job.progress = 100; job.currentStage = null; job.resultMessageId = message.id; job.currentMode = result.runtime.mode; job.currentModeLabel = publicMode(job.currentMode).name; job.agentToolCalls = result.runtime.toolCalls || job.agentToolCalls || []; job.updatedAt = new Date().toISOString();
+      return message;
+    });
+    if (!saved) throw new Error('Agent conversation was cancelled');
+    committed = true; if (metrics) metrics.generationCompleted += 1;
+    await store.audit({ action: 'agent.message.completed', userId: user.id, tenantId: user.tenantId, resourceId: saved.id, projectId: project.id });
+  } catch (error) {
+    if (metrics) metrics.generationFailed += 1;
+    if (!committed) await store.update((state) => {
+      const job = (state.jobs || []).find((item) => item.id === jobId);
+      if (!job) return;
+      refundUnfinishedJob(state, job);
+      failSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { jobId, mode: job.currentMode, error: error?.message === 'No active LLM provider configured' ? 'No active LLM provider configured' : 'Agent response failed' });
+      job.status = 'failed'; job.progress = 100; job.error = error?.message === 'No active LLM provider configured' ? 'No active LLM provider configured' : 'Agent response failed'; job.updatedAt = new Date().toISOString();
+    });
+  }
+  return committed;
+}
+
 async function runQueuedJobs(store, auth, metrics) {
   const state = await store.read();
   for (const job of (state.jobs || []).filter((item) => item.status === 'queued').slice(0, 10)) {
@@ -1268,7 +1393,8 @@ async function runQueuedJobs(store, auth, metrics) {
     if (!project) continue;
     const storedUser = state.users.find((item) => item.id === job.userId && item.tenantId === job.tenantId);
     const user = storedUser ? { id: storedUser.id, tenantId: storedUser.tenantId, plan: storedUser.plan || 'free' } : { id: job.userId || 'local', tenantId: job.tenantId || 'local', plan: 'free' };
-    void runGeneration(store, auth, job.id, project, user, job.previousStatus || 'draft', Boolean(job.sourceCharged), job.generationPeriod, job.sourcePeriod, metrics);
+    if (job.type === 'chat') void runConversation(store, job.id, project, user, metrics);
+    else void runGeneration(store, auth, job.id, project, user, job.previousStatus || 'draft', Boolean(job.sourceCharged), job.generationPeriod, job.sourcePeriod, metrics);
   }
 }
 

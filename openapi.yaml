@@ -123,6 +123,22 @@ paths:
               type: object
               properties: { title: { type: string, maxLength: 120 } }
       responses: { '201': { description: Agent session created }, '403': { description: Editor role required } }
+  /api/projects/{id}/sessions/{sessionId}/messages:
+    post:
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { $ref: '#/components/parameters/SessionId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentConversationInput' }
+      responses:
+        '202': { description: Queued LangGraph conversation response job }
+        '402': { description: Usage quota exceeded }
+        '403': { description: Editor role required }
+        '404': { description: Project or session not found }
+        '409': { description: Active LLM provider required or session/workspace already running }
   /api/projects/{id}/sessions/{sessionId}:
     get:
       parameters: [ { $ref: '#/components/parameters/ProjectId' }, { $ref: '#/components/parameters/SessionId' } ]
@@ -497,6 +513,12 @@ components:
         prompt: { type: string, minLength: 1, maxLength: 20000 }
         mode: { type: string, enum: [auto, workflow, react, plan-execute, supervisor], default: auto }
         sessionId: { type: string, format: uuid, description: Existing project Agent session; defaults to the most recently updated session }
+    AgentConversationInput:
+      type: object
+      required: [prompt]
+      properties:
+        prompt: { type: string, minLength: 1, maxLength: 20000 }
+        mode: { type: string, enum: [auto, workflow, react, plan-execute, supervisor], default: auto }
     AgentMessage:
       type: object
       required: [id, role, kind, content, createdAt]
@@ -513,6 +535,7 @@ components:
         toolCalls: { type: array, maxItems: 20, items: { type: object }, description: Bounded tool invocation provenance retained with the completed assistant message }
         skills: { type: array, maxItems: 3, items: { $ref: '#/components/schemas/AppliedAgentSkill' }, description: Skills applied to the completed artifact run }
         plugins: { type: array, maxItems: 2, items: { $ref: '#/components/schemas/AppliedAgentPlugin' }, description: Declarative Plugins applied to the completed artifact run }
+        runtime: { type: object, description: LangGraph conversation runtime provenance without credentials }
         createdAt: { type: string, format: date-time }
     AgentSession:
       type: object

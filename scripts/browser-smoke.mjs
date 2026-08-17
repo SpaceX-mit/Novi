@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +13,12 @@ const viewportHeight = Number(process.env.NOVI_BROWSER_HEIGHT || 900);
 const dataDir = await mkdtemp(join(tmpdir(), 'novi-browser-'));
 const previous = { auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER, refresh: process.env.NOVI_REFRESH_WORKER, verify: process.env.NOVI_VERIFY_SOURCES, file: process.env.NOVI_DATA_FILE };
 process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_JOB_WORKER = 'true'; process.env.NOVI_REFRESH_WORKER = 'false'; process.env.NOVI_VERIFY_SOURCES = 'false'; process.env.NOVI_DATA_FILE = join(dataDir, 'state.json');
+const modelServer = http.createServer(async (req, res) => {
+  for await (const _chunk of req) { /* consume request */ }
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ id: 'browser-chat', object: 'chat.completion', created: 1, model: 'browser-chat', choices: [{ index: 0, message: { role: 'assistant', content: 'Browser Harness response from the configured LLM.' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 8 } }));
+});
+await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
 const server = createServer();
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
@@ -88,6 +95,13 @@ try {
   if (initialSessionUi.sessions !== 1 || JSON.stringify(initialSessionUi.modes) !== JSON.stringify(['auto', 'workflow', 'react', 'plan-execute', 'supervisor']) || !initialSessionUi.tabs.includes('Files') || !initialSessionUi.tabs.includes('LLM Wiki') || !initialSessionUi.tabs.includes('Document') || !initialSessionUi.welcome.includes('Workspace ready')) throw new Error(`Initial Agent Session UI is incorrect: ${JSON.stringify(initialSessionUi)}`);
   const preservedComposer = await evaluate(`(() => { const prompt = document.querySelector('#agent-prompt'); const mode = document.querySelector('#agent-mode'); prompt.value = 'Preserve this draft'; prompt.dispatchEvent(new Event('input', { bubbles: true })); mode.value = 'plan-execute'; mode.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('[data-context-panel="files"]').click(); return { prompt: document.querySelector('#agent-prompt').value, mode: document.querySelector('#agent-mode').value }; })()`);
   if (preservedComposer.prompt !== 'Preserve this draft' || preservedComposer.mode !== 'plan-execute') throw new Error(`Composer state was lost while switching inspector tabs: ${JSON.stringify(preservedComposer)}`);
+  const chatProvider = await evaluate(`fetch('/api/llm/provider', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'custom', model: 'browser-chat', baseUrl: ${JSON.stringify(`http://127.0.0.1:${modelServer.address().port}/v1`)}, apiKey: 'fixture' }) }).then(async (response) => ({ status: response.status, body: await response.json() }))`);
+  if (chatProvider.status !== 200) throw new Error(`Browser chat provider setup failed: ${JSON.stringify(chatProvider)}`);
+  await evaluate(`(() => { const prompt = document.querySelector('#agent-prompt'); const mode = document.querySelector('#agent-mode'); prompt.value = 'Answer through the configured Harness'; prompt.dispatchEvent(new Event('input', { bubbles: true })); mode.value = 'workflow'; mode.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('#agent-composer').requestSubmit(); })()`);
+  await waitFor(`document.querySelectorAll('.agent-message').length === 3 && [...document.querySelectorAll('.agent-message.assistant p')].some((node) => node.textContent.includes('Browser Harness response'))`, 15_000);
+  const conversationUi = await evaluate(`(async () => { const projects = await (await fetch('/api/projects')).json(); const project = projects.projects.find((item) => item.title === 'Browser smoke workspace'); return { artifacts: project.artifacts.length, artifactLinks: document.querySelectorAll('.message-artifact').length, lastKind: document.querySelector('.agent-message:last-child').className }; })()`);
+  if (conversationUi.artifacts !== 0 || conversationUi.artifactLinks !== 0 || !conversationUi.lastKind.includes('message')) throw new Error(`Composer did not use the independent LLM conversation path: ${JSON.stringify(conversationUi)}`);
+  await evaluate(`fetch('/api/llm/provider', { method: 'DELETE' })`);
   await evaluate(`(() => { const prompt = document.querySelector('#agent-prompt'); const mode = document.querySelector('#agent-mode'); prompt.value = ''; prompt.dispatchEvent(new Event('input', { bubbles: true })); mode.value = 'auto'; mode.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('[data-context-panel="wiki"]').click(); })()`);
   await evaluate(`document.querySelector('#generate-empty').click()`);
   await waitFor(`document.querySelector('#agent-run-status') !== null && document.querySelector('#agent-run-mode').textContent.trim().length > 0`);
@@ -99,9 +113,9 @@ try {
     await writeFile(process.env.NOVI_BROWSER_AGENT_MODE_SCREENSHOT, Buffer.from(screenshot.data, 'base64'));
   }
   await waitFor(`document.querySelector('#workspace-root .artifact-panel') !== null`, 15_000);
-  await waitFor(`document.querySelectorAll('.agent-message').length === 3 && document.querySelector('.message-artifact') !== null`);
+  await waitFor(`document.querySelectorAll('.agent-message').length === 5 && document.querySelector('.message-artifact') !== null`);
   const completedSessionUi = await evaluate(`({ roles: [...document.querySelectorAll('.agent-message .message-author b')].map((node) => node.textContent), artifactLink: document.querySelector('.message-artifact').textContent, running: !!document.querySelector('.conversation-run') })`);
-  if (JSON.stringify(completedSessionUi.roles) !== JSON.stringify(['Novi', 'You', 'Novi']) || !completedSessionUi.artifactLink.includes('Open generated artifact') || completedSessionUi.running) throw new Error(`Completed Agent Session UI is incorrect: ${JSON.stringify(completedSessionUi)}`);
+  if (JSON.stringify(completedSessionUi.roles) !== JSON.stringify(['Novi', 'You', 'Novi', 'You', 'Novi']) || !completedSessionUi.artifactLink.includes('Open generated artifact') || completedSessionUi.running) throw new Error(`Completed Agent Session UI is incorrect: ${JSON.stringify(completedSessionUi)}`);
   await evaluate(`(() => { window.prompt = () => 'Focused follow-up'; document.querySelector('#new-session').click(); })()`);
   await waitFor(`document.querySelectorAll('.session-item').length === 2 && document.querySelector('.conversation-panel h2').textContent === 'Focused follow-up'`);
   await evaluate(`(() => { window.confirm = () => true; document.querySelector('#delete-session').click(); })()`);
@@ -183,8 +197,8 @@ try {
   await waitFor(`document.querySelector('.artifact-content').textContent.includes('Interview preparation') && document.querySelector('.artifact-content').textContent.includes('Capstone project')`);
   await evaluate(`document.querySelector('[data-artifact-tab="graph"]').click()`);
   await waitFor(`document.querySelectorAll('.artifact-content .node').length >= 10`);
-  console.log(`browser-smoke: created=${result.title}, status=${result.status}, pricing=ready, agent-session=ready, agent-mode=${activeMode}, agent-skills=ready, agent-plugins=ready, viewer-ui=ready, knowledge-search=ready, rag-context=ready, versions=${versionResult.count}, comparison=ready, continuous-update=ready, knowledge-delete=ready, markdown-export=${result.exportStatus}, paper-svg=ready, paper-gap=ready, publication-templates=ready, research-suite=ready`);
+  console.log(`browser-smoke: created=${result.title}, status=${result.status}, pricing=ready, agent-session=ready, agent-chat=llm-harness, agent-mode=${activeMode}, agent-skills=ready, agent-plugins=ready, viewer-ui=ready, knowledge-search=ready, rag-context=ready, versions=${versionResult.count}, comparison=ready, continuous-update=ready, knowledge-delete=ready, markdown-export=${result.exportStatus}, paper-svg=ready, paper-gap=ready, publication-templates=ready, research-suite=ready`);
 } finally {
-  socket.close(); chrome.kill('SIGTERM'); await new Promise((resolve) => server.close(resolve));
+  socket.close(); chrome.kill('SIGTERM'); await new Promise((resolve) => server.close(resolve)); await new Promise((resolve) => modelServer.close(resolve));
   for (const [key, value] of Object.entries(previous)) { const name = { auth: 'NOVI_AUTH_REQUIRED', worker: 'NOVI_JOB_WORKER', refresh: 'NOVI_REFRESH_WORKER', verify: 'NOVI_VERIFY_SOURCES', file: 'NOVI_DATA_FILE' }[key]; if (value === undefined) delete process.env[name]; else process.env[name] = value; }
 }

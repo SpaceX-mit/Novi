@@ -9,7 +9,7 @@ const port = 20_000 + (process.pid % 10_000);
 let output = '';
 const child = spawn(electron, ['--no-sandbox', 'desktop/main.cjs'], {
   cwd: process.cwd(),
-  env: { ...process.env, NOVI_DESKTOP_SMOKE: 'true', NOVI_PORT: String(port), NOVI_DATA_FILE: join(directory, 'state.json'), NOVI_AUTH_REQUIRED: 'false' },
+  env: { ...process.env, NOVI_DESKTOP_SMOKE: 'true', NOVI_DESKTOP_USER_DATA_DIR: join(directory, 'user-data'), NOVI_PORT: String(port), NOVI_DATA_FILE: join(directory, 'state.json'), NOVI_AUTH_REQUIRED: 'false' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 child.stdout.on('data', (chunk) => { output += chunk; });

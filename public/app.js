@@ -196,7 +196,7 @@ async function loadAgentWorkspace(projectId, preferredSessionId = null) {
     const run = state.activeSession?.activeRun;
     if (run?.jobId && !String(run.jobId).startsWith('sync:') && state.monitoringJobId !== run.jobId) {
       const current = await request(`/api/jobs/${run.jobId}`).catch(() => null);
-      if (current?.job && ['queued', 'running'].includes(current.job.status)) void monitorGeneration(projectId, current.job, selectedId, false);
+      if (current?.job && ['queued', 'running'].includes(current.job.status)) void (current.job.type === 'chat' ? monitorConversation(projectId, current.job, selectedId, false) : monitorGeneration(projectId, current.job, selectedId, false));
     }
   } catch (error) { if (state.activeProject?.id === projectId) showToast(error.message); }
 }
@@ -288,18 +288,19 @@ function renderWorkspace(project, selected = state.activeTab) {
   if (artifact) state.activeArtifactId = artifact.id;
   const c = artifact?.content;
   const activeJob = state.activeJob?.projectId === project.id && ['queued', 'running'].includes(state.activeJob.status) ? state.activeJob : null;
+  const workspaceBusy = project.status === 'generating' || state.activeSession?.status === 'running';
   const meta = typeMeta[project.type];
   const availableTabs = tabsFor(project.type);
   const editor = canRole('editor'); const administrator = canRole('admin');
   if (!availableTabs.some((tab) => tab.key === selected)) selected = availableTabs[0].key;
   state.activeTab = selected;
   $('#workspace-root').innerHTML = `<button class="back-link" id="back-overview">← All workspaces</button>
-    <div class="workspace-head"><div><span class="type-label ${meta.color}">${meta.label}</span><h1>${escapeHtml(project.title)}</h1><p>${escapeHtml(project.topic)}</p>${activeJob || project.status === 'generating' ? `<div class="agent-run-strip" id="agent-run-status" aria-live="polite"><span>ACTIVE MODE</span><b id="agent-run-mode">${escapeHtml(activeJob?.currentModeLabel || activeJob?.currentMode || 'Routing')}</b><i></i><strong id="agent-run-stage">${escapeHtml(activeJob?.currentStage || 'Preparing')}</strong><small id="agent-run-progress">${Number(activeJob?.progress || 0)}%</small></div>` : ''}</div><div class="workspace-actions">${editor ? `<button class="secondary-button" id="pin-workspace">${project.pinned ? '★ Pinned' : '☆ Pin'}</button>` : ''}${artifact ? `<button class="secondary-button" id="export-md">↓ Markdown</button>${project.type === 'paper' ? '<button class="secondary-button" id="export-ieee">↓ IEEE LaTeX</button><button class="secondary-button" id="export-acm">↓ ACM LaTeX</button>' : ''}` : ''}${administrator ? '<button class="secondary-button danger-button" id="delete-workspace">Delete</button>' : ''}${editor ? `<button class="primary-button" id="generate" ${project.status === 'generating' ? 'disabled' : ''}>${project.status === 'generating' ? 'Generating…' : artifact ? '↻ Regenerate' : '✦ Generate asset'}</button>` : ''}</div></div>
+    <div class="workspace-head"><div><span class="type-label ${meta.color}">${meta.label}</span><h1>${escapeHtml(project.title)}</h1><p>${escapeHtml(project.topic)}</p>${activeJob || workspaceBusy ? `<div class="agent-run-strip" id="agent-run-status" aria-live="polite"><span>ACTIVE MODE</span><b id="agent-run-mode">${escapeHtml(activeJob?.currentModeLabel || activeJob?.currentMode || 'Routing')}</b><i></i><strong id="agent-run-stage">${escapeHtml(activeJob?.currentStage || 'Preparing')}</strong><small id="agent-run-progress">${Number(activeJob?.progress || 0)}%</small></div>` : ''}</div><div class="workspace-actions">${editor ? `<button class="secondary-button" id="pin-workspace">${project.pinned ? '★ Pinned' : '☆ Pin'}</button>` : ''}${artifact ? `<button class="secondary-button" id="export-md">↓ Markdown</button>${project.type === 'paper' ? '<button class="secondary-button" id="export-ieee">↓ IEEE LaTeX</button><button class="secondary-button" id="export-acm">↓ ACM LaTeX</button>' : ''}` : ''}${administrator ? '<button class="secondary-button danger-button" id="delete-workspace">Delete</button>' : ''}${editor ? `<button class="primary-button" id="generate" ${workspaceBusy ? 'disabled' : ''}>${workspaceBusy ? 'Agent running…' : artifact ? '↻ Regenerate' : '✦ Generate asset'}</button>` : ''}</div></div>
     <div class="session-workspace">${renderSessionRail(project)}${renderConversation(project)}<aside class="context-panel"><div class="context-tabs"><button data-context-panel="files" class="${state.contextPanel === 'files' ? 'active' : ''}">Files</button><button data-context-panel="wiki" class="${state.contextPanel === 'wiki' ? 'active' : ''}">LLM Wiki</button><button data-context-panel="document" class="${state.contextPanel === 'document' ? 'active' : ''}">Document</button></div><div class="context-body">${renderContextBody(project, artifact, artifactIndex, selected)}</div><div class="context-actions">${artifact ? '<button class="secondary-button full" id="copy-summary">Copy summary</button>' : ''}${editor ? '<button class="secondary-button full" id="ingest-document">Import notes</button><button class="secondary-button full" id="import-url">Import web/PDF URL</button>' : ''}<button class="secondary-button full" id="knowledge-library">Browse &amp; search knowledge</button>${editor ? '<button class="secondary-button full" id="refresh-sources">Refresh sources</button>' : ''}<button class="secondary-button full" id="show-snapshots">View source history</button>${editor ? '<button class="secondary-button full" id="toggle-watch">Configure updates</button>' : ''}</div></aside></div>`;
   if (c?.knowledgeContext?.length && ['wiki', 'report', 'draft'].includes(selected)) $('.artifact-content')?.insertAdjacentHTML('beforeend', renderWorkspaceKnowledgeContext(c.knowledgeContext));
   $('#back-overview').onclick = showOverview;
   $('#generate')?.addEventListener('click', () => generate(project.id)); $('#generate-empty')?.addEventListener('click', () => generate(project.id));
-  $('#agent-composer')?.addEventListener('submit', (event) => { event.preventDefault(); const input = $('#agent-prompt'); const prompt = input.value.trim(); if (!prompt) return showToast('Enter a request for Novi'); generate(project.id, { prompt, mode: $('#agent-mode').value }); });
+  $('#agent-composer')?.addEventListener('submit', (event) => { event.preventDefault(); const input = $('#agent-prompt'); const prompt = input.value.trim(); if (!prompt) return showToast('Enter a request for Novi'); sendAgentMessage(project.id, { prompt, mode: $('#agent-mode').value }); });
   $('#agent-prompt')?.addEventListener('input', (event) => { state.composerDraft = event.currentTarget.value; });
   $('#agent-mode')?.addEventListener('change', (event) => { state.composerMode = event.currentTarget.value; });
   $('#new-session')?.addEventListener('click', () => createAgentSessionUi(project.id));
@@ -482,6 +483,42 @@ async function monitorGeneration(id, initialJob, sessionId, notifyStages = true)
     const project = state.projects.find((item) => item.id === id);
     if (project) { state.activeProject = project; await loadAgentWorkspace(id, sessionId).catch(() => {}); }
   } finally { if (state.monitoringJobId === initialJob.id) state.monitoringJobId = null; }
+}
+
+async function monitorConversation(id, initialJob, sessionId, notifyStages = true) {
+  if (state.monitoringJobId === initialJob.id) return;
+  state.monitoringJobId = initialJob.id;
+  let job = initialJob; let lastStage = '';
+  try {
+    state.activeJob = job; updateAgentRunStatus(job); updateConversationRun(job);
+    for (let attempt = 0; attempt < 1200; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      job = (await request(`/api/jobs/${job.id}`)).job;
+      state.activeJob = job; updateAgentRunStatus(job); updateConversationRun(job);
+      if (notifyStages && job.currentStage && job.currentStage !== lastStage) { lastStage = job.currentStage; showToast(`${job.currentModeLabel || job.currentMode} · ${job.currentStage}`); }
+      if (job.status === 'completed') break;
+      if (job.status === 'failed') throw new Error(job.error || 'Agent response failed');
+    }
+    if (job.status !== 'completed') throw new Error('Agent response timed out');
+    state.activeJob = null; await loadAgentWorkspace(id, sessionId); showToast('Agent replied');
+  } catch (error) {
+    state.activeJob = null; showToast(error.message); await loadAgentWorkspace(id, sessionId).catch(() => {});
+  } finally { if (state.monitoringJobId === initialJob.id) state.monitoringJobId = null; }
+}
+
+async function sendAgentMessage(id, input = {}) {
+  try {
+    showToast('Agent request queued…');
+    const prompt = String(input.prompt || $('#agent-prompt')?.value || '').trim();
+    const mode = input.mode || $('#agent-mode')?.value || 'auto';
+    const queued = await request(`/api/projects/${id}/sessions/${state.activeSessionId}/messages`, { method: 'POST', body: JSON.stringify({ prompt, mode }) });
+    const job = queued.job;
+    state.activeJob = job; state.composerDraft = '';
+    renderWorkspace(state.activeProject, state.activeTab); await loadAgentWorkspace(id, state.activeSessionId);
+    await monitorConversation(id, job, state.activeSessionId);
+  } catch (error) {
+    state.activeJob = null; showToast(error.message); await loadAgentWorkspace(id, state.activeSessionId).catch(() => {});
+  }
 }
 
 async function generate(id, input = {}) {
