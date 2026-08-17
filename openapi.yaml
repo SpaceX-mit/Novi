@@ -600,6 +600,8 @@ components:
             workspace_read: { type: boolean }
             workspace_write: { type: boolean }
             web_search: { type: boolean }
+            paper_search: { type: boolean }
+            paper_fetch: { type: boolean }
         customTools: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/CustomAgentToolInput' } }
     AgentToolSettings:
       type: object

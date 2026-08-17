@@ -23,9 +23,9 @@ function normalizeSource(source, query = '') {
   } catch { return null; }
 }
 
-async function openAlex(topic, limit) {
+async function openAlex(topic, limit, { fetchImpl = globalThis.fetch } = {}) {
   const url = `https://api.openalex.org/works?search=${encodeURIComponent(topic)}&per-page=${limit}&select=id,display_name,publication_year,doi,primary_location,cited_by_count,open_access`;
-  const response = await fetch(url, { signal: timeoutSignal(6500), headers: headers() });
+  const response = await fetchImpl(url, { signal: timeoutSignal(6500), headers: headers() });
   if (!response.ok) throw new Error(`OpenAlex returned ${response.status}`);
   const payload = await response.json();
   return (payload.results || []).map((item) => ({
@@ -34,16 +34,17 @@ async function openAlex(topic, limit) {
   }));
 }
 
-async function arxiv(topic, limit) {
+async function arxiv(topic, limit, { fetchImpl = globalThis.fetch } = {}) {
   const url = `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(topic)}&start=0&max_results=${limit}&sortBy=relevance`;
-  const response = await fetch(url, { signal: timeoutSignal(6500), headers: headers('application/atom+xml') });
+  const response = await fetchImpl(url, { signal: timeoutSignal(6500), headers: headers('application/atom+xml') });
   if (!response.ok) throw new Error(`arXiv returned ${response.status}`);
   const xml = await response.text();
   const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)];
   return entries.map((match) => {
     const body = match[1];
     const value = (tag) => text(body.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`))?.[1]);
-    return { name: value('title') || 'arXiv preprint', kind: 'Preprints', url: value('id'), authority: 85, publishedAt: value('published').slice(0, 10), mapped: true, snippet: value('summary') };
+    const identifier = value('id').split('/').pop();
+    return { name: value('title') || 'arXiv preprint', kind: 'Preprints', url: value('id'), authority: 85, publishedAt: value('published').slice(0, 10), mapped: true, snippet: value('summary'), ...(identifier ? { arxivId: identifier, pdfUrl: `https://arxiv.org/pdf/${identifier}` } : {}) };
   });
 }
 
@@ -58,14 +59,14 @@ async function wikipedia(topic, limit) {
   }));
 }
 
-async function crossref(topic, limit) {
+async function crossref(topic, limit, { fetchImpl = globalThis.fetch } = {}) {
   const url = `https://api.crossref.org/works?query.bibliographic=${encodeURIComponent(topic)}&rows=${limit}&select=DOI,title,published,container-title,URL,abstract`;
-  const response = await fetch(url, { signal: timeoutSignal(6500), headers: headers() });
+  const response = await fetchImpl(url, { signal: timeoutSignal(6500), headers: headers() });
   if (!response.ok) throw new Error(`Crossref returned ${response.status}`);
   const payload = await response.json();
   return (payload.message?.items || []).map((item) => {
     const date = item.published?.['date-parts']?.[0] || [];
-    return { name: text(item.title?.[0]) || 'Crossref work', kind: 'Papers', url: item.URL || (item.DOI ? `https://doi.org/${item.DOI}` : ''), authority: 80, publishedAt: date.join('-'), mapped: true, snippet: text(item.abstract?.replace(/<[^>]+>/g, '')) };
+    return { name: text(item.title?.[0]) || 'Crossref work', kind: 'Papers', url: item.URL || (item.DOI ? `https://doi.org/${item.DOI}` : ''), authority: 80, publishedAt: date.join('-'), mapped: true, snippet: text(item.abstract?.replace(/<[^>]+>/g, '')), ...(item.DOI ? { doi: item.DOI } : {}), ...(item['container-title']?.[0] ? { venue: text(item['container-title'][0]) } : {}) };
   });
 }
 
@@ -75,22 +76,22 @@ const publisherCatalogs = Object.freeze({
   springer: { prefix: '10.1007', label: 'SpringerLink', authority: 89 },
 });
 
-async function publisherPapers(topic, limit, catalog) {
+async function publisherPapers(topic, limit, catalog, { fetchImpl = globalThis.fetch } = {}) {
   const publisher = publisherCatalogs[catalog];
   if (!publisher) throw new Error('Unsupported publisher catalog');
   const url = `https://api.crossref.org/works?query.bibliographic=${encodeURIComponent(topic)}&filter=prefix:${publisher.prefix}&rows=${limit}&select=DOI,title,published,container-title,URL,abstract`;
-  const response = await fetch(url, { signal: timeoutSignal(6500), headers: headers() });
+  const response = await fetchImpl(url, { signal: timeoutSignal(6500), headers: headers() });
   if (!response.ok) throw new Error(`${publisher.label} catalog returned ${response.status}`);
   const payload = await response.json();
   return (payload.message?.items || []).map((item) => {
     const date = item.published?.['date-parts']?.[0] || [];
-    return { name: text(item.title?.[0]) || `${publisher.label} work`, kind: 'Papers', url: item.DOI ? `https://doi.org/${item.DOI}` : item.URL, authority: publisher.authority, publishedAt: date.join('-'), mapped: true, snippet: text(item.abstract?.replace(/<[^>]+>/g, '')), publisher: publisher.label };
+    return { name: text(item.title?.[0]) || `${publisher.label} work`, kind: 'Papers', url: item.DOI ? `https://doi.org/${item.DOI}` : item.URL, authority: publisher.authority, publishedAt: date.join('-'), mapped: true, snippet: text(item.abstract?.replace(/<[^>]+>/g, '')), publisher: publisher.label, ...(item.DOI ? { doi: item.DOI } : {}) };
   });
 }
 
-const ieeePapers = (topic, limit) => publisherPapers(topic, limit, 'ieee');
-const acmPapers = (topic, limit) => publisherPapers(topic, limit, 'acm');
-const springerPapers = (topic, limit) => publisherPapers(topic, limit, 'springer');
+const ieeePapers = (topic, limit, options) => publisherPapers(topic, limit, 'ieee', options);
+const acmPapers = (topic, limit, options) => publisherPapers(topic, limit, 'acm', options);
+const springerPapers = (topic, limit, options) => publisherPapers(topic, limit, 'springer', options);
 
 async function github(topic, limit) {
   const token = process.env.GITHUB_TOKEN;
@@ -106,14 +107,14 @@ async function github(topic, limit) {
   }));
 }
 
-async function semanticScholar(topic, limit) {
+async function semanticScholar(topic, limit, { fetchImpl = globalThis.fetch } = {}) {
   const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(topic)}&limit=${limit}&fields=title,abstract,url,year,citationCount,openAccessPdf`;
   const requestHeaders = headers();
   if (process.env.SEMANTIC_SCHOLAR_API_KEY) requestHeaders['x-api-key'] = process.env.SEMANTIC_SCHOLAR_API_KEY;
-  const response = await fetch(url, { signal: timeoutSignal(6500), headers: requestHeaders });
+  const response = await fetchImpl(url, { signal: timeoutSignal(6500), headers: requestHeaders });
   if (!response.ok) throw new Error(`Semantic Scholar returned ${response.status}`);
   const payload = await response.json();
-  return (payload.data || []).map((item) => ({ name: text(item.title) || 'Semantic Scholar paper', kind: 'Papers', url: item.openAccessPdf?.url || item.url || (item.paperId ? `https://www.semanticscholar.org/paper/${item.paperId}` : ''), authority: Math.min(99, 68 + Math.round(Math.log10((item.citationCount || 0) + 1) * 10)), publishedAt: item.year ? String(item.year) : '', mapped: true, snippet: text(item.abstract) }));
+  return (payload.data || []).map((item) => ({ name: text(item.title) || 'Semantic Scholar paper', kind: 'Papers', url: item.openAccessPdf?.url || item.url || (item.paperId ? `https://www.semanticscholar.org/paper/${item.paperId}` : ''), authority: Math.min(99, 68 + Math.round(Math.log10((item.citationCount || 0) + 1) * 10)), publishedAt: item.year ? String(item.year) : '', mapped: true, snippet: text(item.abstract), ...(item.paperId ? { paperId: item.paperId } : {}), ...(item.openAccessPdf?.url ? { pdfUrl: item.openAccessPdf.url, openAccess: true } : {}) }));
 }
 
 async function huggingFace(topic, limit) {
@@ -199,6 +200,22 @@ export async function searchKnowledgeSources(topic, limit = 5) {
   const responses = await Promise.allSettled(calls);
   const items = responses.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
   if (!responses.some((result) => result.status === 'fulfilled')) throw new AggregateError(responses.filter((result) => result.status === 'rejected').map((result) => result.reason), 'All knowledge source providers failed');
+  const unique = new Map();
+  for (const item of items) {
+    const normalized = normalizeSource(item, query);
+    if (normalized && !unique.has(normalized.url)) unique.set(normalized.url, normalized);
+  }
+  return [...unique.values()].sort((left, right) => right.relevanceScore - left.relevanceScore || right.authority - left.authority || left.url.localeCompare(right.url)).slice(0, count * 2);
+}
+
+export async function searchPaperSources(topic, limit = 5, options = {}) {
+  const query = text(topic);
+  if (!query) return [];
+  const count = Math.min(10, safeLimit(limit));
+  const providers = options.providers || [openAlex, arxiv, crossref, semanticScholar, ieeePapers, acmPapers, springerPapers];
+  const responses = await Promise.allSettled(providers.map((provider) => provider(query, count, options)));
+  const items = responses.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+  if (!responses.some((result) => result.status === 'fulfilled')) throw new AggregateError(responses.filter((result) => result.status === 'rejected').map((result) => result.reason), 'All paper source providers failed');
   const unique = new Map();
   for (const item of items) {
     const normalized = normalizeSource(item, query);

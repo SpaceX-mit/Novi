@@ -26,7 +26,7 @@ import { browserAgentConfigured, mcpSourceConfigured, renderWithBrowserAgent, va
 import { agentModeCatalog, publicMode, selectAgentMode, validateRequestedMode } from './src/agent-modes.mjs';
 import { beginSessionRun, completeSessionConversation, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun, updateSessionToolCall } from './src/agent-sessions.mjs';
 import { runAgentConversation } from './src/agent-chat.mjs';
-import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings } from './src/agent-tools.mjs';
+import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings, sourceAccessTool } from './src/agent-tools.mjs';
 import { discoverMcpServer, publicMcpSettings, resolvedMcpTools, saveMcpSettings } from './src/mcp-runtime.mjs';
 import { publicSkillSettings, resolveSkills, saveSkillSettings, skillProvenance } from './src/skill-runtime.mjs';
 import { bindPluginTools, pluginProvenance, publicPluginSettings, resolvePlugins, savePluginSettings } from './src/plugin-runtime.mjs';
@@ -1101,7 +1101,7 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
       const providerConfig = await resolvedProviderConfig(runtimeState, user.tenantId);
       const selectedPlugins = providerConfig ? resolvePlugins(runtimeState, user.tenantId, marked, prompt) : [];
       const skills = providerConfig ? resolveSkills(runtimeState, user.tenantId, marked, prompt, { pluginSkillNames: selectedPlugins.flatMap((plugin) => plugin.skillNames || []) }) : [];
-      const tools = [...(await resolvedTools(runtimeState, user.tenantId)).filter((tool) => tool.name !== 'web_search' || sourceCharged), ...await resolvedMcpTools(runtimeState, user.tenantId)];
+      const tools = [...(await resolvedTools(runtimeState, user.tenantId)).filter((tool) => !sourceAccessTool(tool.name) || sourceCharged), ...await resolvedMcpTools(runtimeState, user.tenantId)];
       const plugins = bindPluginTools(selectedPlugins, tools);
       const appliedSkills = skillProvenance(skills);
       const appliedPlugins = pluginProvenance(plugins);
@@ -1110,7 +1110,7 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
         if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
         updateSessionRun(session, { skills: appliedSkills, plugins: appliedPlugins }); return true;
       })) throw new Error('Generation was cancelled');
-      const toolExecutor = createToolExecutor({ store, project: marked, principal: user, allowWebSearch: sourceCharged });
+      const toolExecutor = createToolExecutor({ store, project: marked, principal: user, allowSourceAccess: sourceCharged });
       const onTool = async (call) => store.update((state) => {
         const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
         if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
@@ -1257,7 +1257,7 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
     const runPrompt = claimed.prompt || project.description || project.topic;
     const selectedPlugins = providerConfig ? resolvePlugins(runtimeState, user.tenantId, project, runPrompt) : [];
     const skills = providerConfig ? resolveSkills(runtimeState, user.tenantId, project, runPrompt, { pluginSkillNames: selectedPlugins.flatMap((plugin) => plugin.skillNames || []) }) : [];
-    const tools = [...(await resolvedTools(runtimeState, user.tenantId)).filter((tool) => tool.name !== 'web_search' || sourceCharged), ...await resolvedMcpTools(runtimeState, user.tenantId)];
+    const tools = [...(await resolvedTools(runtimeState, user.tenantId)).filter((tool) => !sourceAccessTool(tool.name) || sourceCharged), ...await resolvedMcpTools(runtimeState, user.tenantId)];
     const plugins = bindPluginTools(selectedPlugins, tools);
     const appliedSkills = skillProvenance(skills);
     const appliedPlugins = pluginProvenance(plugins);
@@ -1268,7 +1268,7 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { skills: appliedSkills, plugins: appliedPlugins });
       return true;
     })) throw new Error('Generation was cancelled');
-    const toolExecutor = createToolExecutor({ store, project, principal: user, allowWebSearch: sourceCharged });
+    const toolExecutor = createToolExecutor({ store, project, principal: user, allowSourceAccess: sourceCharged });
     const onStage = async (stage) => store.update((state) => {
       const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
       if (!job) return false;
@@ -1364,7 +1364,7 @@ async function runConversation(store, jobId, project, user, metrics = null) {
     const history = (session.messages || []).filter((message) => message.jobId !== jobId);
     const selectedPlugins = resolvePlugins(runtimeState, user.tenantId, project, claimed.prompt);
     const skills = resolveSkills(runtimeState, user.tenantId, project, claimed.prompt, { pluginSkillNames: selectedPlugins.flatMap((plugin) => plugin.skillNames || []) });
-    const tools = [...(await resolvedTools(runtimeState, user.tenantId)).filter((tool) => tool.name !== 'web_search' || claimed.sourceCharged), ...await resolvedMcpTools(runtimeState, user.tenantId)];
+    const tools = [...(await resolvedTools(runtimeState, user.tenantId)).filter((tool) => !sourceAccessTool(tool.name) || claimed.sourceCharged), ...await resolvedMcpTools(runtimeState, user.tenantId)];
     const plugins = bindPluginTools(selectedPlugins, tools);
     const appliedSkills = skillProvenance(skills); const appliedPlugins = pluginProvenance(plugins);
     if (!await store.update((state) => {
@@ -1375,7 +1375,7 @@ async function runConversation(store, jobId, project, user, metrics = null) {
       return true;
     })) throw Object.assign(new Error('Agent conversation was cancelled'), { code: 'AGENT_CANCELLED' });
     const knowledgeContext = await retrieveWorkspaceKnowledge(store, project, user);
-    const toolExecutor = createToolExecutor({ store, project, principal: user, allowWebSearch: Boolean(claimed.sourceCharged) });
+    const toolExecutor = createToolExecutor({ store, project, principal: user, allowSourceAccess: Boolean(claimed.sourceCharged) });
     const onProgress = async (event) => store.update((state) => {
       const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
       if (!job) return false;

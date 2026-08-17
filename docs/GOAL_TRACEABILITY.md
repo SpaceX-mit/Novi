@@ -33,7 +33,7 @@
 | --- | --- | --- |
 | 根据提示词意图选择 Workflow、ReAct、Plan & Execute、Supervisor，并可在运行中重新调度 | `src/agent-modes.mjs` 完成显式模式和中英文意图路由；`src/agent-runtime.mjs` 的 router/controller 记录并执行模式切换；核心测试真实运行四种图并验证 ReAct → Plan & Execute | 已实现 |
 | 运行时显示当前执行模式 | Job 和 Session 持久化 `currentMode/currentModeLabel`；`public/app.js` 在 Workspace 状态条与 Session run header 实时刷新模式、阶段和进度；Chromium smoke 验证可见模式 | 已实现 |
-| 内置工具与新增工具 | `src/agent-tools.mjs` 提供 workspace read/write/web search 和 allowlisted 自定义 HTTP Tool；三种自主模式进入同一有界 Tool node；领域、HTTP 和 provenance 测试覆盖 | 已实现 |
+| 内置工具与新增工具 | `src/agent-tools.mjs` 提供 workspace read/write/web search/paper search/paper fetch 和 allowlisted 自定义 HTTP Tool；论文工具覆盖 DOI、arXiv、公开 URL、学术目录检索及公开全文/摘要/不可访问状态；三种自主模式进入同一有界 Tool node；领域、HTTP 和 provenance 测试覆盖 | 已实现 |
 | MCP | `src/mcp-runtime.mjs` 使用官方 SDK 接入 Streamable HTTP discovery/call，逐工具授权、命名空间、加密凭据和调用边界完整；Customize/MCP 与协议集成测试覆盖 | 已实现 |
 | Skills 与 Plugins | `src/skill-runtime.mjs` 提供有界 playbook 选择和 prompt 注入；`src/plugin-runtime.mjs` 以声明式 manifest 组合现有 Skill 与已授权 Tool；两者均进入 LangGraph、provenance 和 Customize UI | 已实现 |
 | Workspace 默认进入对话 Session，右侧提供 Files、LLM Wiki、Document | 项目创建即创建默认 Session；`public/app.js` 渲染 Session rail、conversation composer 和三页 inspector；Files 包含生成的 `llm-wiki.md`，Document 以转义纯文本预览；desktop/mobile Chromium smoke 验证布局与核心交互 | 已实现 |

@@ -41,9 +41,9 @@ Web 中保存的租户配置优先于 `NOVI_LLM_BASE_URL`、`NOVI_LLM_API_KEY`�
 
 ### 配置 Agent Tools
 
-组织 owner/admin 可从左侧 `Customize` 进入 Tools，启停 `workspace_read`、`workspace_write`、`web_search`，或增加自定义 HTTP 工具。ReAct、Plan & Execute 和 Supervisor 会在控制循环中决定是否调用工具，把观察结果作为不可信数据交给后续 Specialist；Workflow 保持固定的四 specialist 顺序，不自主调用工具，外层 Goal 和 Finalizer 仍会执行。每次运行最多调用 6 次工具，自定义响应最多 32 KB，默认超时 10 秒且最多 30 秒。调用状态和截断后的输入/结果会保存在 Job、完成 Session 消息和 Artifact runtime provenance 中。
+组织 owner/admin 可从左侧 `Customize` 进入 Tools，启停 `workspace_read`、`workspace_write`、`web_search`、`paper_search`、`paper_fetch`，或增加自定义 HTTP 工具。ReAct、Plan & Execute 和 Supervisor 会在控制循环中决定是否调用工具，把观察结果作为不可信数据交给后续 Specialist；Workflow 保持固定的四 specialist 顺序，不自主调用工具，外层 Goal 和 Finalizer 仍会执行。每次运行最多调用 6 次工具，自定义响应最多 32 KB，默认超时 10 秒且最多 30 秒。调用状态和截断后的输入/结果会保存在 Job、完成 Session 消息和 Artifact runtime provenance 中。
 
-`workspace_read` 只能检索当前租户、当前工作空间的文档；`workspace_write` 默认关闭，启用后只能向当前工作空间写入受限文本知识；`web_search` 只在 `NOVI_LIVE_SOURCES=true` 且本次来源额度已取得时向模型公布。editor 可以在生成任务中调用管理员已启用的工具，viewer 只读，只有 owner/admin 可以修改配置。配置 API 为 `GET/PUT /api/agent/tools`。
+`workspace_read` 只能检索当前租户、当前工作空间的文档；`workspace_write` 默认关闭，启用后只能向当前工作空间写入受限文本知识。`web_search`、`paper_search` 和 `paper_fetch` 只在 `NOVI_LIVE_SOURCES=true` 且本次来源额度已取得时向模型公布：`paper_search` 仅查询 OpenAlex、arXiv、Crossref、Semantic Scholar 与 IEEE/ACM/Springer 定向目录；`paper_fetch` 接受 DOI、arXiv 标识或公开 HTTP(S) URL，按 SSRF、重定向、12 秒超时和 8 MB 上限获取内容，并明确报告 `metadata-only`、`abstract-only`、`public-page-text`、`public-full-text` 或 `unavailable`。只有成功下载并解析的公开 PDF 标记为全文，送入模型的文本仍限制为最多 12000 字符并用 `textTruncated` 标明截断；搜索命中、付费墙页面和无法访问的正文不会被伪装成已取得全文。editor 可以在生成任务中调用管理员已启用的工具，viewer 只读，只有 owner/admin 可以修改配置。配置 API 为 `GET/PUT /api/agent/tools`。
 
 远端自定义工具固定使用 `POST application/json`，必须使用 HTTPS，主机必须列入逗号分隔的 `NOVI_TOOL_ALLOWED_HOSTS`；本地非生产开发可使用回环 HTTP。输入 schema 必须是 `type: object`、`additionalProperties: false`，属性只允许 string/number/boolean。可选 Bearer token 使用与 Provider 相同的 AES-256-GCM 密钥加密，API、账户导出和浏览器均不返回明文或密文。超时可通过 `NOVI_TOOL_TIMEOUT_MS` 调整。
 

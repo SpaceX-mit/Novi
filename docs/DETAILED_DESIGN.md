@@ -14,7 +14,8 @@
 - `src/agent-modes.mjs`：维护 Workflow、ReAct、Plan & Execute、Supervisor 目录，校验显式模式并从中英文提示词意图中选择自动模式。
 - `src/agent-runtime.mjs`：LangGraph.js 自适应有向图；Router 强制先执行 Goal 和无模型调用的 Reference Discovery，再进入固定流水线、ReAct controller、Planner 或 Supervisor。Reference 查询只来自已完成 Goal 的 question/domain/outcome/scope，返回来源仍由 Novi 连接器和 evidence 层控制。controller 可切换模式，Specialist fallback 会升级到 Supervisor。每个 Specialist 建立含目标语言约束的有界 prompt、单独调用模型、校验 JSON 和现有字段形状，记录状态/时间/token。最多执行 8 个 Specialist 步骤，单职责最多两次；取消信号终止整条工作流。
 - `src/wiki-language.mjs`：集中维护生成语言 allowlist，默认 `zh-CN`，项目保存 `wikiLanguage`，单次 Generate 使用 `language` 覆盖。当前生成内容支持中英日韩法德西和巴西葡语；UI 文案本地化不在本能力范围内。
-- `src/agent-tools.mjs`：把内置 workspace read/write/web search、自定义 HTTP 和已启用 MCP 工具合并为当次运行的受控注册表；执行输入校验、租户/项目边界、取消检查和最多 6 次调用的硬上限，并把有界 observation/provenance 返回 LangGraph tool node。
+- `src/agent-tools.mjs`：把内置 workspace read/write/web search/paper search/paper fetch、自定义 HTTP 和已启用 MCP 工具合并为当次运行的受控注册表；执行输入校验、租户/项目/来源额度边界、取消检查和最多 6 次调用的硬上限，并把有界 observation/provenance 返回 LangGraph tool node。
+- `src/paper-tools.mjs`：归一化 DOI、arXiv 标识和公开论文 URL，复用 evidence DNS/SSRF、重定向、内容哈希与大小限制；Crossref/arXiv 元数据和公开 PDF/HTML 内容分别返回访问状态，只有成功解析的公开 PDF 标记 `public-full-text`。
 - `src/mcp-runtime.mjs`：使用官方 `@modelcontextprotocol/sdk` 的 Client、StreamableHTTPClientTransport 和 AJV validator；规范化租户 MCP server 配置、加密 Bearer token、验证 endpoint allowlist，执行工具发现/命名空间化/显式授权和有界调用结果转换。
 - `src/skill-runtime.mjs`：校验最多 20 个租户 Skill 的名称、说明、4000 字符指令、产品范围、always/auto 激活和最多 12 个触发词；运行开始时按显式 `/skill name`、always、触发词优先级选出最多 3 个，并产生不含完整指令的哈希 provenance。
 - `src/plugin-runtime.mjs`：校验最多 10 个声明式 manifest、语义版本、2000 字符编排指令及现有 Skill/已授权工具引用；每次最多激活 2 个，运行时丢弃已失效工具引用，不执行租户代码。

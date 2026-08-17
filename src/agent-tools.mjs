@@ -2,15 +2,20 @@ import { randomUUID } from 'node:crypto';
 import { enqueueDocumentProjection } from './external-projection.mjs';
 import { ingestDocument } from './knowledge.mjs';
 import { decryptApiKey, encryptApiKey } from './llm-providers.mjs';
-import { searchKnowledgeSources } from './connectors.mjs';
+import { searchKnowledgeSources, searchPaperSources } from './connectors.mjs';
 import { verifyEvidenceSources } from './evidence.mjs';
 import { invokeMcpTool } from './mcp-runtime.mjs';
+import { fetchPaper } from './paper-tools.mjs';
 
 const BUILTIN_TOOLS = Object.freeze([
   { name: 'workspace_read', label: 'Workspace read', description: 'Retrieve relevant passages from documents in the current workspace.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 500 }, limit: { type: 'number' } } } },
   { name: 'workspace_write', label: 'Workspace write', description: 'Create a text document in the current workspace semantic memory.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['title', 'content'], properties: { title: { type: 'string', maxLength: 200 }, content: { type: 'string', maxLength: 20000 } } } },
   { name: 'web_search', label: 'Web search', description: 'Search Novi source connectors for current scholarly and technical evidence.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 300 }, limit: { type: 'number' } } } },
+  { name: 'paper_search', label: 'Paper search', description: 'Search scholarly catalogs for papers and preprints with traceable metadata and public links.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 300 }, limit: { type: 'number' } } } },
+  { name: 'paper_fetch', label: 'Paper fetch', description: 'Fetch a paper by DOI, arXiv identifier, or public URL. Reports metadata and access status, and extracts bounded text only when publicly reachable.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['identifier'], properties: { identifier: { type: 'string', maxLength: 2000 }, includeText: { type: 'boolean' }, maxCharacters: { type: 'number' } } } },
 ]);
+
+const SOURCE_ACCESS_TOOLS = new Set(['web_search', 'paper_search', 'paper_fetch']);
 
 const customNamePattern = /^[a-z][a-z0-9_]{1,47}$/;
 const scalarTypes = new Set(['string', 'number', 'boolean']);
@@ -150,7 +155,11 @@ async function boundedResponse(response) {
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8');
 }
 
-export function createToolExecutor({ store, project, principal, allowWebSearch = false, fetchImpl = globalThis.fetch }) {
+export function sourceAccessTool(name) {
+  return SOURCE_ACCESS_TOOLS.has(String(name || ''));
+}
+
+export function createToolExecutor({ store, project, principal, allowWebSearch = false, allowSourceAccess = allowWebSearch, fetchImpl = globalThis.fetch, paperSearchImpl = searchPaperSources, paperFetchImpl = fetchPaper, sourceVerifier = verifyEvidenceSources }) {
   return async (definition, rawInput) => {
     if (definition.kind === 'mcp') return { result: await invokeMcpTool(definition, rawInput, { fetchImpl }) };
     const input = validatedInput(definition.inputSchema, rawInput);
@@ -172,10 +181,21 @@ export function createToolExecutor({ store, project, principal, allowWebSearch =
       return { result: { documentId: inserted.document.id, title: inserted.document.title, chunkCount: inserted.document.chunkCount }, knowledgeContext: inserted.chunks.map((chunk) => ({ ...chunk, document: inserted.document.title })) };
     }
     if (definition.name === 'web_search') {
-      if (!allowWebSearch) throw new Error('Web search is unavailable for this run because source access was not authorized');
+      if (!allowSourceAccess) throw new Error('Source access is unavailable for this run because it was not authorized');
       let sources = await searchKnowledgeSources(input.query, Math.max(1, Math.min(10, Number(input.limit) || 5)));
-      if (process.env.NOVI_VERIFY_SOURCES !== 'false') sources = await verifyEvidenceSources(sources);
+      if (process.env.NOVI_VERIFY_SOURCES !== 'false') sources = await sourceVerifier(sources, { fetchImpl });
       return { result: { sources }, sources };
+    }
+    if (definition.name === 'paper_search') {
+      if (!allowSourceAccess) throw new Error('Source access is unavailable for this run because it was not authorized');
+      let sources = await paperSearchImpl(input.query, Math.max(1, Math.min(10, Number(input.limit) || 5)), { fetchImpl });
+      if (process.env.NOVI_VERIFY_SOURCES !== 'false') sources = await sourceVerifier(sources, { fetchImpl });
+      return { result: { papers: sources }, sources };
+    }
+    if (definition.name === 'paper_fetch') {
+      if (!allowSourceAccess) throw new Error('Source access is unavailable for this run because it was not authorized');
+      const paper = await paperFetchImpl(input.identifier, { fetchImpl, includeText: input.includeText !== false, maxCharacters: input.maxCharacters });
+      return { result: paper, ...(paper.source ? { sources: [paper.source] } : {}) };
     }
     if (definition.kind !== 'custom') throw new Error('Unknown tool');
     const headers = { accept: 'application/json, text/plain', 'content-type': 'application/json', 'user-agent': 'Novi/0.1 agent-tool-runtime' };

@@ -52,12 +52,12 @@ async function validateUrl(value, { skipDns = false } = {}) {
   return url;
 }
 
-async function readBounded(response) {
+async function readBounded(response, maxBytes = MAX_BYTES) {
   const declared = Number(response.headers.get('content-length') || 0);
-  if (declared > MAX_BYTES) throw new Error('response exceeds evidence limit');
+  if (declared > maxBytes) throw new Error('response exceeds evidence limit');
   if (!response.body) {
     const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.byteLength > MAX_BYTES) throw new Error('response exceeds evidence limit');
+    if (buffer.byteLength > maxBytes) throw new Error('response exceeds evidence limit');
     return buffer;
   }
   const reader = response.body.getReader();
@@ -67,14 +67,14 @@ async function readBounded(response) {
       const part = await reader.read();
       if (part.done) break;
       total += part.value.byteLength;
-      if (total > MAX_BYTES) throw new Error('response exceeds evidence limit');
+      if (total > maxBytes) throw new Error('response exceeds evidence limit');
       chunks.push(Buffer.from(part.value));
     }
   } finally { reader.releaseLock(); }
   return Buffer.concat(chunks);
 }
 
-async function fetchSource(urlValue, { fetchImpl = globalThis.fetch, skipDns = false, timeoutMs = 12_000 } = {}) {
+async function fetchSource(urlValue, { fetchImpl = globalThis.fetch, skipDns = false, timeoutMs = 12_000, maxBytes = MAX_BYTES, includeBody = false } = {}) {
   let target = await validateUrl(urlValue, { skipDns });
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
     const response = await fetchImpl(target, { redirect: 'manual', signal: timeout(timeoutMs), headers: { accept: 'text/html, text/plain, application/pdf, application/json', 'user-agent': 'Novi/0.1 evidence-verifier' } });
@@ -84,10 +84,11 @@ async function fetchSource(urlValue, { fetchImpl = globalThis.fetch, skipDns = f
       continue;
     }
     if (!response.ok) return { status: 'unreachable', httpStatus: response.status, url: target.toString() };
-    const body = await readBounded(response);
+    const body = await readBounded(response, maxBytes);
     return {
       status: 'verified', httpStatus: response.status, url: target.toString(), contentHash: createHash('sha256').update(body).digest('hex'),
       retrievedBytes: body.byteLength, contentType: response.headers.get('content-type') || '', verifiedAt: new Date().toISOString(),
+      ...(includeBody ? { body } : {}),
     };
   }
   throw new Error('too many redirects');

@@ -18,7 +18,7 @@ import { validateOidcConfiguration, verifyIdToken } from '../src/oidc.mjs';
 import { fetchUserInfo } from '../src/oidc.mjs';
 import { AuthService } from '../src/auth.mjs';
 import { assertRepository } from '../src/repository.mjs';
-import { searchKnowledgeSources, ieeePapers, acmPapers, springerPapers, youtube, internetArchiveBooks, hackerNewsBlogs, officialDocs, normalizeSource } from '../src/connectors.mjs';
+import { searchKnowledgeSources, searchPaperSources, ieeePapers, acmPapers, springerPapers, youtube, internetArchiveBooks, hackerNewsBlogs, officialDocs, normalizeSource } from '../src/connectors.mjs';
 import { PostgresStore } from '../src/postgres-store.mjs';
 import { chunkText, contentHash, embedText, extractEntities, extractImportedText, ingestDocument } from '../src/knowledge.mjs';
 import { searchProjectKnowledge } from '../src/knowledge.mjs';
@@ -33,7 +33,8 @@ import { referenceQueryForGoal, runAgentWorkflow } from '../src/agent-runtime.mj
 import { DEFAULT_WIKI_LANGUAGE, normalizeWikiLanguage, WIKI_LANGUAGES } from '../src/wiki-language.mjs';
 import { agentModeCatalog, selectAgentMode } from '../src/agent-modes.mjs';
 import { appendSessionMessage, beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, sessionSummary, updateSessionRun } from '../src/agent-sessions.mjs';
-import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings } from '../src/agent-tools.mjs';
+import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings, sourceAccessTool } from '../src/agent-tools.mjs';
+import { fetchPaper } from '../src/paper-tools.mjs';
 import { discoverMcpServer, invokeMcpTool, publicMcpSettings, resolvedMcpTools, saveMcpSettings, validateMcpEndpoint } from '../src/mcp-runtime.mjs';
 import { publicSkillSettings, resolveSkills, saveSkillSettings, skillPrompt, skillProvenance } from '../src/skill-runtime.mjs';
 import { bindPluginTools, pluginPrompt, pluginProvenance, resolvePlugins, savePluginSettings } from '../src/plugin-runtime.mjs';
@@ -260,7 +261,7 @@ test('Agent tools validate, encrypt, execute, and remain tenant/project scoped',
   assert.equal(saved.customTools[0].hasBearerToken, true); assert.equal('encryptedBearerToken' in saved.customTools[0], false);
   assert.doesNotMatch(state.agentToolConfigs[0].customTools[0].encryptedBearerToken, /custom-secret-token/);
   const tools = await resolvedTools(state, 'tenant'); assert.equal(tools.find((tool) => tool.name === 'domain_lookup').bearerToken, 'custom-secret-token');
-  assert.deepEqual(publicToolSettings({ agentToolConfigs: [] }, 'tenant').builtins.map((tool) => [tool.name, tool.enabled]), [['workspace_read', true], ['workspace_write', false], ['web_search', true]]);
+  assert.deepEqual(publicToolSettings({ agentToolConfigs: [] }, 'tenant').builtins.map((tool) => [tool.name, tool.enabled]), [['workspace_read', true], ['workspace_write', false], ['web_search', true], ['paper_search', true], ['paper_fetch', true]]);
 
   const store = new JsonStore(process.env.NOVI_DATA_FILE);
   const project = await store.createProject({ title: 'Tool project', topic: 'Tool runtime', type: 'knowledge' });
@@ -276,6 +277,43 @@ test('Agent tools validate, encrypt, execute, and remain tenant/project scoped',
   await assert.rejects(() => executor(readTool, { query: 'valid', unexpected: true }), /unsupported field/);
   const oversizedExecutor = createToolExecutor({ store, project, principal: { id: 'local', tenantId: 'local' }, fetchImpl: async () => new Response('x'.repeat(32 * 1024 + 1), { status: 200 }) });
   await assert.rejects(() => oversizedExecutor(tools.find((tool) => tool.name === 'domain_lookup'), { query: 'runtime' }), /exceeds 32 KB/);
+});
+
+test('Agent paper tools search scholarly catalogs and fetch only verified public paper content', async () => {
+  const papers = await searchPaperSources('agent systems', 3, { providers: [async () => [
+    { name: 'Agent Systems', kind: 'Papers', url: 'https://doi.org/10.1000/agent', authority: 90, publishedAt: '2026', mapped: true, doi: '10.1000/agent' },
+    { name: 'Agent Systems duplicate', kind: 'Papers', url: 'https://doi.org/10.1000/agent', authority: 70, publishedAt: '2025', mapped: true },
+  ]] });
+  assert.equal(papers.length, 1); assert.equal(papers[0].doi, '10.1000/agent');
+
+  const pdfFixture = `%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length 50 >>\nstream\nBT /F1 18 Tf 20 100 Td (Public Agent Paper) Tj ET\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF`;
+  const fetched = await fetchPaper('arXiv:2601.12345', {
+    skipDns: true,
+    fetchImpl: async (url) => String(url).includes('export.arxiv.org')
+      ? new Response('<?xml version="1.0"?><feed><entry><id>https://arxiv.org/abs/2601.12345</id><published>2026-01-20T00:00:00Z</published><title>Public Agent Paper</title><summary>A bounded abstract.</summary><author><name>Ada Researcher</name></author></entry></feed>', { status: 200, headers: { 'content-type': 'application/atom+xml' } })
+      : new Response(Buffer.from(pdfFixture), { status: 200, headers: { 'content-type': 'application/pdf' } }),
+  });
+  assert.equal(fetched.identifier.type, 'arxiv'); assert.equal(fetched.metadata.title, 'Public Agent Paper'); assert.equal(fetched.access.status, 'public-full-text'); assert.equal(fetched.access.isFullText, true); assert.match(fetched.text, /Public Agent Paper/); assert.match(fetched.access.contentHash, /^[a-f0-9]{64}$/); assert.equal(fetched.source.mapped, true);
+  const doiMetadata = await fetchPaper('doi:10.1000/agent', {
+    includeText: false, skipDns: true,
+    fetchImpl: async () => new Response(JSON.stringify({ message: { DOI: '10.1000/agent', title: ['DOI Agent Paper'], abstract: '<jats:p>Public abstract only.</jats:p>', URL: 'https://doi.org/10.1000/agent', author: [{ given: 'Grace', family: 'Scholar' }], published: { 'date-parts': [[2026, 2, 1]] } } }), { status: 200, headers: { 'content-type': 'application/json' } }),
+  });
+  assert.equal(doiMetadata.identifier.type, 'doi'); assert.equal(doiMetadata.metadata.title, 'DOI Agent Paper'); assert.equal(doiMetadata.access.status, 'abstract-only'); assert.equal(doiMetadata.access.isFullText, false); assert.match(doiMetadata.text, /Public abstract only/); assert.equal(doiMetadata.source, undefined);
+  const publicPage = await fetchPaper('https://papers.example.test/article', { skipDns: true, fetchImpl: async () => new Response('<html><head><meta name="citation_title" content="Public HTML Paper"><meta name="citation_doi" content="10.1000/html"></head><body><main>Publicly available article text for review.</main></body></html>', { status: 200, headers: { 'content-type': 'text/html' } }) });
+  assert.equal(publicPage.identifier.type, 'url'); assert.equal(publicPage.metadata.title, 'Public HTML Paper'); assert.equal(publicPage.access.status, 'public-page-text'); assert.equal(publicPage.access.isFullText, false); assert.match(publicPage.text, /Publicly available article text/);
+  let privateFetchCalled = false;
+  const privatePaper = await fetchPaper('http://127.0.0.1/private.pdf', { fetchImpl: async () => { privateFetchCalled = true; return new Response('private'); } });
+  assert.equal(privatePaper.access.status, 'unavailable'); assert.equal(privateFetchCalled, false);
+
+  const store = { searchKnowledge: async () => [] };
+  const project = { id: 'paper-project' }; const principal = { tenantId: 'tenant' };
+  const definitions = await resolvedTools({ agentToolConfigs: [] }, 'tenant');
+  const blocked = createToolExecutor({ store, project, principal });
+  await assert.rejects(() => blocked(definitions.find((tool) => tool.name === 'paper_search'), { query: 'agents' }), /not authorized/);
+  const executor = createToolExecutor({ store, project, principal, allowSourceAccess: true, paperSearchImpl: async () => papers, paperFetchImpl: async () => fetched, sourceVerifier: async (sources) => sources });
+  const searched = await executor(definitions.find((tool) => tool.name === 'paper_search'), { query: 'agents', limit: 3 }); assert.equal(searched.result.papers.length, 1); assert.equal(searched.sources.length, 1);
+  const obtained = await executor(definitions.find((tool) => tool.name === 'paper_fetch'), { identifier: 'arXiv:2601.12345', includeText: true }); assert.equal(obtained.result.access.status, 'public-full-text'); assert.equal(obtained.sources[0].verification, 'verified');
+  assert.equal(sourceAccessTool('paper_fetch'), true); assert.equal(sourceAccessTool('workspace_read'), false);
 });
 
 test('generic Agent MCP runtime discovers, namespaces, validates, and invokes official Streamable HTTP tools', async (t) => {
