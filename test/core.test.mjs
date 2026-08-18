@@ -60,6 +60,29 @@ async function sendOpenAiChat(res, request, content, { id = 'test-chat', model =
   res.end(JSON.stringify({ id, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage }));
 }
 
+function fixtureNarrative(seed, identity) {
+  const first = `${seed} ${identity} traces the responsible components, state transitions, interfaces, invariants, and causal assumptions so the mechanism can be inspected instead of asserted. It names the observable inputs and outputs and explains how a local decision propagates through the system.`;
+  const second = `For ${identity}, implementation evidence must include a concrete workload, configuration, baseline, failure injection, and measurable acceptance threshold. The analysis records competing designs, operational cost, residual uncertainty, and the exact observation that would falsify the proposed explanation rather than treating a plausible narrative as proof.`;
+  return `${first}\n\n${second}`;
+}
+
+function qualityFixtureEditable(editable) {
+  if (!editable || typeof editable !== 'object') return editable;
+  if (editable.deepDiveDocuments) editable.deepDiveDocuments = editable.deepDiveDocuments.map((document) => ({ ...document, sections: document.sections.map((section, index) => ({ ...section, body: fixtureNarrative(section.body, `${document.id}/${section.title}/${index + 1}`) })) }));
+  if (editable.llmWiki) editable.llmWiki = {
+    ...editable.llmWiki,
+    summary: fixtureNarrative(editable.llmWiki.summary, 'final-wiki-synthesis'),
+    sections: editable.llmWiki.sections.map((section, index) => ({ ...section, body: fixtureNarrative(section.body, `wiki-section-${index + 1}/${section.title}`) })),
+  };
+  return editable;
+}
+
+function editableFixtureFromPrompt(prompt) {
+  const marker = 'Editable schema and current draft: ';
+  const line = String(prompt).split('\n').find((value) => value.startsWith(marker));
+  return line ? qualityFixtureEditable(JSON.parse(line.slice(marker.length))) : null;
+}
+
 function parseSseEvents(body) {
   return String(body).split(/\n\n/u).map((block) => {
     const event = block.match(/^event: (.+)$/mu)?.[1];
@@ -203,9 +226,7 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
       const requestedSwitch = prompt.includes('switch runtime') && completed.length === 0;
       content = JSON.stringify({ next, mode: requestedSwitch ? 'plan-execute' : system.includes('ReAct') ? 'react' : 'supervisor', reason: requestedSwitch ? 'complex-task-replan' : 'next bounded specialist' });
     } else {
-      const marker = 'Editable schema and current draft: ';
-      const line = prompt.split('\n').find((value) => value.startsWith(marker));
-      const editable = line ? JSON.parse(line.slice(marker.length)) : {};
+      const editable = editableFixtureFromPrompt(prompt) || {};
       const key = Object.keys(editable)[0]; content = JSON.stringify(key ? { [key]: editable[key] } : {});
     }
     calls.push({ system, prompt, content });
@@ -262,9 +283,7 @@ test('LangGraph accepts reasoning-wrapped fenced JSON without falling back to of
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
-    const marker = 'Editable schema and current draft: ';
-    const line = prompt.split('\n').find((value) => value.startsWith(marker));
-    const editable = line ? JSON.parse(line.slice(marker.length)) : {};
+    const editable = editableFixtureFromPrompt(prompt) || {};
     if (editable.expertGoal) editable.expertGoal.outcome = 'MiniMax reasoning response accepted.';
     const content = `<think>Private reasoning with a decoy {"ignore":true} must not be parsed.</think>\n\`\`\`json\n${JSON.stringify({ ...editable, unownedField: 'ignored by stage schema' })}\n\`\`\``;
     await sendOpenAiChat(res, request, content, { id: 'reasoning-json', model: 'reasoning-model', usage: { prompt_tokens: 5, completion_tokens: 3 } });
@@ -288,8 +307,7 @@ test('LangGraph retries a shallow Wiki finalizer until the quality contract pass
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
-    const marker = 'Editable schema and current draft: '; const line = prompt.split('\n').find((value) => value.startsWith(marker));
-    const editable = line ? JSON.parse(line.slice(marker.length)) : {};
+    const editable = editableFixtureFromPrompt(prompt) || {};
     if (editable.llmWiki && finalizerCalls++ === 0) editable.llmWiki = { ...editable.llmWiki, sections: [{ title: 'Thin', body: 'Too short' }], glossary: [], nextQuestions: [] };
     await sendOpenAiChat(res, request, JSON.stringify(editable), { id: `quality-${finalizerCalls}`, model: 'quality-model', usage: { prompt_tokens: 5, completion_tokens: 3 } });
   });
@@ -506,7 +524,7 @@ test('ReAct, Plan and Supervisor execute bounded Agent tool observations', async
       const selectedTool = prompt.match(/"name":"(mcp__[^"]+)"/u)?.[1] || 'workspace_read';
       content = JSON.stringify({ next, mode: system.includes('ReAct') ? 'react' : 'supervisor', reason: 'bounded decision', ...(next === 'tool' ? { tool: { name: selectedTool, input: { query: 'runtime evidence' } } } : {}) });
     } else {
-      const marker = 'Editable schema and current draft: '; const line = prompt.split('\n').find((value) => value.startsWith(marker)); const editable = line ? JSON.parse(line.slice(marker.length)) : {}; const key = Object.keys(editable)[0]; content = JSON.stringify(key ? { [key]: editable[key] } : {});
+      const editable = editableFixtureFromPrompt(prompt) || {}; const key = Object.keys(editable)[0]; content = JSON.stringify(key ? { [key]: editable[key] } : {});
     }
     await sendOpenAiChat(res, request, content, { id: 'tool-loop', model: 'test-model' });
   });
@@ -558,12 +576,11 @@ test('Web-configured provider runs the Goal, expert collaboration, and Wiki fina
     if (prompt.includes('Require a final reproducibility gate.')) pluginPromptSeen = true;
     if (prompt.includes('Simplified Chinese (zh-CN)')) languagePromptSeen = true;
     let content = 'OK';
-    const marker = 'Editable schema and current draft: ';
-    const line = prompt.split('\n').find((value) => value.startsWith(marker));
-    if (line) {
-      const editable = JSON.parse(line.slice(marker.length)); const key = Object.keys(editable)[0];
+    const editable = editableFixtureFromPrompt(prompt);
+    if (editable) {
+      const key = Object.keys(editable)[0];
       if (editable.expertGoal) content = JSON.stringify({ expertGoal: { ...editable.expertGoal, outcome: 'Provider-defined expert outcome.' }, expertRoles: editable.expertRoles.map((role) => ({ ...role, title: `Provider ${role.title}` })) });
-      else if (editable.llmWiki) content = JSON.stringify({ llmWiki: { ...editable.llmWiki, summary: 'Provider-finalized LLM Wiki.' } });
+      else if (editable.llmWiki) content = JSON.stringify({ llmWiki: { ...editable.llmWiki, summary: fixtureNarrative('Provider-finalized LLM Wiki.', 'provider-finalizer') } });
       else content = JSON.stringify({ [key]: editable[key] });
       modelCalls += 1;
     }
@@ -593,13 +610,13 @@ test('Web-configured provider runs the Goal, expert collaboration, and Wiki fina
   const streamedJobs = parseSseEvents(await response.text()).filter((event) => event.event === 'job').map((event) => event.data.job);
   assert.ok(streamedJobs.length >= 1); const job = streamedJobs.at(-1); assert.equal(job.status, 'completed');
   response = await fetch(`${base}/api/jobs/missing-job/events`); assert.equal(response.status, 404);
-  assert.equal(job.currentMode, 'workflow'); assert.equal(job.currentModeLabel, 'Workflow'); assert.equal(job.language, 'zh-CN'); assert.equal(job.agentStages.length, 7); assert.deepEqual(job.agentStages.map((stage) => stage.id), ['goal', 'references', 'research', 'knowledge', 'writing', 'review', 'finalizer']); assert.equal(job.agentStages.find((stage) => stage.id === 'references').status, 'offline'); assert.ok(job.agentStages.filter((stage) => stage.id !== 'references').every((stage) => stage.status === 'completed')); assert.equal(job.activeSkills[0].name, 'systematic_review'); assert.equal(job.activePlugins[0].name, 'paper_quality');
+  assert.equal(job.currentMode, 'workflow'); assert.equal(job.currentModeLabel, 'Workflow'); assert.equal(job.language, 'zh-CN'); assert.equal(job.agentStages.length, 7); assert.deepEqual(job.agentStages.map((stage) => stage.id), ['goal', 'references', 'research', 'knowledge', 'writing', 'review', 'finalizer']); assert.equal(job.agentStages.find((stage) => stage.id === 'references').status, 'offline'); assert.ok(job.agentStages.filter((stage) => stage.id !== 'references').every((stage) => stage.status === 'completed'), JSON.stringify(job.agentStages)); assert.equal(job.activeSkills[0].name, 'systematic_review'); assert.equal(job.activePlugins[0].name, 'paper_quality');
   assert.ok(streamedJobs.some((item) => (item.runEvents || []).some((event) => event.type === 'model-response' && event.status === 'streaming')));
   assert.ok(job.runEvents.some((event) => event.type === 'model-response' && event.status === 'completed'));
   assert.equal(job.expertGoal.outcome, 'Provider-defined expert outcome.'); assert.match(job.referenceDiscovery.query, /Provider-defined expert outcome/); assert.equal(job.referenceDiscovery.status, 'offline');
   const generated = await (await fetch(`${base}/api/projects/${project.id}`)).json(); const artifact = generated.project.artifacts[0];
-  assert.equal(modelCalls, 6); assert.equal(skillPromptSeen, true); assert.equal(pluginPromptSeen, true); assert.equal(languagePromptSeen, true); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.version, 8); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.equal(artifact.workflow.runtime.language, 'zh-CN'); assert.equal(artifact.workflow.runtime.skills[0].name, 'systematic_review'); assert.equal(artifact.workflow.runtime.plugins[0].name, 'paper_quality'); assert.equal('instructions' in artifact.workflow.runtime.skills[0], false); assert.equal('instructions' in artifact.workflow.runtime.plugins[0], false); assert.equal(artifact.workflow.agents.find((agent) => agent.id === 'references').status, 'offline'); assert.equal(artifact.documents.length, 7); assert.equal(artifact.content.deepDiveDocuments.length, 5);
-  assert.equal(artifact.content.expertGoal.outcome, 'Provider-defined expert outcome.'); assert.ok(artifact.content.expertRoles.every((role) => role.title.startsWith('Provider '))); assert.equal(artifact.content.llmWiki.summary, 'Provider-finalized LLM Wiki.'); assert.deepEqual(artifact.content.wikiSections, artifact.content.llmWiki.sections);
+  assert.equal(modelCalls, 11); assert.equal(skillPromptSeen, true); assert.equal(pluginPromptSeen, true); assert.equal(languagePromptSeen, true); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.version, 9); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.equal(artifact.workflow.runtime.language, 'zh-CN'); assert.equal(artifact.workflow.runtime.skills[0].name, 'systematic_review'); assert.equal(artifact.workflow.runtime.plugins[0].name, 'paper_quality'); assert.equal('instructions' in artifact.workflow.runtime.skills[0], false); assert.equal('instructions' in artifact.workflow.runtime.plugins[0], false); assert.equal(artifact.workflow.agents.find((agent) => agent.id === 'references').status, 'offline'); assert.equal(artifact.documents.length, 7); assert.equal(artifact.content.deepDiveDocuments.length, 5); assert.equal(artifact.workflow.runtime.deepDiveGeneration.strategy, 'focused-document-calls'); assert.equal(artifact.workflow.runtime.deepDiveGeneration.minSectionCharacters, 280); assert.ok(artifact.content.deepDiveDocuments.every((document) => document.sections.every((section) => section.body.length >= 280 && section.body.includes('\n\n'))));
+  assert.equal(artifact.content.expertGoal.outcome, 'Provider-defined expert outcome.'); assert.ok(artifact.content.expertRoles.every((role) => role.title.startsWith('Provider '))); assert.match(artifact.content.llmWiki.summary, /^Provider-finalized LLM Wiki\./u); assert.deepEqual(artifact.content.wikiSections, artifact.content.llmWiki.sections);
   assert.equal(artifact.documents[0].name, 'llm-wiki.md'); assert.equal(artifact.documents[0].content, artifactToMarkdown(project, artifact)); assert.ok(artifact.documents.slice(2).every((document) => document.name.endsWith('.md')));
   const session = (await (await fetch(`${base}/api/projects/${project.id}/sessions/${initialSession.id}`)).json()).session;
   assert.equal(session.status, 'idle'); assert.equal(session.activeRun, null); assert.deepEqual(session.messages.map((message) => message.role), ['assistant', 'user', 'assistant']);
@@ -623,7 +640,7 @@ test('async Agent generation persists tool provenance in Job, Session, and Artif
       const completed = JSON.parse(prompt.match(/Completed stages: (\[[^\]]*\])/u)?.[1] || '[]'); const next = prompt.includes('Tool observations: []') ? 'tool' : ['research', 'knowledge', 'writing', 'review'].find((stage) => !completed.includes(stage)) || 'finish';
       content = JSON.stringify({ next, mode: 'react', reason: 'retrieve workspace evidence', ...(next === 'tool' ? { tool: { name: 'workspace_read', input: { query: 'sandbox boundaries', limit: 3 } } } : {}) });
     } else {
-      const marker = 'Editable schema and current draft: '; const line = prompt.split('\n').find((value) => value.startsWith(marker)); const editable = line ? JSON.parse(line.slice(marker.length)) : {}; const key = Object.keys(editable)[0]; content = JSON.stringify(key ? { [key]: editable[key] } : {});
+      const editable = editableFixtureFromPrompt(prompt) || {}; const key = Object.keys(editable)[0]; content = JSON.stringify(key ? { [key]: editable[key] } : {});
     }
     await sendOpenAiChat(res, request, content, { id: 'tool-provenance', model: 'test-model' });
   });
@@ -652,10 +669,10 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
-    const marker = 'Editable schema and current draft: '; const line = prompt.split('\n').find((value) => value.startsWith(marker));
+    const editable = editableFixtureFromPrompt(prompt);
     let content = '{}';
-    if (line) {
-      const editable = JSON.parse(line.slice(marker.length)); const key = Object.keys(editable)[0]; modelCalls += 1;
+    if (editable) {
+      const key = Object.keys(editable)[0]; modelCalls += 1;
       if (editable.expertGoal) content = JSON.stringify({ expertGoal: { ...editable.expertGoal, outcome: `Refined outcome for ${editable.expertGoal.question}` } });
       else if (editable.llmWiki) {
         priorWikiSeen ||= String(editable.llmWiki.summary).includes('Provider-refined Wiki');
@@ -696,10 +713,10 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
   response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '继续补充第二轮权威资料和实践细节。', mode: 'workflow', language: 'en' }) });
   assert.equal(response.status, 202); const secondJobId = (await response.json()).job.id;
   for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 25)); job = (await (await fetch(`${base}/api/jobs/${secondJobId}`)).json()).job; if (!['queued', 'running'].includes(job.status)) break; }
-  assert.equal(job.status, 'completed'); project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project; assert.equal(project.artifacts.length, 2); assert.match(project.artifacts[0].content.llmWiki.summary, /Provider-refined Wiki\. Provider-refined Wiki/); assert.equal(project.artifacts[0].content.sources.length, 10); assert.deepEqual(new Set(project.artifacts[0].content.sources.map((source) => source.name)), new Set(Array.from({ length: 10 }, (_, index) => `Authority source ${index + 1}`))); assert.equal(project.artifacts[0].workflow.runtime.knowledgeEnrichment.sourceCount, 10); assert.equal(priorWikiSeen, true); assert.equal(sourceSearches, 10);
+  assert.equal(job.status, 'completed'); project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project; assert.equal(project.artifacts.length, 2); assert.equal(project.artifacts[0].content.llmWiki.summary.match(/Provider-refined Wiki\./gu)?.length, 2); assert.equal(project.artifacts[0].content.sources.length, 10); assert.deepEqual(new Set(project.artifacts[0].content.sources.map((source) => source.name)), new Set(Array.from({ length: 10 }, (_, index) => `Authority source ${index + 1}`))); assert.equal(project.artifacts[0].workflow.runtime.knowledgeEnrichment.sourceCount, 10); assert.equal(priorWikiSeen, true); assert.equal(sourceSearches, 10);
   knowledge = await (await fetch(`${base}/api/projects/${created.project.id}/knowledge`)).json(); assert.equal(knowledge.documents.filter((document) => document.sourceKind === 'agent-wiki').length, 14); assert.equal(project.artifacts[0].workflow.runtime.knowledgeEnrichment.documentCount, 7);
   const session = (await (await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}`)).json()).session; const assistant = session.messages.at(-1);
-  assert.equal(assistant.role, 'assistant'); assert.equal(assistant.kind, 'artifact'); assert.equal(assistant.artifactId, project.artifacts[0].id); assert.equal(assistant.mode, 'workflow'); assert.ok(assistant.runEvents.some((event) => event.type === 'artifact')); assert.ok(assistant.runEvents.some((event) => event.type === 'model-response' && event.response.includes('Provider-refined Wiki'))); assert.equal(modelCalls, 12);
+  assert.equal(assistant.role, 'assistant'); assert.equal(assistant.kind, 'artifact'); assert.equal(assistant.artifactId, project.artifacts[0].id); assert.equal(assistant.mode, 'workflow'); assert.ok(assistant.runEvents.some((event) => event.type === 'artifact')); assert.ok(assistant.runEvents.some((event) => event.type === 'model-response' && event.response.includes('Provider-refined Wiki'))); assert.equal(modelCalls, 22);
 });
 
 test('Agent session API isolates projects and tenants and protects active sessions', async (t) => {
