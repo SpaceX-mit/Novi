@@ -249,7 +249,33 @@ function renderAgentMessage(message) {
   const tools = (message.toolCalls || []).map((call) => `<span class="message-tool ${call.status}">${escapeHtml(call.label || call.tool)} · ${escapeHtml(call.status)}</span>`).join('');
   const skills = (message.skills || []).map((skill) => `<span class="message-skill">${escapeHtml(skill.title || skill.name)}</span>`).join('');
   const plugins = (message.plugins || []).map((plugin) => `<span class="message-plugin">${escapeHtml(plugin.title || plugin.name)} ${escapeHtml(plugin.version || '')}</span>`).join('');
-  return `<article class="agent-message ${isUser ? 'user' : 'assistant'} ${message.kind || 'message'}"><div class="message-author"><b>${isUser ? 'You' : 'Novi'}</b><span>${escapeHtml(meta)}</span></div><p>${escapeHtml(message.content)}</p>${plugins ? `<div class="message-plugins">${plugins}</div>` : ''}${skills ? `<div class="message-skills">${skills}</div>` : ''}${tools ? `<div class="message-tools">${tools}</div>` : ''}${message.artifactId ? `<button class="message-artifact" data-artifact-id="${escapeHtml(message.artifactId)}">Open generated artifact</button>` : ''}</article>`;
+  return `<article class="agent-message ${isUser ? 'user' : 'assistant'} ${message.kind || 'message'}"><div class="message-author"><b>${isUser ? 'You' : 'Novi'}</b><span>${escapeHtml(meta)}</span></div><p>${escapeHtml(message.content)}</p>${plugins ? `<div class="message-plugins">${plugins}</div>` : ''}${skills ? `<div class="message-skills">${skills}</div>` : ''}${tools ? `<div class="message-tools">${tools}</div>` : ''}${renderRunEvents(message.runEvents, 'Run details')}${message.artifactId ? `<button class="message-artifact" data-artifact-id="${escapeHtml(message.artifactId)}">Open generated artifact</button>` : ''}</article>`;
+}
+
+function eventDetail(value) {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return escapeHtml(value);
+  try { return escapeHtml(JSON.stringify(value, null, 2)); } catch { return '[unavailable]'; }
+}
+
+function renderRunEvent(event) {
+  const status = String(event.status || 'completed');
+  const detail = [
+    event.summary ? `<p>${escapeHtml(event.summary)}</p>` : '',
+    event.request !== undefined ? `<div><b>Request</b><pre>${eventDetail(event.request)}</pre></div>` : '',
+    event.response !== undefined ? `<div><b>Response</b><pre>${eventDetail(event.response)}</pre></div>` : '',
+    event.input !== undefined ? `<div><b>Input</b><pre>${eventDetail(event.input)}</pre></div>` : '',
+    event.output !== undefined ? `<div><b>Output</b><pre>${eventDetail(event.output)}</pre></div>` : '',
+    event.error ? `<div class="run-event-error"><b>Error</b><pre>${escapeHtml(event.error)}</pre></div>` : '',
+    event.usage ? `<small>Tokens: ${eventDetail(event.usage)}</small>` : '',
+  ].join('');
+  const meta = [event.actor, event.mode, event.stageId, formatDateTime(event.createdAt)].filter(Boolean).join(' · ');
+  return `<details class="run-event ${escapeHtml(status)}" ${event.type === 'model-response' || event.type === 'tool' ? '' : 'open'}><summary><span class="run-event-type">${escapeHtml(event.type || 'activity')}</span><b>${escapeHtml(event.title || 'Agent activity')}</b><small>${escapeHtml(meta)}</small><i>${escapeHtml(status)}</i></summary><div class="run-event-body">${detail || '<p>No additional detail.</p>'}</div></details>`;
+}
+
+function renderRunEvents(events, title = 'Agent run details') {
+  if (!events?.length) return '';
+  return `<section class="run-events"><header><b>${escapeHtml(title)}</b><small>${events.length} events</small></header><div class="run-event-list">${events.map(renderRunEvent).join('')}</div></section>`;
 }
 
 function renderLiveGoal(run) {
@@ -266,7 +292,12 @@ function renderConversation(project) {
   const modes = [['auto', 'Auto'], ['workflow', 'Workflow'], ['react', 'ReAct'], ['plan-execute', 'Plan & Execute'], ['supervisor', 'Supervisor']];
   const runSkills = [...(run?.plugins || []).map((plugin) => plugin.title || plugin.name), ...(run?.skills || []).map((skill) => skill.title || skill.name)].join(', ');
   const liveGoal = renderLiveGoal(run);
-  return `<section class="conversation-panel"><header><div><p class="eyebrow">AGENT SESSION</p><h2>${escapeHtml(session?.title || 'Loading session')}</h2></div>${run ? `<div class="conversation-run" id="conversation-run"><b id="conversation-run-mode">${escapeHtml(sessionModeLabel(run.currentMode))}</b><span id="conversation-run-stage">${escapeHtml(run.currentStage || 'Preparing')}</span>${runSkills ? `<span class="conversation-run-skills">${escapeHtml(runSkills)}</span>` : ''}<small id="conversation-run-progress">${Number(run.progress || 0)}%</small></div>` : ''}</header><div class="conversation-messages" id="conversation-messages" aria-live="polite">${liveGoal}${messages.map(renderAgentMessage).join('') || '<div class="conversation-loading">Loading conversation...</div>'}</div>${!project.artifacts?.length && editor ? `<button class="primary-button generate-now" id="generate-empty" ${busy ? 'disabled' : ''}>${busy ? 'Generating...' : 'Generate now'}</button>` : ''}${editor ? `<form class="agent-composer" id="agent-composer"><textarea id="agent-prompt" name="prompt" rows="2" maxlength="20000" placeholder="Ask Novi to research and improve this Wiki..." ${busy || !session ? 'disabled' : ''}>${escapeHtml(state.composerDraft)}</textarea><div><label>Execution mode<select id="agent-mode" name="mode" ${busy ? 'disabled' : ''}>${modes.map(([value, label]) => `<option value="${value}" ${state.composerMode === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>Wiki language<select id="wiki-language" name="language" ${busy ? 'disabled' : ''}>${wikiLanguages.map(([value, label]) => `<option value="${value}" ${state.composerLanguage === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button class="composer-send" type="submit" title="Research and update Wiki" aria-label="Research and update Wiki" ${busy || !session ? 'disabled' : ''}>↑</button></div></form>` : '<p class="conversation-readonly">Viewer access is read only.</p>'}</section>`;
+  return `<section class="conversation-panel"><header><div><p class="eyebrow">AGENT SESSION</p><h2>${escapeHtml(session?.title || 'Loading session')}</h2></div>${run ? `<div class="conversation-run" id="conversation-run"><b id="conversation-run-mode">${escapeHtml(sessionModeLabel(run.currentMode))}</b><span id="conversation-run-stage">${escapeHtml(run.currentStage || 'Preparing')}</span>${runSkills ? `<span class="conversation-run-skills">${escapeHtml(runSkills)}</span>` : ''}<small id="conversation-run-progress">${Number(run.progress || 0)}%</small></div>` : ''}</header><div class="conversation-messages" id="conversation-messages" aria-live="polite">${messages.map(renderAgentMessage).join('') || '<div class="conversation-loading">Loading conversation...</div>'}${liveGoal}${runEventsSection(run?.runEvents)}</div>${!project.artifacts?.length && editor ? `<button class="primary-button generate-now" id="generate-empty" ${busy ? 'disabled' : ''}>${busy ? 'Generating...' : 'Generate now'}</button>` : ''}${editor ? `<form class="agent-composer" id="agent-composer"><textarea id="agent-prompt" name="prompt" rows="2" maxlength="20000" placeholder="Ask Novi to research and improve this Wiki..." ${busy || !session ? 'disabled' : ''}>${escapeHtml(state.composerDraft)}</textarea><div><label>Execution mode<select id="agent-mode" name="mode" ${busy ? 'disabled' : ''}>${modes.map(([value, label]) => `<option value="${value}" ${state.composerMode === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>Wiki language<select id="wiki-language" name="language" ${busy ? 'disabled' : ''}>${wikiLanguages.map(([value, label]) => `<option value="${value}" ${state.composerLanguage === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button class="composer-send" type="submit" title="Research and update Wiki" aria-label="Research and update Wiki" ${busy || !session ? 'disabled' : ''}>↑</button></div></form>` : '<p class="conversation-readonly">Viewer access is read only.</p>'}</section>`;
+}
+
+function runEventsSection(events) {
+  if (!events?.length) return '';
+  return `<section class="live-events" id="live-events"><header><b>Live Agent activity</b><small>${events.length} events</small></header><div>${events.map(renderRunEvent).join('')}</div></section>`;
 }
 
 function renderDocumentViewer(artifact) {
@@ -484,11 +515,22 @@ function updateConversationRun(job) {
   if (mode) mode.textContent = job.currentModeLabel || sessionModeLabel(job.currentMode);
   if (stage) stage.textContent = job.currentStage || (job.status === 'queued' ? 'Queued' : 'Preparing');
   if (progress) progress.textContent = `${Math.max(0, Math.min(100, Number(job.progress) || 0))}%`;
-  if (state.activeSession?.activeRun?.jobId === job.id) Object.assign(state.activeSession.activeRun, { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress, ...(job.expertGoal ? { expertGoal: job.expertGoal, expertRoles: job.expertRoles || [] } : {}), ...(job.referenceDiscovery ? { referenceDiscovery: job.referenceDiscovery } : {}) });
+  if (state.activeSession?.activeRun?.jobId === job.id) Object.assign(state.activeSession.activeRun, { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress, runEvents: job.runEvents || state.activeSession.activeRun.runEvents || [], ...(job.expertGoal ? { expertGoal: job.expertGoal, expertRoles: job.expertRoles || [] } : {}), ...(job.referenceDiscovery ? { referenceDiscovery: job.referenceDiscovery } : {}) });
+  const messages = $('#conversation-messages');
+  if (messages) {
+    const current = messages.querySelector('#live-events');
+    const html = runEventsSection(job.runEvents || state.activeSession?.activeRun?.runEvents || []);
+    if (current && html) current.outerHTML = html;
+    else if (!current && html) messages.insertAdjacentHTML('beforeend', html);
+  }
   if (job.expertGoal) {
-    const messages = $('#conversation-messages'); const current = messages?.querySelector('.live-goal');
+    const current = messages?.querySelector('.live-goal');
     const template = document.createElement('template'); template.innerHTML = renderLiveGoal(job).trim();
-    if (current) current.replaceWith(template.content.firstElementChild); else messages?.prepend(template.content.firstElementChild);
+    if (current) current.replaceWith(template.content.firstElementChild);
+    else if (messages) {
+      const goal = template.content.firstElementChild; const events = messages.querySelector('#live-events');
+      if (events) events.before(goal); else messages.append(goal);
+    }
   }
 }
 

@@ -32,7 +32,7 @@ import { normalizeProviderInput, resolvedProviderConfig, saveProviderConfig } fr
 import { referenceQueryForGoal, runAgentWorkflow } from '../src/agent-runtime.mjs';
 import { DEFAULT_WIKI_LANGUAGE, normalizeWikiLanguage, WIKI_LANGUAGES } from '../src/wiki-language.mjs';
 import { agentModeCatalog, selectAgentMode } from '../src/agent-modes.mjs';
-import { appendSessionMessage, beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, sessionSummary, updateSessionRun } from '../src/agent-sessions.mjs';
+import { appendSessionMessage, beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, sessionSummary, updateSessionRun, updateSessionRunEvent } from '../src/agent-sessions.mjs';
 import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings, sourceAccessTool } from '../src/agent-tools.mjs';
 import { fetchPaper } from '../src/paper-tools.mjs';
 import { discoverMcpServer, invokeMcpTool, publicMcpSettings, resolvedMcpTools, saveMcpSettings, validateMcpEndpoint } from '../src/mcp-runtime.mjs';
@@ -144,8 +144,11 @@ test('Agent sessions preserve bounded conversation and run lifecycle state', () 
   assert.equal(userMessage.status, 'queued'); assert.equal(session.status, 'running'); assert.equal(session.activeRun.currentMode, 'react');
   updateSessionRun(session, { currentMode: 'plan-execute', currentStage: 'Writing', progress: 70 });
   assert.equal(userMessage.status, 'running'); assert.equal(userMessage.mode, 'plan-execute'); assert.equal(session.activeRun.progress, 70);
+  updateSessionRunEvent(session, { id: 'model-1', type: 'model-response', actor: 'custom / test', title: 'LLM response', status: 'completed', response: 'bounded response', usage: { inputTokens: 3, outputTokens: 2 } });
+  updateSessionRunEvent(session, { id: 'tool-1', type: 'tool', actor: 'Workspace read', title: 'Tool completed', status: 'completed', input: { query: 'runtime' }, output: { passages: 1 } });
   const assistantMessage = completeSessionRun(session, { jobId: 'job-1', artifact: { id: 'artifact-1', content: { summary: 'Completed result' } }, mode: 'plan-execute' });
   assert.equal(assistantMessage.artifactId, 'artifact-1'); assert.equal(session.status, 'idle'); assert.equal(session.activeRun, null); assert.equal(userMessage.status, 'completed');
+  assert.equal(assistantMessage.runEvents.length, 2); assert.equal(assistantMessage.runEvents[0].type, 'model-response'); assert.equal(assistantMessage.runEvents[1].output.passages, 1);
   beginSessionRun(session, { jobId: 'job-2', prompt: 'Retry with evidence', requestedMode: 'supervisor', currentMode: 'supervisor' });
   failSessionRun(session, { jobId: 'job-2', mode: 'supervisor', error: 'Provider unavailable' });
   failSessionRun(session, { jobId: 'job-2', mode: 'supervisor', error: 'Provider unavailable' });
@@ -162,6 +165,7 @@ test('Agent sessions preserve bounded conversation and run lifecycle state', () 
 
 test('LangGraph executes all adaptive modes and can reschedule mode during a run', async (t) => {
   const calls = [];
+  const modelEvents = [];
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const request = JSON.parse(body); const system = String(request.messages?.[0]?.content || ''); const prompt = String(request.messages?.at(-1)?.content || '');
@@ -189,7 +193,7 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
   const fallback = generateArtifact(project);
   const config = { provider: 'custom', model: 'test-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'test-key' };
   for (const mode of ['workflow', 'react', 'plan-execute', 'supervisor']) {
-    const result = await runAgentWorkflow(project, fallback, config, { mode, prompt: `Run in ${mode}` });
+    const result = await runAgentWorkflow(project, fallback, config, { mode, prompt: `Run in ${mode}`, onModel: async (event) => { modelEvents.push(event); return true; } });
     assert.equal(result.runtime.initialMode, mode); assert.equal(result.runtime.mode, mode);
     assert.ok(result.stages.length >= 7); assert.equal(result.stages.find((stage) => stage.id === 'references').status, 'offline'); assert.ok(result.stages.filter((stage) => stage.id !== 'references').every((stage) => stage.status === 'completed'));
     assert.equal(result.stages[0].id, 'goal'); assert.equal(result.stages.at(-1).id, 'finalizer');
@@ -217,6 +221,8 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
   const early = await runAgentWorkflow(project, fallback, config, { mode: 'react', prompt: 'finish early after one specialist' });
   assert.deepEqual(early.stages.map((stage) => stage.id), ['goal', 'references', 'research', 'finalizer']);
   assert.equal(early.content.llmWiki.sections.length, early.content.wikiSections.length);
+  assert.ok(modelEvents.some((event) => event.type === 'model-request' && event.request?.user.includes('Run in workflow')));
+  assert.ok(modelEvents.some((event) => event.type === 'model-response' && event.response));
 });
 
 test('Agent Skills validate, match deterministically, and remain bounded guidance', () => {
@@ -579,6 +585,7 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
   let job;
   for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 25)); job = (await (await fetch(`${base}/api/jobs/${queued.job.id}`)).json()).job; if (!['queued', 'running'].includes(job.status)) break; }
   assert.equal(job.status, 'completed'); assert.equal(job.agentStages.length, 7); assert.equal(job.language, 'en');
+  assert.ok(job.runEvents.some((event) => event.type === 'model-request' && event.request.user.includes('完善 Agent 能力 Wiki'))); assert.ok(job.runEvents.some((event) => event.type === 'model-response' && event.response)); assert.ok(job.runEvents.some((event) => event.type === 'stage' && event.stageId === 'finalizer')); assert.ok(job.runEvents.some((event) => event.type === 'reference'));
   let project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project;
   assert.equal(project.artifacts.length, 1); const first = project.artifacts[0]; assert.equal(first.language, 'en'); assert.equal(first.documents[0].name, 'llm-wiki.md'); assert.match(first.content.llmWiki.summary, /Provider-refined Wiki/); assert.equal(first.content.sources.length, 1); assert.equal(first.workflow.runtime.knowledgeEnrichment.sourceCount, 1);
   let knowledge = await (await fetch(`${base}/api/projects/${created.project.id}/knowledge`)).json(); const firstWikiDocument = knowledge.documents.find((document) => document.sourceKind === 'agent-wiki'); assert.ok(firstWikiDocument); assert.equal(first.workflow.runtime.knowledgeEnrichment.documentId, firstWikiDocument.id);
@@ -588,7 +595,7 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
   assert.equal(job.status, 'completed'); project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project; assert.equal(project.artifacts.length, 2); assert.match(project.artifacts[0].content.llmWiki.summary, /Provider-refined Wiki\. Provider-refined Wiki/); assert.equal(project.artifacts[0].content.sources.length, 2); assert.deepEqual(project.artifacts[0].content.sources.map((source) => source.name), ['Authority source 1', 'Authority source 2']); assert.equal(project.artifacts[0].workflow.runtime.knowledgeEnrichment.sourceCount, 2); assert.equal(priorWikiSeen, true); assert.equal(sourceSearches, 2);
   knowledge = await (await fetch(`${base}/api/projects/${created.project.id}/knowledge`)).json(); assert.equal(knowledge.documents.filter((document) => document.sourceKind === 'agent-wiki').length, 2);
   const session = (await (await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}`)).json()).session; const assistant = session.messages.at(-1);
-  assert.equal(assistant.role, 'assistant'); assert.equal(assistant.kind, 'artifact'); assert.equal(assistant.artifactId, project.artifacts[0].id); assert.equal(assistant.mode, 'workflow'); assert.equal(modelCalls, 12);
+  assert.equal(assistant.role, 'assistant'); assert.equal(assistant.kind, 'artifact'); assert.equal(assistant.artifactId, project.artifacts[0].id); assert.equal(assistant.mode, 'workflow'); assert.ok(assistant.runEvents.some((event) => event.type === 'artifact')); assert.ok(assistant.runEvents.some((event) => event.type === 'model-response' && event.response.includes('Provider-refined Wiki'))); assert.equal(modelCalls, 12);
 });
 
 test('Agent session API isolates projects and tenants and protects active sessions', async (t) => {

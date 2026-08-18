@@ -388,7 +388,7 @@ export async function generateArtifactAsync(project, options = {}) {
   let artifact;
   let execution = null;
   if (options.providerConfig) {
-    execution = await runAgentWorkflow(project, fallback, options.providerConfig, { sources: initialSources, knowledgeContext: fallback.content.knowledgeContext || [], language, referenceRetriever: options.referenceRetriever, prompt: options.prompt, mode: options.mode, onStage: options.onStage, onMode: options.onMode, tools: options.tools, skills: options.skills, plugins: options.plugins, toolExecutor: options.toolExecutor, onTool: options.onTool, threadId: options.threadId });
+    execution = await runAgentWorkflow(project, fallback, options.providerConfig, { sources: initialSources, knowledgeContext: fallback.content.knowledgeContext || [], language, referenceRetriever: options.referenceRetriever, prompt: options.prompt, mode: options.mode, onStage: options.onStage, onMode: options.onMode, onModel: options.onModel, tools: options.tools, skills: options.skills, plugins: options.plugins, toolExecutor: options.toolExecutor, onTool: options.onTool, threadId: options.threadId });
     artifact = { ...fallback, content: execution.content, model: options.providerConfig.model };
   } else {
     const startedAt = new Date().toISOString();

@@ -526,6 +526,28 @@ components:
         prompt: { type: string, minLength: 1, maxLength: 20000 }
         mode: { type: string, enum: [auto, workflow, react, plan-execute, supervisor], default: auto }
         language: { $ref: '#/components/schemas/WikiLanguage' }
+    AgentRunEvent:
+      type: object
+      required: [id, type, actor, title, status, createdAt]
+      properties:
+        id: { type: string, maxLength: 240 }
+        type: { type: string, enum: [mode, stage, reference, model-request, model-response, tool, artifact, status] }
+        actor: { type: string, maxLength: 160 }
+        title: { type: string, maxLength: 240 }
+        status: { type: string, maxLength: 40 }
+        stageId: { type: string, maxLength: 80 }
+        mode: { type: string }
+        provider: { type: string }
+        model: { type: string }
+        summary: { type: string, maxLength: 2000 }
+        request: { type: object, description: Bounded model request content without credentials }
+        response: { type: [string, object], description: Bounded model response content }
+        input: { type: [string, object], description: Bounded Agent or tool input }
+        output: { type: [string, object], description: Bounded Agent or tool output }
+        error: { type: string, maxLength: 500 }
+        usage: { type: object }
+        completedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
     AgentMessage:
       type: object
       required: [id, role, kind, content, createdAt]
@@ -542,6 +564,7 @@ components:
         toolCalls: { type: array, maxItems: 20, items: { type: object }, description: Bounded tool invocation provenance retained with the completed assistant message }
         skills: { type: array, maxItems: 3, items: { $ref: '#/components/schemas/AppliedAgentSkill' }, description: Skills applied to the completed artifact run }
         plugins: { type: array, maxItems: 2, items: { $ref: '#/components/schemas/AppliedAgentPlugin' }, description: Declarative Plugins applied to the completed artifact run }
+        runEvents: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/AgentRunEvent' }, description: Bounded model, Agent, reference, tool, and artifact timeline for this run }
         runtime: { type: object, description: Optional LangGraph runtime provenance without credentials }
         createdAt: { type: string, format: date-time }
     AgentSession:
@@ -553,7 +576,7 @@ components:
         projectId: { type: string, format: uuid }
         title: { type: string, maxLength: 120 }
         status: { type: string, enum: [idle, running] }
-        activeRun: { type: [object, 'null'] }
+        activeRun: { type: [object, 'null'], description: Includes bounded runEvents while the Agent is running }
         messages: { type: array, maxItems: 500, items: { $ref: '#/components/schemas/AgentMessage' } }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }

@@ -1,6 +1,6 @@
 # Novi 实现进度
 
-最近更新：2026-08-17
+最近更新：2026-08-18
 
 ## 当前结论
 
@@ -13,11 +13,11 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 | 范围 | 已实现内容 | 当前证据 |
 | --- | --- | --- |
 | 核心产品 | Knowledge Builder、Deep Research、Paper Author；成果版本、导出、Research/Knowledge/Writing/Review provenance | 默认测试与浏览器核心旅程覆盖 |
-| Web 与 API | 共享 REST API/UI、工作区、知识导入与检索、异步 Job/Agent 模式与阶段、来源刷新、成果历史、Provider/Tools/MCP/Skills/Plugins 设置、指标 | OpenAPI 3.1 契约共 46 paths / 58 operations；语法检查覆盖 46 modules |
+| Web 与 API | 共享 REST API/UI、工作区、知识导入与检索、异步 Job/Agent 模式与阶段、来源刷新、成果历史、Provider/Tools/MCP/Skills/Plugins 设置、指标 | OpenAPI 3.1 契约共 47 paths / 59 operations；语法检查覆盖 49 modules |
 | 账户与商业边界 | Cookie-only Web 会话、OIDC 边界、组织与 RBAC、配额、支付 provider 边界、审计与生命周期取消；本地开发租户每月 1000 次生成，生产/打包态自动收紧为 100 次 | 本地 HTTP/provider 契约和领域测试通过；登录账户套餐额度保持独立；未配置真实支付 provider 时明确返回 503，不创建模拟订单 |
 | 知识与生成 | 文本/Web/PDF/GitHub 导入、离线向量、RAG 上下文、来源连接器、Browser Agent/MCP 接口、Goal/专家角色/Knowledge System/System Document/LLM Wiki 生成、默认中文和 8 种生成语言、每版本 `llm-wiki.md`、连续更新 | 本地契约、集成和 desktop/mobile 浏览器 smoke 已覆盖；真实来源与多语言供应商质量仍需生产级人工核验 |
-| Agent Runtime | 意图路由的 Workflow、ReAct、Plan & Execute、Supervisor 四模式 LangGraph.js StateGraph；Goal Architect → Goal 驱动 Reference Discovery → Research/Knowledge/Writing/Review specialist → 必经 LLM Wiki Finalizer；Composer 与直接生成共享完整图，Composer 以前一成果和累计来源为基线；controller/阶段 fallback 可运行中切换模式，最多 8 个 Specialist 步骤；字段/形状校验、token、语言、参考 provenance、模式历史、计划和 Job 进度可追溯 | 本地 OpenAI-compatible HTTP 验证四种成果模式、7 节点 Goal/Reference/专家协作/Finalizer、两轮累积来源与 Wiki refinement、检索失败退款、提前 finish 仍经 Finalizer、ReAct → Plan & Execute 运行中切换及工具循环；Chromium 验证模式、语言、Markdown 与 Paper LLM Wiki |
-| Agent Session | 项目默认 Session、会话 API、异步累积式 Wiki refinement、active run、Goal/reference 状态、Job/Artifact 关联、隔离/恢复/清理；每轮 Composer 创建不可变 Artifact/`llm-wiki.md` 并把 Markdown 作为 `agent-wiki` 索引回 Workspace knowledge；Web 左栏 Session、中央 mode/language composer、右栏 Files/LLM Wiki/Document，生成 Markdown 安全预览，viewer 只读 | HTTP 测试验证两轮对话生成两版 Artifact、第二轮保留前一版内容并累计两组权威来源、两份 Markdown 知识文档及 provenance；desktop/mobile Chromium 验证 conversation-wiki、版本历史、知识删除、8 种语言、预览、inspector 与 RBAC |
+| Agent Runtime | 意图路由的 Workflow、ReAct、Plan & Execute、Supervisor 四模式 LangGraph.js StateGraph；Goal Architect → Goal 驱动 Reference Discovery → Research/Knowledge/Writing/Review specialist → 必经 LLM Wiki Finalizer；Composer 与直接生成共享完整图，Composer 以前一成果和累计来源为基线；controller/阶段 fallback 可运行中切换模式，最多 8 个 Specialist 步骤；字段/形状校验、token、语言、参考 provenance、模式历史、计划和 Job 进度可追溯；运行事件记录模型请求/回复、Agent 路由和阶段 | 本地 OpenAI-compatible HTTP 验证四种成果模式、7 节点 Goal/Reference/专家协作/Finalizer、两轮累积来源与 Wiki refinement、检索失败退款、提前 finish 仍经 Finalizer、ReAct → Plan & Execute 运行中切换及工具循环；测试验证模型事件进入 Job/Session，Chromium 验证实时事件时间线和历史详情 |
+| Agent Session | 项目默认 Session、会话 API、异步累积式 Wiki refinement、active run、Goal/reference 状态、Job/Artifact 关联、隔离/恢复/清理；每轮 Composer 创建不可变 Artifact/`llm-wiki.md` 并把 Markdown 作为 `agent-wiki` 索引回 Workspace knowledge；每次运行最多保存 100 条有界事件，完成/失败消息保留模型请求、回复、阶段、参考、工具输入输出和 Artifact 提交；Web 左栏 Session、中央 mode/language composer 与实时运行时间线、右栏 Files/LLM Wiki/Document，生成 Markdown 安全预览，viewer 只读 | HTTP 测试验证两轮对话生成两版 Artifact、累计来源、两份 Markdown 知识文档及 Job/Session 运行事件；desktop/mobile Chromium 验证实时事件、历史详情、conversation-wiki、版本历史、知识删除、8 种语言、预览、inspector 与 RBAC |
 | Agent Tools | 左侧 Customize/Tools；内置 workspace read/write/web search/paper search/paper fetch；论文检索覆盖 OpenAlex、arXiv、Crossref、Semantic Scholar、IEEE/ACM/Springer，论文获取支持 DOI/arXiv/公开 URL 并区分元数据、摘要、公开页面、公开 PDF 全文与不可访问状态；最多 10 个 allowlisted 自定义 HTTP 工具、严格标量 input schema、可选 AES-GCM Bearer token；ReAct/Plan/Supervisor 工具节点、最多 6 次调用、来源额度、超时/大小/SSRF 边界和 Job/Session/Artifact provenance | 领域测试覆盖论文去重、DOI 元数据、arXiv PDF、公开 HTML、私网拒绝、端点/schema/加密/租户项目隔离/响应上限；LangGraph 测试覆盖三种自主模式和 6 次硬上限；异步 HTTP 测试验证 Job/Session/Artifact 三处记录；desktop/mobile Chromium 验证 5 个内置工具、Customize、RBAC 和无横向溢出；真实学术供应商质量仍需生产验收 |
 | Agent MCP | 左侧 Customize/MCP；最多 5 个租户级 Streamable HTTP server；官方 SDK 发现与调用、最多 100 tools/server、命名空间别名、新工具默认关闭、逐工具授权；AES-GCM Bearer token、endpoint allowlist、schema/超时/256 KB 响应边界；MCP tool 进入同一 LangGraph 工具节点和 provenance | 官方 SDK server/client 集成覆盖 initialize/list/call、输入校验和结果规范化；HTTP/RBAC/加密/备份删除测试通过；desktop/mobile Chromium 验证配置入口、显式授权和 viewer 只读边界 |
 | Agent Skills | 左侧 Customize/Skills；最多 20 个租户 playbook，名称/用途/4000 字符指令、产品范围、always/auto 和触发词；按显式 `/skill`、always、触发词选最多 3 个注入 Planner/Controller/Specialist；不能授权工具/来源或覆盖 schema；Job/Session/Artifact 固化选择与指令哈希 | 领域测试覆盖校验、隔离、匹配优先级和上限；真实 HTTP+LangGraph 测试确认 prompt 注入及四处 provenance；desktop/mobile Chromium 验证保存和无横向溢出 |
@@ -27,7 +27,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 | Web/容器交付 | Web 本地运行、Docker 多阶段非 root 运行、健康与就绪检查 | Docker 镜像已构建并检查；最近记录的镜像为 `sha256:5af027f80df589bc4f7fe746e3464669576e6c5bf28a3b8fd3b9300f7f0e0cb1` |
 | Electron 构建兼容 | Node.js 商业开发基线设为 22.12+，`.nvmrc` 固定 22.22.2，desktop lifecycle 增加版本预检 | 已消除旧 Node 加载 `@noble/hashes` 时的 `ERR_REQUIRE_ESM` |
 | Linux 桌面制品 | electron-builder 配置、安全 BrowserWindow、Linux unpacked/AppImage 构建与打包态 smoke | AppImage 已生成；最近记录 SHA-256 为 `b956734a2233861e8feb160ae7941142bb87a80559217f33efd715f5a403016d` |
-| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 最近记录：84 passed + 1 PostgreSQL 条件跳过；49 个 JavaScript 模块语法通过；OpenAPI 47 paths / 59 operations；锁文件 SBOM 422 components / 129 runtime；desktop/mobile 浏览器、Provider/存储契约和 release-check 通过；既有开发/打包 Electron smoke 证据保持有效 |
+| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 2026-08-18：84 passed + 1 PostgreSQL 条件跳过；49 个 JavaScript 模块语法通过；OpenAPI 47 paths / 59 operations；desktop/mobile 浏览器、Provider/存储契约和 release-check 通过；凭据形状扫描与 `git diff --check` 通过 |
 
 ## 未完成
 
@@ -73,6 +73,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 4. 在已配置的 GitHub 远程仓库运行持续集成门禁并归档结果；随后接入真实供应商/目标基础设施并关闭正式发布门禁。
 
 ## 更新记录
+
+- 2026-08-18：完成聊天 Session 的 Agent 运行可观测时间线：LangGraph 在 Goal/Planner/Controller/Specialist/Finalizer 的模型调用前后记录有界 request/response 与 token，Router/阶段/Reference、工具输入输出和 Artifact 提交统一写入 Job 与 active Session；每次运行最多 100 条事件、单条详情约 12000 字符，Provider API Key 在事件形成前脱敏。运行中 Web 轮询实时显示可展开事件，完成/失败后助手消息保留完整时间线；同步和异步 Generate/Composer 均接入。OpenAPI 增加 `AgentRunEvent` 与消息 `runEvents` 契约。验证：`npm test` 84 passed + 1 PostgreSQL 条件跳过，`npm run check` 49 modules，`npm run openapi-check` 47 paths / 59 operations，1360x900 与 390x844 `npm run browser-smoke` 验证实时和历史事件，`git diff --check` 通过。运行事件仍受 Session 租户/项目权限保护，生产真实供应商内容质量和持久 LangGraph checkpoint 仍属外部门禁。
 
 - 2026-08-17：完成 Composer 累积式 Wiki 研究迭代：`POST /api/projects/:id/sessions/:sessionId/messages` 从一次性自然语言 chat Job 升级为 `refine` Job，每轮以最新 Artifact 内容和累计来源为基线，按所选语言运行完整 Goal → Reference Discovery → Research/Knowledge/Writing/Review → Finalizer；Reference 新来源按 URL 合并，Markdown Source map 保留最长 1000 字符的检索摘要/说明并明确其仍是不可信输入。每轮创建新的不可变 Artifact 与 `llm-wiki.md`，助手消息直接关联该版本；Markdown 同事务索引为租户/项目内 `agent-wiki` 文档，进入分块、向量、图谱和外部投影，runtime 固化文档 ID、内容哈希、来源数与重复复用状态。Project 在整轮期间标记 generating，阻止不同 Session 并发覆盖；语言、配额、失败退款、Skills/Plugins、Tool/MCP 与 provenance 沿用生成边界。验证：真实本地 OpenAI-compatible HTTP 两轮测试确认 2 个 Artifact、累计 2 组权威来源、前版 Wiki 进入第二轮编辑基线、2 个知识文档和关联 Session 消息；`npm test` 84 passed + 1 PostgreSQL 条件跳过，`npm run check` 49 modules，`npm run openapi-check` 47 paths / 59 operations，1360x900 与 390x844 `npm run browser-smoke`、`npm run release-check`、凭据形状扫描和 `git diff --check` 通过。真实外部来源仍需 `NOVI_LIVE_SOURCES=true` 与生产质量验收。
 

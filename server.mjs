@@ -24,7 +24,7 @@ import { enqueueDocumentDeletion, enqueueDocumentProjection, externalProjectionP
 import { providerCatalog, publicProviderConfig, resolvedProviderConfig, saveProviderConfig, testProviderConnection } from './src/llm-providers.mjs';
 import { browserAgentConfigured, mcpSourceConfigured, renderWithBrowserAgent, validateSourceAdapterConfiguration } from './src/source-adapters.mjs';
 import { agentModeCatalog, publicMode, selectAgentMode, validateRequestedMode } from './src/agent-modes.mjs';
-import { beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun, updateSessionToolCall } from './src/agent-sessions.mjs';
+import { beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun, updateSessionRunEvent, updateSessionToolCall, upsertRunEvent } from './src/agent-sessions.mjs';
 import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings, sourceAccessTool } from './src/agent-tools.mjs';
 import { discoverMcpServer, publicMcpSettings, resolvedMcpTools, saveMcpSettings } from './src/mcp-runtime.mjs';
 import { publicSkillSettings, resolveSkills, saveSkillSettings, skillProvenance } from './src/skill-runtime.mjs';
@@ -302,8 +302,12 @@ function csrfViolation(req) {
   return null;
 }
 
+function clientRateLimitKey(req) {
+  return `${req.socket.localPort || 'unknown'}:${req.socket.remoteAddress || 'unknown'}`;
+}
+
 function loginRateLimit(req, failed) {
-  const address = req.socket.remoteAddress || 'unknown';
+  const address = clientRateLimitKey(req);
   const now = Date.now();
   const bucket = authFailureBuckets.get(address) || { start: now, count: 0 };
   if (now - bucket.start > 15 * 60_000) { bucket.start = now; bucket.count = 0; }
@@ -332,7 +336,7 @@ async function retrieveWorkspaceKnowledge(store, project, user, limit = 6) {
 
 async function api(req, res, url, store, auth, metrics, dependencies = {}) {
   metrics.requests += 1;
-  const address = req.socket.remoteAddress || 'unknown';
+  const address = clientRateLimitKey(req);
   const now = Date.now();
   const bucket = requestBuckets.get(address) || { start: now, count: 0 };
   if (now - bucket.start > 60_000) { bucket.start = now; bucket.count = 0; }
@@ -352,7 +356,7 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
     return send(res, 201, result);
   }
   if (req.method === 'POST' && url.pathname === '/api/auth/login') {
-    const address = req.socket.remoteAddress || 'unknown';
+    const address = clientRateLimitKey(req);
     const currentFailures = authFailureBuckets.get(address);
     if (currentFailures && currentFailures.count > 10 && Date.now() - currentFailures.start <= 15 * 60_000) return send(res, 429, { error: 'Too many failed login attempts', code: 'AUTH_RATE_LIMITED' }, { 'Retry-After': '900' });
     const result = await auth.login(await jsonBody(req));
@@ -1118,13 +1122,27 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
       const onTool = async (call) => store.update((state) => {
         const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
         if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
+        recordSessionRunEvent(state, session, { id: `tool:${call.id}`, type: 'tool', actor: call.label || call.tool, title: `Tool ${call.status}`, status: call.status, mode: selectedMode.mode, input: call.input, output: call.output, summary: call.status === 'running' ? 'Agent requested a tool call' : `Tool call ${call.status}`, createdAt: call.startedAt || new Date().toISOString(), ...(call.completedAt ? { completedAt: call.completedAt } : {}), ...(call.error ? { error: call.error } : {}) });
         updateSessionToolCall(session, call); return true;
       });
       const onStage = async (stage) => store.update((state) => {
         const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
         if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
+        recordSessionRunEvent(state, session, { id: `stage:${stage.id}:${stage.startedAt || stage.completedAt || syncRunId}`, type: stage.id === 'references' ? 'reference' : 'stage', actor: stage.name, title: `${stage.name} ${stage.status}`, status: stage.status, stageId: stage.id, mode: stage.mode || selectedMode.mode, createdAt: stage.startedAt || new Date().toISOString(), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.query ? { input: { query: stage.query } } : {}), output: { ...(stage.outputKeys ? { outputKeys: stage.outputKeys } : {}), ...(Number.isFinite(stage.sourceCount) ? { sourceCount: stage.sourceCount } : {}), ...(stage.sourceKinds ? { sourceKinds: stage.sourceKinds } : {}) }, ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}), summary: stage.status === 'running' ? 'Agent stage started' : `Agent stage ${stage.status}` });
         updateSessionRun(session, { currentMode: stage.mode || selectedMode.mode, currentStage: stage.name, progress: stage.progress || session.activeRun.progress, ...(stage.expertGoal ? { expertGoal: stage.expertGoal, expertRoles: stage.expertRoles || [] } : {}), ...(stage.id === 'references' ? { referenceDiscovery: { query: stage.query, status: stage.status, sourceCount: stage.sourceCount || 0, sourceKinds: stage.sourceKinds || [] } } : {}) });
         return true;
+      });
+      const onMode = async (event) => store.update((state) => {
+        const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
+        if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
+        recordSessionRunEvent(state, session, { id: `mode:${event.mode}:${session.activeRun.runEvents?.length || 0}:${Date.now()}`, type: 'mode', actor: 'Agent router', title: 'Agent mode decision', status: event.status || 'running', mode: event.mode, summary: event.reason || 'Runtime mode selected', output: { mode: event.mode, label: event.label || publicMode(event.mode).name, reason: event.reason || '' }, createdAt: new Date().toISOString() });
+        updateSessionRun(session, { currentMode: event.mode, currentStage: event.status === 'planning' ? 'Planning execution' : session.activeRun.currentStage, progress: Math.max(session.activeRun.progress || 0, event.progress || 0) }); return true;
+      });
+      const onModel = async (event) => store.update((state) => {
+        const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
+        if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
+        recordSessionRunEvent(state, session, event);
+        updateSessionRun(session, { currentStage: event.type === 'model-request' ? `${event.actor} sending` : `${event.actor} replied` }); return true;
       });
       const referenceRetriever = sourceCharged ? async ({ query }) => {
         try {
@@ -1137,7 +1155,7 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
           throw error;
         }
       } : null;
-      artifact = await generateArtifactAsync(marked, { sources: [], knowledgeContext, providerConfig, prompt, language, mode: requestedMode, referenceRetriever, onStage, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
+      artifact = await generateArtifactAsync(marked, { sources: [], knowledgeContext, providerConfig, prompt, language, mode: requestedMode, referenceRetriever, onStage, onMode, onModel, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
     } catch (error) {
       await store.update((state) => {
         refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod);
@@ -1150,8 +1168,10 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
     const project = await store.update((state) => {
       const item = state.projects.find((entry) => entry.id === id && owned(entry, user));
       if (!item || !activePrincipal(state, user)) return null;
+      const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
+      recordSessionRunEvent(state, session, { id: `artifact:${artifact.id}`, type: 'artifact', actor: 'Novi Finalizer', title: 'Artifact saved', status: 'completed', mode: artifact.workflow?.runtime?.mode || selectedMode.mode, summary: 'Generated Files/LLM Wiki are now available in the workspace.', output: { artifactId: artifact.id, documents: (artifact.documents || []).map((document) => document.name) }, createdAt: artifact.createdAt || new Date().toISOString(), completedAt: new Date().toISOString() });
       item.artifacts.unshift(artifact); item.status = 'ready'; item.updatedAt = new Date().toISOString();
-      completeSessionRun(findAgentSession(state, selectedSession.id, id, user.tenantId), { jobId: syncRunId, artifact, mode: artifact.workflow?.runtime?.mode || selectedMode.mode });
+      completeSessionRun(session, { jobId: syncRunId, artifact, mode: artifact.workflow?.runtime?.mode || selectedMode.mode });
       return item;
     });
     if (!project) {
@@ -1247,6 +1267,16 @@ function indexWikiIteration(state, project, artifact, job) {
   return document;
 }
 
+function recordRunEvent(state, job, event) {
+  if (!job) return;
+  job.runEvents = upsertRunEvent(job.runEvents, event);
+  recordSessionRunEvent(state, findAgentSession(state, job.sessionId, job.projectId, job.tenantId), event);
+}
+
+function recordSessionRunEvent(_state, session, event) {
+  updateSessionRunEvent(session, event);
+}
+
 async function runGeneration(store, auth, jobId, project, user, previousStatus = 'draft', sourceCharged = false, generationPeriod = null, sourcePeriod = null, metrics = null, dependencies = {}) {
   let committed = false;
   try {
@@ -1301,6 +1331,8 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       if (stage.expertGoal) { job.expertGoal = stage.expertGoal; job.expertRoles = stage.expertRoles || []; }
       if (stage.id === 'references') job.referenceDiscovery = { query: stage.query, status: stage.status, sourceCount: stage.sourceCount || 0, sourceKinds: stage.sourceKinds || [] };
       job.progress = Math.max(job.progress || 0, stage.progress || 0); job.currentStage = stage.name; job.currentMode = stage.mode || job.currentMode; job.currentModeLabel = publicMode(job.currentMode).name; job.updatedAt = new Date().toISOString();
+      const eventId = `stage:${stage.id}:${stage.startedAt || stage.completedAt || jobId}`;
+      recordRunEvent(state, job, { id: eventId, type: stage.id === 'references' ? 'reference' : 'stage', actor: stage.name, title: `${stage.name} ${stage.status}`, status: stage.status, stageId: stage.id, mode: stage.mode || job.currentMode, createdAt: stage.startedAt || new Date().toISOString(), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.query ? { input: { query: stage.query } } : {}), output: { ...(stage.outputKeys ? { outputKeys: stage.outputKeys } : {}), ...(Number.isFinite(stage.sourceCount) ? { sourceCount: stage.sourceCount } : {}), ...(stage.sourceKinds ? { sourceKinds: stage.sourceKinds } : {}) }, ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}), ...(stage.status === 'running' ? { summary: 'Agent stage started' } : { summary: `Agent stage ${stage.status}` }) });
       updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress, ...(stage.expertGoal ? { expertGoal: stage.expertGoal, expertRoles: stage.expertRoles || [] } : {}), ...(stage.id === 'references' ? { referenceDiscovery: job.referenceDiscovery } : {}) });
       return true;
     });
@@ -1311,6 +1343,7 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       job.currentMode = event.mode; job.currentModeLabel = event.label || publicMode(event.mode).name; job.modeReason = event.reason || job.modeReason;
       job.currentStage = event.status === 'planning' ? 'Planning execution' : job.currentStage;
       job.progress = Math.max(job.progress || 0, event.progress || 0); job.updatedAt = new Date().toISOString();
+      recordRunEvent(state, job, { id: `mode:${event.mode}:${job.runEvents?.length || 0}:${Date.now()}`, type: 'mode', actor: 'Agent router', title: 'Agent mode decision', status: event.status || 'running', mode: event.mode, summary: event.reason || 'Runtime mode selected', output: { mode: event.mode, label: event.label || publicMode(event.mode).name, reason: event.reason || '' }, createdAt: new Date().toISOString() });
       updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentMode: job.currentMode, currentStage: job.currentStage || event.status, progress: job.progress });
       return true;
     });
@@ -1321,7 +1354,17 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       const index = job.agentToolCalls.findIndex((item) => item.id === call.id);
       if (index >= 0) job.agentToolCalls[index] = call; else job.agentToolCalls.push(call);
       job.currentStage = call.status === 'running' ? `Using ${call.tool}` : `${call.tool} ${call.status}`; job.updatedAt = new Date().toISOString();
+      recordRunEvent(state, job, { id: `tool:${call.id}`, type: 'tool', actor: call.label || call.tool, title: `Tool ${call.status}`, status: call.status, mode: job.currentMode, input: call.input, output: call.output, summary: call.status === 'running' ? 'Agent requested a tool call' : `Tool call ${call.status}`, createdAt: call.startedAt || new Date().toISOString(), ...(call.completedAt ? { completedAt: call.completedAt } : {}), ...(call.error ? { error: call.error } : {}) });
       updateSessionToolCall(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), call);
+      return true;
+    });
+    const onModel = async (event) => store.update((state) => {
+      const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
+      if (!job) return false;
+      recordRunEvent(state, job, event);
+      job.currentStage = event.type === 'model-request' ? `${event.actor} sending` : `${event.actor} replied`;
+      job.updatedAt = new Date().toISOString();
+      updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentStage: job.currentStage, progress: job.progress });
       return true;
     });
     const referenceRetriever = sourceCharged ? async ({ query }) => {
@@ -1342,12 +1385,13 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       }
     } : null;
     const refining = claimed.type === 'refine';
-    const artifact = await generateArtifactAsync(project, { sources: [], knowledgeContext, providerConfig, prompt: runPrompt, language: claimed.language, mode: claimed.requestedMode || 'auto', refineFromLatest: refining, referenceRetriever, onStage, onMode, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:${jobId}` });
+    const artifact = await generateArtifactAsync(project, { sources: [], knowledgeContext, providerConfig, prompt: runPrompt, language: claimed.language, mode: claimed.requestedMode || 'auto', refineFromLatest: refining, referenceRetriever, onStage, onMode, onModel, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:${jobId}` });
     const result = await store.update((state) => {
       const item = state.projects.find((entry) => entry.id === project.id && owned(entry, user));
       const job = (state.jobs || []).find((entry) => entry.id === jobId && entry.status === 'running');
       if (!item || !job || !activePrincipal(state, user)) return null;
       if (refining) indexWikiIteration(state, item, artifact, job);
+      recordRunEvent(state, job, { id: `artifact:${artifact.id}`, type: 'artifact', actor: 'Novi Finalizer', title: 'Artifact saved', status: 'completed', mode: artifact.workflow?.runtime?.mode || job.currentMode, summary: 'Generated Files/LLM Wiki are now available in the workspace.', output: { artifactId: artifact.id, documents: (artifact.documents || []).map((document) => document.name) }, createdAt: artifact.createdAt || new Date().toISOString(), completedAt: new Date().toISOString() });
       item.artifacts.unshift(artifact); item.status = 'ready'; item.updatedAt = new Date().toISOString();
       completeSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { jobId, artifact, mode: artifact.workflow?.runtime?.mode || job.currentMode });
       return item;

@@ -19,7 +19,7 @@
 - `src/mcp-runtime.mjs`：使用官方 `@modelcontextprotocol/sdk` 的 Client、StreamableHTTPClientTransport 和 AJV validator；规范化租户 MCP server 配置、加密 Bearer token、验证 endpoint allowlist，执行工具发现/命名空间化/显式授权和有界调用结果转换。
 - `src/skill-runtime.mjs`：校验最多 20 个租户 Skill 的名称、说明、4000 字符指令、产品范围、always/auto 激活和最多 12 个触发词；运行开始时按显式 `/skill name`、always、触发词优先级选出最多 3 个，并产生不含完整指令的哈希 provenance。
 - `src/plugin-runtime.mjs`：校验最多 10 个声明式 manifest、语义版本、2000 字符编排指令及现有 Skill/已授权工具引用；每次最多激活 2 个，运行时丢弃已失效工具引用，不执行租户代码。
-- `src/agent-sessions.mjs`：创建/查找租户项目 Session，追加最多 500 条、单条最多 20000 字符的消息，并维护 queued/running/completed/failed run 生命周期。Composer 每轮创建 `refine` Job，以上一 Artifact 和累积来源作为新 LangGraph 运行基线；助手成果消息保存 Artifact ID。最终 `llm-wiki.md` 以 `agent-wiki` 文档进入工作区分块/向量/图谱和外部投影，Artifact runtime 固化知识文档 ID/哈希/来源数；失败写入有界错误摘要且幂等，公开响应复制消息数组，避免传输层直接修改持久对象。
+- `src/agent-sessions.mjs`：创建/查找租户项目 Session，追加最多 500 条、单条最多 20000 字符的消息，并维护 queued/running/completed/failed run 生命周期。每个 active run 与完成/失败助手消息保存最多 100 条规范化事件；单个模型请求/回复或工具详情限制约 12000 字符，覆盖路由、阶段、参考、LLM、工具和 Artifact 提交。Composer 每轮创建 `refine` Job，以上一 Artifact 和累积来源作为新 LangGraph 运行基线；助手成果消息保存 Artifact ID。最终 `llm-wiki.md` 以 `agent-wiki` 文档进入工作区分块/向量/图谱和外部投影，Artifact runtime 固化知识文档 ID/哈希/来源数；失败写入有界错误摘要且幂等，公开响应复制消息数组，避免传输层直接修改持久对象。
 - `src/oidc.mjs`：OIDC discovery、PKCE S256、授权码交换、JWKS/RS256 ID Token 校验；HTTP start/callback 还用短时 HttpOnly 状态 Cookie 将授权响应绑定到发起浏览器。
 - `src/payments.mjs`：checkout provider 边界与 HMAC webhook；事件类型和 active plan 均白名单校验后才改变订阅。
 - `src/postgres-store.mjs`：可选 PostgreSQL JSONB Repository 迁移适配器，使用事务和连接池；pgvector 可用时维护 24 维原生向量表、HNSW cosine 索引，并通过租户/项目过滤的 `<=>` 查询实现 `searchKnowledge`。

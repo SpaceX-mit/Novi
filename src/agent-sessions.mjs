@@ -1,6 +1,51 @@
 import { randomUUID } from 'node:crypto';
 
 const now = () => new Date().toISOString();
+const MAX_RUN_EVENTS = 100;
+const MAX_RUN_EVENT_TEXT = 12_000;
+
+function boundedEventDetail(value) {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string') return value.slice(0, MAX_RUN_EVENT_TEXT);
+  let serialized;
+  try { serialized = JSON.stringify(value); }
+  catch { return { error: 'Event detail was not serializable' }; }
+  if (Buffer.byteLength(serialized, 'utf8') <= MAX_RUN_EVENT_TEXT) return JSON.parse(serialized);
+  return { truncated: true, text: Buffer.from(serialized, 'utf8').subarray(0, MAX_RUN_EVENT_TEXT).toString('utf8') };
+}
+
+export function normalizeRunEvent(input = {}) {
+  const createdAt = String(input.createdAt || now());
+  return {
+    id: String(input.id || randomUUID()).slice(0, 240),
+    type: String(input.type || 'status').slice(0, 40),
+    actor: String(input.actor || 'Novi').slice(0, 160),
+    title: String(input.title || 'Agent activity').slice(0, 240),
+    status: String(input.status || 'completed').slice(0, 40),
+    createdAt,
+    ...(input.completedAt ? { completedAt: String(input.completedAt) } : {}),
+    ...(input.stageId ? { stageId: String(input.stageId).slice(0, 80) } : {}),
+    ...(input.mode ? { mode: String(input.mode).slice(0, 40) } : {}),
+    ...(input.provider ? { provider: String(input.provider).slice(0, 80) } : {}),
+    ...(input.model ? { model: String(input.model).slice(0, 160) } : {}),
+    ...(input.summary ? { summary: String(input.summary).slice(0, 2_000) } : {}),
+    ...(input.request !== undefined ? { request: boundedEventDetail(input.request) } : {}),
+    ...(input.response !== undefined ? { response: boundedEventDetail(input.response) } : {}),
+    ...(input.input !== undefined ? { input: boundedEventDetail(input.input) } : {}),
+    ...(input.output !== undefined ? { output: boundedEventDetail(input.output) } : {}),
+    ...(input.error ? { error: String(input.error).slice(0, 500) } : {}),
+    ...(input.usage ? { usage: boundedEventDetail(input.usage) } : {}),
+  };
+}
+
+export function upsertRunEvent(events, input) {
+  const list = Array.isArray(events) ? [...events] : [];
+  const event = normalizeRunEvent(input);
+  const index = list.findIndex((item) => item.id === event.id);
+  if (index >= 0) list[index] = { ...list[index], ...event, createdAt: list[index].createdAt || event.createdAt };
+  else list.push(event);
+  return list.slice(-MAX_RUN_EVENTS);
+}
 
 function welcomeMessage(project, createdAt) {
   return {
@@ -63,6 +108,7 @@ export function appendSessionMessage(session, input) {
     ...(input.toolCalls?.length ? { toolCalls: input.toolCalls.slice(-20).map((call) => ({ ...call })) } : {}),
     ...(input.skills?.length ? { skills: input.skills.slice(0, 3).map((skill) => ({ ...skill, productTypes: [...(skill.productTypes || [])] })) } : {}),
     ...(input.plugins?.length ? { plugins: input.plugins.slice(0, 2).map((plugin) => ({ ...plugin, productTypes: [...(plugin.productTypes || [])], skillNames: [...(plugin.skillNames || [])], recommendedTools: [...(plugin.recommendedTools || [])] })) } : {}),
+    ...(input.runEvents?.length ? { runEvents: input.runEvents.slice(-MAX_RUN_EVENTS).map((event) => normalizeRunEvent(event)) } : {}),
     ...(input.runtime ? { runtime: structuredClone(input.runtime) } : {}),
   };
   session.messages.push(message);
@@ -74,7 +120,7 @@ export function appendSessionMessage(session, input) {
 export function beginSessionRun(session, { jobId, prompt, requestedMode, currentMode }) {
   const message = appendSessionMessage(session, { role: 'user', content: prompt, runId: jobId, jobId, mode: currentMode, status: 'queued' });
   session.status = 'running';
-  session.activeRun = { jobId, requestedMode, currentMode, currentStage: 'Queued', progress: 0, startedAt: message.createdAt };
+  session.activeRun = { jobId, requestedMode, currentMode, currentStage: 'Queued', progress: 0, runEvents: [], startedAt: message.createdAt };
   session.updatedAt = message.createdAt;
   return message;
 }
@@ -99,6 +145,13 @@ export function updateSessionToolCall(session, call) {
   return existing || session.activeRun.toolCalls.at(-1);
 }
 
+export function updateSessionRunEvent(session, event) {
+  if (!session?.activeRun) return null;
+  session.activeRun.runEvents = upsertRunEvent(session.activeRun.runEvents, event);
+  session.activeRun.updatedAt = now(); session.updatedAt = session.activeRun.updatedAt;
+  return session.activeRun.runEvents.find((item) => item.id === String(event.id)) || session.activeRun.runEvents.at(-1);
+}
+
 export function completeSessionRun(session, { jobId, artifact, mode }) {
   if (!session) return null;
   const userMessage = (session.messages || []).find((item) => item.jobId === jobId && item.role === 'user');
@@ -107,7 +160,8 @@ export function completeSessionRun(session, { jobId, artifact, mode }) {
   const toolCalls = session.activeRun?.jobId === jobId ? session.activeRun.toolCalls || [] : [];
   const skills = artifact?.workflow?.runtime?.skills || (session.activeRun?.jobId === jobId ? session.activeRun.skills || [] : []);
   const plugins = artifact?.workflow?.runtime?.plugins || (session.activeRun?.jobId === jobId ? session.activeRun.plugins || [] : []);
-  const message = appendSessionMessage(session, { role: 'assistant', kind: 'artifact', content: summary, runId: jobId, jobId, artifactId: artifact?.id, mode, status: 'completed', toolCalls, skills, plugins });
+  const runEvents = session.activeRun?.jobId === jobId ? session.activeRun.runEvents || [] : [];
+  const message = appendSessionMessage(session, { role: 'assistant', kind: 'artifact', content: summary, runId: jobId, jobId, artifactId: artifact?.id, mode, status: 'completed', toolCalls, skills, plugins, runEvents });
   session.status = 'idle'; session.activeRun = null; session.updatedAt = message.createdAt;
   return message;
 }
@@ -129,7 +183,8 @@ export function failSessionRun(session, { jobId, mode, error = 'Generation faile
   const userMessage = (session.messages || []).find((item) => item.jobId === jobId && item.role === 'user');
   if (userMessage) { userMessage.status = 'failed'; userMessage.mode = mode || userMessage.mode; }
   const existing = (session.messages || []).find((item) => item.jobId === jobId && item.role === 'assistant' && item.status === 'failed');
-  const message = existing || appendSessionMessage(session, { role: 'assistant', kind: 'error', content: String(error).slice(0, 500), runId: jobId, jobId, mode, status: 'failed' });
+  const runEvents = session.activeRun?.jobId === jobId ? session.activeRun.runEvents || [] : [];
+  const message = existing || appendSessionMessage(session, { role: 'assistant', kind: 'error', content: String(error).slice(0, 500), runId: jobId, jobId, mode, status: 'failed', runEvents });
   session.status = 'idle'; session.activeRun = null; session.updatedAt = message.createdAt;
   return message;
 }
@@ -152,3 +207,5 @@ export function sessionSummary(session) {
 export function publicAgentSession(session) {
   return { ...session, messages: (session.messages || []).map((message) => ({ ...message })) };
 }
+
+export { MAX_RUN_EVENTS, MAX_RUN_EVENT_TEXT };
