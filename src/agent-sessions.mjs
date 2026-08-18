@@ -7,6 +7,17 @@ const MAX_RUN_EVENT_TEXT = 12_000;
 function boundedEventDetail(value) {
   if (value === undefined) return undefined;
   if (typeof value === 'string') return value.slice(0, MAX_RUN_EVENT_TEXT);
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const entries = Object.entries(value);
+    const stringEntries = entries.filter(([, item]) => typeof item === 'string');
+    if (stringEntries.length) {
+      const perField = Math.max(400, Math.floor((MAX_RUN_EVENT_TEXT - 256) / stringEntries.length));
+      const bounded = Object.fromEntries(entries.map(([key, item]) => [key, typeof item === 'string' ? item.slice(0, perField) : item]));
+      try {
+        if (Buffer.byteLength(JSON.stringify(bounded), 'utf8') <= MAX_RUN_EVENT_TEXT) return bounded;
+      } catch { /* fall through to the generic bounded representation */ }
+    }
+  }
   let serialized;
   try { serialized = JSON.stringify(value); }
   catch { return { error: 'Event detail was not serializable' }; }

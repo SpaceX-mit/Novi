@@ -100,7 +100,7 @@ Web 浏览器或 Electron 客户端通过 HTTP REST API 访问 Novi 服务。服
 | NFR-17 | 数据生命周期与可审计性 | 单文档删除必须原子移除活跃关系/向量检索数据并持久重试外部清理；成果版本作为不可变生成记录保留当时已使用 excerpt，删除确认明确提示该边界；需要完全清除时使用工作空间或账户删除 |
 | NFR-18 | 外部采集适配器安全 | Browser Agent/MCP 远端 endpoint 必须为 HTTPS（仅回环开发允许 HTTP），生产非回环 endpoint 必须使用独立 bearer token；endpoint 禁止 URL 凭据/fragment，供应商调用禁止自动重定向并设置 1–30 秒有界超时和 1 MB 响应上限；适配器内容始终视为不可信输入，MCP 返回 URL仍须经过统一 evidence verification |
 | NFR-19 | LLM 凭据与网络安全 | 租户 API Key 使用 AES-256-GCM；生产必须提供至少 32 字符的稳定配置密钥；API/导出不得返回密文；固定厂商使用批准 endpoint，Ollama 仅回环，自定义远端主机必须 HTTPS 且在 allowlist |
-| NFR-20 | Agent 有界与恢复语义 | LangGraph recursion limit 为 40、Specialist 执行上限为 8 且单职责最多两次；不允许模型增加来源/字段/工具调用，计划和路由值使用白名单。单阶段错误显式标记 fallback。当前 checkpoint 为进程内存，服务重启按 Job 失败退款恢复，不宣称节点级续跑 |
+| NFR-20 | Agent 有界与恢复语义 | 生成默认 24 次工具调用、16 次 Specialist 执行、单职责最多 3 次尝试，recursion limit 按配置自动提高；不允许模型增加来源/字段/工具权限，计划和路由值使用白名单。阶段错误先有界重试，耗尽后显式标记 fallback。当前 checkpoint 为进程内存，服务重启按 Job 失败退款恢复，不宣称节点级续跑 |
 
 ## 5. 数据约束
 

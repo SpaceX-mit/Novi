@@ -535,6 +535,25 @@ components:
         prompt: { type: string, minLength: 1, maxLength: 20000 }
         mode: { type: string, enum: [auto, workflow, react, plan-execute, supervisor], default: auto }
         language: { $ref: '#/components/schemas/WikiLanguage' }
+    ReferenceQuery:
+      type: object
+      required: [id, facet, query]
+      properties:
+        id: { type: string, maxLength: 80 }
+        facet: { type: string, enum: [landscape, foundations, implementation, evaluation, risks, frontier, practice, alternatives, provided] }
+        query: { type: string, maxLength: 300 }
+        status: { type: string, enum: [completed, failed, partial, fallback, offline, provided] }
+        sourceCount: { type: integer, minimum: 0 }
+        error: { type: string, maxLength: 240 }
+    ReferenceDiscovery:
+      type: object
+      required: [query, queries, status, sourceCount, sourceKinds]
+      properties:
+        query: { type: string, maxLength: 300, description: First facet query retained for compatibility }
+        queries: { type: array, minItems: 3, maxItems: 8, items: { $ref: '#/components/schemas/ReferenceQuery' } }
+        status: { type: string, enum: [completed, partial, fallback, offline, provided] }
+        sourceCount: { type: integer, minimum: 0 }
+        sourceKinds: { type: array, items: { type: string, enum: [paper, github, web] } }
     AgentRunEvent:
       type: object
       required: [id, type, actor, title, status, createdAt]
@@ -585,7 +604,14 @@ components:
         projectId: { type: string, format: uuid }
         title: { type: string, maxLength: 120 }
         status: { type: string, enum: [idle, running] }
-        activeRun: { type: [object, 'null'], description: Includes bounded runEvents while the Agent is running }
+        activeRun:
+          anyOf:
+            - type: object
+              properties:
+                referenceDiscovery: { $ref: '#/components/schemas/ReferenceDiscovery' }
+                runEvents: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/AgentRunEvent' } }
+              description: Includes bounded runEvents and per-facet reference discovery while the Agent is running
+            - type: 'null'
         messages: { type: array, maxItems: 500, items: { $ref: '#/components/schemas/AgentMessage' } }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }

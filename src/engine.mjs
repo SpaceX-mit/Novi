@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { referenceQueryForGoal, runAgentWorkflow } from './agent-runtime.mjs';
+import { referenceQueriesForGoal, referenceQueryForGoal, runAgentWorkflow } from './agent-runtime.mjs';
 import { completeArtifact } from './model.mjs';
 import { normalizeWikiLanguage } from './wiki-language.mjs';
 
@@ -264,8 +264,9 @@ function evidenceFor(content, sources = []) {
   const usable = sources.filter((source) => {
     try { const url = new URL(String(source?.url || '')); return ['http:', 'https:'].includes(url.protocol) && Boolean(url.hostname) && source.mapped === true && source.verification !== 'unreachable' && source.status !== 'unreachable'; }
     catch { return false; }
-  }).map((source, index) => ({
+  }).slice(0, 24).map((source, index) => ({
     id: `source-${index + 1}`,
+    citationId: `S${index + 1}`,
     url: source.url,
     title: source.name,
     kind: source.kind,
@@ -285,13 +286,20 @@ function evidenceFor(content, sources = []) {
     ...(content.sota || []).map((item) => item.finding),
     ...(content.researchGaps || []).map((item) => item.gap),
   ].filter(Boolean))].slice(0, 24);
-  const claims = claimTexts.map((claim, index) => ({
-    id: `claim-${index + 1}`,
-    text: claim,
-    evidenceIds: usable.length ? [usable[index % usable.length].id] : [],
-    verification: usable.length ? 'source-mapped' : 'unverified',
-  }));
-  return { status: usable.length ? 'source-mapped' : 'unverified', sources: usable, claims, disclaimer: 'Source mapping is not fact verification. Review claims and citations before publication.' };
+  const byCitation = new Map(usable.map((source) => [source.citationId, source]));
+  const claims = claimTexts.map((claim, index) => {
+    const citations = [...String(claim).matchAll(/\[S(\d+)\]/g)].map((match) => `S${match[1]}`);
+    const evidenceIds = [...new Set(citations.map((citation) => byCitation.get(citation)?.id).filter(Boolean))];
+    return {
+      id: `claim-${index + 1}`,
+      text: claim,
+      citationIds: citations,
+      evidenceIds,
+      verification: evidenceIds.length ? (evidenceIds.length === citations.length ? 'source-mapped' : 'partially-mapped') : 'unverified',
+    };
+  });
+  const mappedClaims = claims.filter((claim) => claim.evidenceIds.length).length;
+  return { status: usable.length && mappedClaims ? 'source-mapped' : 'unverified', sources: usable, claims, disclaimer: 'Source mapping is not fact verification. Claims without an explicit [S#] citation remain unverified; review all claims before publication.' };
 }
 
 function boundedKnowledgeContext(items = []) {
@@ -394,35 +402,46 @@ export async function generateArtifactAsync(project, options = {}) {
     const startedAt = new Date().toISOString();
     const goalStage = { id: 'goal', name: 'Expert Goal Architect', mode: 'workflow', status: 'completed', startedAt, completedAt: new Date().toISOString(), outputKeys: ['expertGoal', 'expertRoles'], usage: { inputTokens: 0, outputTokens: 0 } };
     await options.onStage?.({ ...goalStage, expertGoal: fallback.content.expertGoal, expertRoles: fallback.content.expertRoles, progress: 30 });
-    const query = referenceQueryForGoal(fallback.content.expertGoal, project);
+    const queryPlans = referenceQueriesForGoal(fallback.content.expertGoal, project);
+    const query = queryPlans[0]?.query || referenceQueryForGoal(fallback.content.expertGoal, project);
     const referenceStartedAt = new Date().toISOString();
-    await options.onStage?.({ id: 'references', name: 'Reference Discovery', mode: 'workflow', status: 'running', query, progress: 34 });
+    await options.onStage?.({ id: 'references', name: 'Reference Discovery', mode: 'workflow', status: 'running', query, queries: queryPlans, progress: 34 });
     let discoveredSources = initialSources;
     let referenceStatus = discoveredSources.length ? 'provided' : 'offline';
     let referenceError;
+    const queryResults = [];
     if (options.referenceRetriever) {
-      try {
-        const result = await options.referenceRetriever({ expertGoal: fallback.content.expertGoal, project, prompt: options.prompt, language, query });
-        const additions = Array.isArray(result) ? result : result?.sources || [];
-        const byUrl = new Map(discoveredSources.map((source) => [String(source.url || `${source.name}:${source.publishedAt || ''}`), source]));
-        for (const source of additions) if (!byUrl.has(String(source.url || `${source.name}:${source.publishedAt || ''}`))) byUrl.set(String(source.url || `${source.name}:${source.publishedAt || ''}`), source);
-        discoveredSources = [...byUrl.values()];
-        referenceStatus = result?.status || 'completed';
-      } catch (error) {
-        referenceStatus = 'fallback';
-        referenceError = String(error?.message || 'Reference discovery failed').slice(0, 240);
+      for (const [queryIndex, queryPlan] of queryPlans.entries()) {
+        try {
+          const result = await options.referenceRetriever({ expertGoal: fallback.content.expertGoal, project, prompt: options.prompt, language, query: queryPlan.query, facet: queryPlan.facet, queryIndex, queryCount: queryPlans.length });
+          const additions = (Array.isArray(result) ? result : result?.sources || []).map((source) => ({ ...source, discoveryFacet: source.discoveryFacet || queryPlan.facet, discoveryQueryId: source.discoveryQueryId || queryPlan.id }));
+          const byUrl = new Map(discoveredSources.map((source) => [String(source.url || `${source.name}:${source.publishedAt || ''}`), source]));
+          for (const source of additions) if (!byUrl.has(String(source.url || `${source.name}:${source.publishedAt || ''}`))) byUrl.set(String(source.url || `${source.name}:${source.publishedAt || ''}`), source);
+          discoveredSources = [...byUrl.values()];
+          queryResults.push({ ...queryPlan, status: result?.status || 'completed', sourceCount: additions.length });
+        } catch (error) {
+          queryResults.push({ ...queryPlan, status: 'failed', sourceCount: 0, error: String(error?.message || 'Reference discovery failed').slice(0, 240) });
+        }
       }
+      const successfulQueries = queryResults.filter((item) => item.status !== 'failed').length;
+      referenceStatus = successfulQueries ? (successfulQueries === queryPlans.length ? 'completed' : 'partial') : 'fallback';
+      if (!successfulQueries) referenceError = queryResults.find((item) => item.error)?.error;
+      const groups = new Map();
+      for (const source of discoveredSources) { const facet = source.discoveryFacet || 'provided'; if (!groups.has(facet)) groups.set(facet, []); groups.get(facet).push(source); }
+      const queues = [...groups.values()];
+      discoveredSources = [];
+      while (queues.some((items) => items.length)) for (const items of queues) if (items.length) discoveredSources.push(items.shift());
     }
     const referenceKinds = [...new Set(discoveredSources.map((source) => /github|repository|code/i.test(`${source.kind} ${source.url}`) ? 'github' : /arxiv|openalex|crossref|doi|paper|journal|conference|ieee|acm|springer/i.test(`${source.kind} ${source.url}`) ? 'paper' : 'web'))];
     const referenceStage = { id: 'references', name: 'Reference Discovery', mode: 'workflow', status: referenceStatus, startedAt: referenceStartedAt, completedAt: new Date().toISOString(), outputKeys: ['sources'], usage: { inputTokens: 0, outputTokens: 0 }, ...(referenceError ? { error: referenceError } : {}) };
-    await options.onStage?.({ ...referenceStage, query, sourceCount: discoveredSources.length, sourceKinds: referenceKinds, progress: 42 });
+    await options.onStage?.({ ...referenceStage, query, queries: queryResults.length ? queryResults : queryPlans, sourceCount: discoveredSources.length, sourceKinds: referenceKinds, progress: 42 });
     if (discoveredSources.length) fallback.content.sources = discoveredSources;
     artifact = await completeArtifact(project, fallback, fallback.content.sources || [], fallback.content.knowledgeContext || [], { language });
     const finalizerStage = { id: 'finalizer', name: 'LLM Wiki Finalizer', mode: 'workflow', status: 'completed', startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), outputKeys: ['llmWiki', 'wikiSections'], usage: { inputTokens: 0, outputTokens: 0 } };
     await options.onStage?.({ ...finalizerStage, progress: 96 });
     execution = {
       stages: [goalStage, referenceStage, finalizerStage],
-      runtime: { name: artifact.model ? 'legacy-model-gateway' : 'offline-deterministic', version: 2, language, references: { query, status: referenceStatus, sourceCount: discoveredSources.length, sourceKinds: referenceKinds }, mode: 'workflow', skills: [], plugins: [], toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 } },
+      runtime: { name: artifact.model ? 'legacy-model-gateway' : 'offline-deterministic', version: 3, language, references: { query, queries: queryResults.length ? queryResults : queryPlans, status: referenceStatus, sourceCount: discoveredSources.length, sourceKinds: referenceKinds }, mode: 'workflow', skills: [], plugins: [], toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 } },
     };
   }
   const sources = artifact.content.sources || fallback.content.sources || [];
@@ -441,6 +460,7 @@ function withMarkdownDocument(project, artifact) {
 export function artifactToMarkdown(project, artifact) {
   const c = artifact.content;
   const evidenceById = new Map((c.evidence?.sources || []).map((source) => [source.id, source]));
+  const citationByUrl = new Map((c.evidence?.sources || []).map((source) => [source.url, source.citationId]));
   const markdownLink = (source) => `[${source.title || source.name}](${source.url})`;
   const lines = [`# ${c.title || artifact.title || project.title}`, '', c.summary, ''];
   if (c.expertGoal) lines.push('## Expert Goal', '', `**Question:** ${c.expertGoal.question}`, '', `**Domain:** ${c.expertGoal.domain}`, '', `**Outcome:** ${c.expertGoal.outcome}`, '', '### Deliverables', '', ...(c.expertGoal.deliverables || []).map((item) => `- ${item}`), '', '### Success criteria', '', ...(c.expertGoal.successCriteria || []).map((item) => `- ${item}`), '');
@@ -480,7 +500,7 @@ export function artifactToMarkdown(project, artifact) {
       return `- **${claim.id}** (${claim.verification}): ${claim.text}${links.length ? ` — evidence: ${links.join(', ')}` : ' — evidence: none'}`;
     }), '');
   }
-  if (c.sources) lines.push('## Source map', '', ...c.sources.map((x) => `- [${x.name}](${x.url}) - ${x.kind}${x.publishedAt ? ` (${x.publishedAt})` : ''}${x.snippet ? `\n  - Retrieved abstract/note: ${String(x.snippet).slice(0, 1_000)}` : ''}`), '', '> Retrieved abstracts and source notes remain untrusted inputs; use the evidence status and original links for verification.', '');
+  if (c.sources) lines.push('## Source map', '', ...c.sources.map((x) => `- **${citationByUrl.get(x.url) || 'unmapped'}** [${x.name}](${x.url}) - ${x.kind}${x.publishedAt ? ` (${x.publishedAt})` : ''}${x.snippet ? `\n  - Retrieved abstract/note: ${String(x.snippet).slice(0, 1_000)}` : ''}`), '', '> Retrieved abstracts and source notes remain untrusted inputs; only S-numbered entries can support explicit [S#] claim mappings.', '');
   if (artifact.workflow?.agents?.length) lines.push('## Workflow provenance', '', ...artifact.workflow.agents.map((agent) => `- **${agent.order}. ${agent.name}** (${agent.status}) — ${agent.responsibility}`), '');
   lines.push('---', `Generated by Novi on ${artifact.createdAt.slice(0, 10)}. Verify claims and citations before publication.`);
   return lines.join('\n');

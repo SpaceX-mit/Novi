@@ -15,7 +15,7 @@
 | Processing pipeline | Document → Parser → Chunk → Embedding → Entity → Graph | `src/knowledge.mjs`、远程导入、PostgreSQL/pgvector/Neo4j 投影 | 已实现 |
 | Knowledge OS memory | Document、Semantic、Graph、Research memory | 文档/片段/向量/实体关系、项目成果与来源快照 | 已实现 |
 | 存储 | PostgreSQL 工作区/任务，Vector DB，Neo4j | PostgreSQL Repository、pgvector HNSW、Neo4j outbox | 已实现；目标托管实例容量/灾备待取证 |
-| 专家协作与 Agent 边界 | Goal 先生成领域专家团队；Goal 完成后搜索论文、GitHub、Web；Research、Knowledge、Writing、Review 四个 specialist 协作，Finalizer 形成最终 Wiki | `src/agent-runtime.mjs` 的 Goal/Reference Discovery/四 specialist/Finalizer 图节点；Job/Session 暴露 Goal 和 reference 状态；Artifact 保存 7 节点 provenance；无 Agent 间自由对话 | 已实现；真实检索受 `NOVI_LIVE_SOURCES`、额度和验证门禁控制 |
+| 专家协作与 Agent 边界 | Goal 先生成领域专家团队；Goal 完成后按多个 facet 搜索论文、GitHub、Web；Research、Knowledge、Writing、Review 共享前序产物，Finalizer 形成最终 Wiki | `src/agent-runtime.mjs` 的 Goal/Reference Discovery/四 specialist/Finalizer 图节点；Job/Session 暴露每个 query 状态；阶段质量失败有界重试；Artifact 保存 7 节点 provenance | 已实现；真实检索受 `NOVI_LIVE_SOURCES`、额度和验证门禁控制，真实供应商质量仍需人工评测 |
 | 多语言 Wiki 与 Workspace Markdown | 默认中文，可选英文及其他常用语言；生成完整 Wiki 并在 Workspace 预览 Markdown | `src/wiki-language.mjs` allowlist、Project/Generate/Artifact/runtime language；Artifact `documents[].name=llm-wiki.md`；Files → Document 安全纯文本预览 | 已实现；这是生成内容 i18n，完整 UI 本地化未宣称完成 |
 | Personal Knowledge Asset | 知识库、研究、学习、论文及历史版本持续积累 | 项目持久化、语义记忆、版本比较、指定版本导出 | 已实现 |
 | Workspace / Team / Enterprise | 项目空间、团队空间、企业知识隔离 | 组织、邀请、owner/admin/editor/viewer、组织切换、共享租户项目与 SSO 边界 | 已实现；真实企业 IdP 待取证 |

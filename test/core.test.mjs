@@ -223,20 +223,25 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
     if (mode === 'plan-execute') assert.equal(result.runtime.plan.length, 4);
     if (mode === 'react' || mode === 'supervisor') assert.ok(result.runtime.controlEvents.some((event) => event.id === `${mode}-controller`));
   }
-  let referenceRequest; const observedStages = [];
+  const referenceRequests = []; const observedStages = [];
   const referenced = await runAgentWorkflow(project, fallback, config, { mode: 'workflow', prompt: 'Build from Goal-selected evidence', referenceRetriever: async (request) => {
-    referenceRequest = request;
+    referenceRequests.push(request);
     return { status: 'completed', sources: [
       { name: 'Research paper', kind: 'Paper', url: 'https://arxiv.org/abs/2601.00001', mapped: true },
       { name: 'Reference implementation', kind: 'Code repository', url: 'https://github.com/example/reference', mapped: true },
       { name: 'Technical guide', kind: 'Web', url: 'https://example.com/guide', mapped: true },
     ] };
   }, onStage: async (stage) => { if (stage.status !== 'running') observedStages.push(stage.id); return true; } });
-  assert.match(referenceRequest.query, /Agent systems/);
+  assert.equal(referenceRequests.length, 5); assert.deepEqual(referenceRequests.map((request) => request.facet), ['landscape', 'foundations', 'implementation', 'evaluation', 'risks']); assert.equal(new Set(referenceRequests.map((request) => request.query)).size, 5); assert.match(referenceRequests[0].query, /Agent systems/);
   assert.deepEqual(observedStages.slice(0, 2), ['goal', 'references']);
   assert.equal(referenced.stages.find((stage) => stage.id === 'references').status, 'completed');
   assert.deepEqual(referenced.runtime.references.sourceKinds.sort(), ['github', 'paper', 'web']);
   assert.equal(referenced.content.sources.length, 3);
+  const partial = await runAgentWorkflow(project, fallback, config, { mode: 'workflow', prompt: 'Partial evidence retrieval', referenceRetriever: async ({ queryIndex }) => {
+    if (queryIndex === 2) throw new Error('facet outage');
+    return { status: 'completed', sources: [{ name: `Facet ${queryIndex}`, kind: 'Web', url: `https://example.com/facet-${queryIndex}`, mapped: true }] };
+  } });
+  assert.equal(partial.runtime.references.status, 'partial'); assert.equal(partial.runtime.references.queries.filter((query) => query.status === 'failed').length, 1); assert.equal(partial.content.sources.length, 4);
   const switched = await runAgentWorkflow(project, fallback, config, { mode: 'react', prompt: 'switch runtime for this complex task' });
   assert.equal(switched.runtime.initialMode, 'react'); assert.equal(switched.runtime.mode, 'plan-execute');
   assert.ok(switched.runtime.modeHistory.some((event) => event.from === 'react' && event.to === 'plan-execute'));
@@ -274,6 +279,26 @@ test('LangGraph accepts reasoning-wrapped fenced JSON without falling back to of
   assert.ok(result.stages.filter((stage) => stage.id !== 'references').every((stage) => stage.status === 'completed'));
   assert.equal(modelEvents.some((event) => event.status === 'failed'), false);
   assert.ok(modelEvents.every((event) => event.type !== 'model-response' || event.response?.includes('<think>')));
+});
+
+test('LangGraph retries a shallow Wiki finalizer until the quality contract passes', async (t) => {
+  let finalizerCalls = 0;
+  const modelServer = http.createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
+    const marker = 'Editable schema and current draft: '; const line = prompt.split('\n').find((value) => value.startsWith(marker));
+    const editable = line ? JSON.parse(line.slice(marker.length)) : {};
+    if (editable.llmWiki && finalizerCalls++ === 0) editable.llmWiki = { ...editable.llmWiki, sections: [{ title: 'Thin', body: 'Too short' }], glossary: [], nextQuestions: [] };
+    await sendOpenAiChat(res, request, JSON.stringify(editable), { id: `quality-${finalizerCalls}`, model: 'quality-model', usage: { prompt_tokens: 5, completion_tokens: 3 } });
+  });
+  await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
+  t.after(() => modelServer.close());
+  const project = { id: 'quality-project', tenantId: 'tenant', title: 'Quality runtime', topic: 'Evidence agents', description: '', type: 'knowledge' };
+  const fallback = generateArtifact(project);
+  const config = { provider: 'custom', model: 'quality-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'test-key' };
+  const result = await runAgentWorkflow(project, fallback, config, { mode: 'workflow', prompt: 'Produce a publication-ready Wiki' });
+  const finalizerStages = result.stages.filter((stage) => stage.id === 'finalizer');
+  assert.deepEqual(finalizerStages.map((stage) => stage.status), ['fallback', 'completed']); assert.equal(finalizerCalls, 2); assert.ok(result.content.llmWiki.sections.length >= 6);
 });
 
 test('Agent Skills validate, match deterministically, and remain bounded guidance', () => {
@@ -567,7 +592,7 @@ test('Web-configured provider runs the Goal, expert collaboration, and Wiki fina
   assert.ok(job.runEvents.some((event) => event.type === 'model-response' && event.status === 'completed'));
   assert.equal(job.expertGoal.outcome, 'Provider-defined expert outcome.'); assert.match(job.referenceDiscovery.query, /Provider-defined expert outcome/); assert.equal(job.referenceDiscovery.status, 'offline');
   const generated = await (await fetch(`${base}/api/projects/${project.id}`)).json(); const artifact = generated.project.artifacts[0];
-  assert.equal(modelCalls, 6); assert.equal(skillPromptSeen, true); assert.equal(pluginPromptSeen, true); assert.equal(languagePromptSeen, true); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.version, 6); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.equal(artifact.workflow.runtime.language, 'zh-CN'); assert.equal(artifact.workflow.runtime.skills[0].name, 'systematic_review'); assert.equal(artifact.workflow.runtime.plugins[0].name, 'paper_quality'); assert.equal('instructions' in artifact.workflow.runtime.skills[0], false); assert.equal('instructions' in artifact.workflow.runtime.plugins[0], false); assert.equal(artifact.workflow.agents.find((agent) => agent.id === 'references').status, 'offline');
+  assert.equal(modelCalls, 6); assert.equal(skillPromptSeen, true); assert.equal(pluginPromptSeen, true); assert.equal(languagePromptSeen, true); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.version, 7); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.equal(artifact.workflow.runtime.language, 'zh-CN'); assert.equal(artifact.workflow.runtime.skills[0].name, 'systematic_review'); assert.equal(artifact.workflow.runtime.plugins[0].name, 'paper_quality'); assert.equal('instructions' in artifact.workflow.runtime.skills[0], false); assert.equal('instructions' in artifact.workflow.runtime.plugins[0], false); assert.equal(artifact.workflow.agents.find((agent) => agent.id === 'references').status, 'offline');
   assert.equal(artifact.content.expertGoal.outcome, 'Provider-defined expert outcome.'); assert.ok(artifact.content.expertRoles.every((role) => role.title.startsWith('Provider '))); assert.equal(artifact.content.llmWiki.summary, 'Provider-finalized LLM Wiki.'); assert.deepEqual(artifact.content.wikiSections, artifact.content.llmWiki.sections);
   assert.equal(artifact.documents[0].name, 'llm-wiki.md'); assert.equal(artifact.documents[0].content, artifactToMarkdown(project, artifact));
   const session = (await (await fetch(`${base}/api/projects/${project.id}/sessions/${initialSession.id}`)).json()).session;
@@ -660,12 +685,12 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
   assert.equal(job.status, 'completed'); assert.equal(job.agentStages.length, 7); assert.equal(job.language, 'en');
   assert.ok(job.runEvents.some((event) => event.type === 'model-request' && event.request.user.includes('完善 Agent 能力 Wiki'))); assert.ok(job.runEvents.some((event) => event.type === 'model-response' && event.response)); assert.ok(job.runEvents.some((event) => event.type === 'stage' && event.stageId === 'finalizer')); assert.ok(job.runEvents.some((event) => event.type === 'reference'));
   let project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project;
-  assert.equal(project.artifacts.length, 1); const first = project.artifacts[0]; assert.equal(first.language, 'en'); assert.equal(first.documents[0].name, 'llm-wiki.md'); assert.match(first.content.llmWiki.summary, /Provider-refined Wiki/); assert.equal(first.content.sources.length, 1); assert.equal(first.workflow.runtime.knowledgeEnrichment.sourceCount, 1);
+  assert.equal(project.artifacts.length, 1); const first = project.artifacts[0]; assert.equal(first.language, 'en'); assert.equal(first.documents[0].name, 'llm-wiki.md'); assert.match(first.content.llmWiki.summary, /Provider-refined Wiki/); assert.equal(first.content.sources.length, 5); assert.equal(first.workflow.runtime.references.queries.length, 5); assert.equal(first.workflow.runtime.knowledgeEnrichment.sourceCount, 5);
   let knowledge = await (await fetch(`${base}/api/projects/${created.project.id}/knowledge`)).json(); const firstWikiDocument = knowledge.documents.find((document) => document.sourceKind === 'agent-wiki'); assert.ok(firstWikiDocument); assert.equal(first.workflow.runtime.knowledgeEnrichment.documentId, firstWikiDocument.id);
   response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '继续补充第二轮权威资料和实践细节。', mode: 'workflow', language: 'en' }) });
   assert.equal(response.status, 202); const secondJobId = (await response.json()).job.id;
   for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 25)); job = (await (await fetch(`${base}/api/jobs/${secondJobId}`)).json()).job; if (!['queued', 'running'].includes(job.status)) break; }
-  assert.equal(job.status, 'completed'); project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project; assert.equal(project.artifacts.length, 2); assert.match(project.artifacts[0].content.llmWiki.summary, /Provider-refined Wiki\. Provider-refined Wiki/); assert.equal(project.artifacts[0].content.sources.length, 2); assert.deepEqual(project.artifacts[0].content.sources.map((source) => source.name), ['Authority source 1', 'Authority source 2']); assert.equal(project.artifacts[0].workflow.runtime.knowledgeEnrichment.sourceCount, 2); assert.equal(priorWikiSeen, true); assert.equal(sourceSearches, 2);
+  assert.equal(job.status, 'completed'); project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project; assert.equal(project.artifacts.length, 2); assert.match(project.artifacts[0].content.llmWiki.summary, /Provider-refined Wiki\. Provider-refined Wiki/); assert.equal(project.artifacts[0].content.sources.length, 10); assert.deepEqual(new Set(project.artifacts[0].content.sources.map((source) => source.name)), new Set(Array.from({ length: 10 }, (_, index) => `Authority source ${index + 1}`))); assert.equal(project.artifacts[0].workflow.runtime.knowledgeEnrichment.sourceCount, 10); assert.equal(priorWikiSeen, true); assert.equal(sourceSearches, 10);
   knowledge = await (await fetch(`${base}/api/projects/${created.project.id}/knowledge`)).json(); assert.equal(knowledge.documents.filter((document) => document.sourceKind === 'agent-wiki').length, 2);
   const session = (await (await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}`)).json()).session; const assistant = session.messages.at(-1);
   assert.equal(assistant.role, 'assistant'); assert.equal(assistant.kind, 'artifact'); assert.equal(assistant.artifactId, project.artifacts[0].id); assert.equal(assistant.mode, 'workflow'); assert.ok(assistant.runEvents.some((event) => event.type === 'artifact')); assert.ok(assistant.runEvents.some((event) => event.type === 'model-response' && event.response.includes('Provider-refined Wiki'))); assert.equal(modelCalls, 12);
@@ -716,13 +741,14 @@ test('Agent session API isolates projects and tenants and protects active sessio
   assert.equal(response.status, 204);
 });
 
-test('evidence exports preserve claim-level source links and disclaimers', () => {
-  const project = { id: 'evidence', title: 'Evidence', topic: 'Evidence systems', type: 'research' };
+test('evidence exports preserve explicit claim-level source links and disclaimers', () => {
+  const project = { id: 'evidence', title: 'Evidence', topic: 'Evidence systems [S1]', type: 'research' };
   const artifact = generateArtifact(project, { sources: [{ name: 'Primary paper', kind: 'Papers', url: 'https://example.com/paper', authority: 91, mapped: true, publishedAt: '2025' }] });
   const evidence = artifact.content.evidence;
   assert.equal(evidence.status, 'source-mapped');
   assert.ok(evidence.claims.length <= 24); assert.ok(evidence.claims.some((claim) => claim.text === artifact.content.expertGoal.outcome)); assert.ok(evidence.claims.some((claim) => claim.text === artifact.content.systemDocument.sections[0].body));
   assert.deepEqual(evidence.claims[0].evidenceIds, ['source-1']);
+  assert.equal(evidence.claims[0].citationIds[0], 'S1'); assert.equal(evidence.claims.find((claim) => !claim.text.includes('[S1]')).verification, 'unverified');
   const markdown = artifactToMarkdown(project, artifact);
   assert.match(markdown, /Primary paper/);
   assert.match(markdown, /https:\/\/example\.com\/paper/);
@@ -732,6 +758,8 @@ test('evidence exports preserve claim-level source links and disclaimers', () =>
   assert.match(latex, /source-1/);
   const unsafe = generateArtifact(project, { sources: [{ name: 'unsafe', kind: 'Papers', url: 'javascript:alert(1)', authority: 99, mapped: true }] });
   assert.equal(unsafe.content.evidence.sources.length, 0);
+  const unmapped = generateArtifact({ ...project, topic: 'Evidence systems' }, { sources: [{ name: 'Primary paper', kind: 'Papers', url: 'https://example.com/paper', mapped: true }] });
+  assert.equal(unmapped.content.evidence.claims[0].verification, 'unverified'); assert.deepEqual(unmapped.content.evidence.claims[0].evidenceIds, []);
 });
 
 test('knowledge ingestion chunks text, creates embeddings and graph entities', () => {

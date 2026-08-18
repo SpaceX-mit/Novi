@@ -1159,8 +1159,8 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
       const onStage = async (stage) => store.update((state) => {
         const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
         if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
-        recordSessionRunEvent(state, session, { id: `stage:${stage.id}:${stage.startedAt || stage.completedAt || syncRunId}`, type: stage.id === 'references' ? 'reference' : 'stage', actor: stage.name, title: `${stage.name} ${stage.status}`, status: stage.status, stageId: stage.id, mode: stage.mode || selectedMode.mode, createdAt: stage.startedAt || new Date().toISOString(), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.query ? { input: { query: stage.query } } : {}), output: { ...(stage.outputKeys ? { outputKeys: stage.outputKeys } : {}), ...(Number.isFinite(stage.sourceCount) ? { sourceCount: stage.sourceCount } : {}), ...(stage.sourceKinds ? { sourceKinds: stage.sourceKinds } : {}) }, ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}), summary: stage.status === 'running' ? 'Agent stage started' : `Agent stage ${stage.status}` });
-        updateSessionRun(session, { currentMode: stage.mode || selectedMode.mode, currentStage: stage.name, progress: stage.progress || session.activeRun.progress, ...(stage.expertGoal ? { expertGoal: stage.expertGoal, expertRoles: stage.expertRoles || [] } : {}), ...(stage.id === 'references' ? { referenceDiscovery: { query: stage.query, status: stage.status, sourceCount: stage.sourceCount || 0, sourceKinds: stage.sourceKinds || [] } } : {}) });
+        recordSessionRunEvent(state, session, { id: `stage:${stage.id}:${stage.startedAt || stage.completedAt || syncRunId}`, type: stage.id === 'references' ? 'reference' : 'stage', actor: stage.name, title: `${stage.name} ${stage.status}`, status: stage.status, stageId: stage.id, mode: stage.mode || selectedMode.mode, createdAt: stage.startedAt || new Date().toISOString(), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.query ? { input: { query: stage.query, ...(stage.queries ? { queries: stage.queries } : {}) } } : {}), output: { ...(stage.outputKeys ? { outputKeys: stage.outputKeys } : {}), ...(Number.isFinite(stage.sourceCount) ? { sourceCount: stage.sourceCount } : {}), ...(stage.sourceKinds ? { sourceKinds: stage.sourceKinds } : {}) }, ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}), summary: stage.status === 'running' ? 'Agent stage started' : `Agent stage ${stage.status}` });
+        updateSessionRun(session, { currentMode: stage.mode || selectedMode.mode, currentStage: stage.name, progress: stage.progress || session.activeRun.progress, ...(stage.expertGoal ? { expertGoal: stage.expertGoal, expertRoles: stage.expertRoles || [] } : {}), ...(stage.id === 'references' ? { referenceDiscovery: { query: stage.query, ...(stage.queries ? { queries: stage.queries } : {}), status: stage.status, sourceCount: stage.sourceCount || 0, sourceKinds: stage.sourceKinds || [] } } : {}) });
         return true;
       });
       const onMode = async (event) => store.update((state) => {
@@ -1175,14 +1175,18 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
         recordSessionRunEvent(state, session, event);
         updateSessionRun(session, { currentStage: event.type === 'model-request' ? `${event.actor} sending` : event.status === 'streaming' ? `${event.actor} streaming` : `${event.actor} replied` }); return true;
       });
-      const referenceRetriever = sourceCharged ? async ({ query }) => {
+      let successfulReferenceQueries = 0;
+      const referenceRetriever = sourceCharged ? async ({ query, queryIndex = 0, queryCount = 1 }) => {
         try {
-          let sources = await (dependencies.searchKnowledgeSources || searchKnowledgeSources)(query, 6);
+          let sources = await (dependencies.searchKnowledgeSources || searchKnowledgeSources)(query, 8);
           if (process.env.NOVI_VERIFY_SOURCES !== 'false') sources = await verifyEvidenceSources(sources);
+          successfulReferenceQueries += 1;
           return { sources, status: 'completed' };
         } catch (error) {
-          await store.update((state) => { refundSourceQuery(state, user, sourcePeriod); });
-          sourceCharged = false;
+          if (queryIndex >= queryCount - 1 && successfulReferenceQueries === 0) {
+            await store.update((state) => { refundSourceQuery(state, user, sourcePeriod); });
+            sourceCharged = false;
+          }
           throw error;
         }
       } : null;
@@ -1359,13 +1363,13 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       if (!job) return false;
       job.agentStages ||= [];
       const index = job.agentStages.findIndex((item) => item.id === stage.id);
-      const publicStage = { id: stage.id, name: stage.name, mode: stage.mode || job.currentMode, status: stage.status, ...(stage.startedAt ? { startedAt: stage.startedAt } : {}), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}), ...(stage.query ? { query: stage.query } : {}), ...(Number.isFinite(stage.sourceCount) ? { sourceCount: stage.sourceCount } : {}), ...(stage.sourceKinds ? { sourceKinds: stage.sourceKinds } : {}) };
+      const publicStage = { id: stage.id, name: stage.name, mode: stage.mode || job.currentMode, status: stage.status, ...(stage.startedAt ? { startedAt: stage.startedAt } : {}), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}), ...(stage.query ? { query: stage.query } : {}), ...(stage.queries ? { queries: stage.queries } : {}), ...(Number.isFinite(stage.sourceCount) ? { sourceCount: stage.sourceCount } : {}), ...(stage.sourceKinds ? { sourceKinds: stage.sourceKinds } : {}) };
       if (index >= 0) job.agentStages[index] = publicStage; else job.agentStages.push(publicStage);
       if (stage.expertGoal) { job.expertGoal = stage.expertGoal; job.expertRoles = stage.expertRoles || []; }
-      if (stage.id === 'references') job.referenceDiscovery = { query: stage.query, status: stage.status, sourceCount: stage.sourceCount || 0, sourceKinds: stage.sourceKinds || [] };
+      if (stage.id === 'references') job.referenceDiscovery = { query: stage.query, ...(stage.queries ? { queries: stage.queries } : {}), status: stage.status, sourceCount: stage.sourceCount || 0, sourceKinds: stage.sourceKinds || [] };
       job.progress = Math.max(job.progress || 0, stage.progress || 0); job.currentStage = stage.name; job.currentMode = stage.mode || job.currentMode; job.currentModeLabel = publicMode(job.currentMode).name; job.updatedAt = new Date().toISOString();
       const eventId = `stage:${stage.id}:${stage.startedAt || stage.completedAt || jobId}`;
-      recordRunEvent(state, job, { id: eventId, type: stage.id === 'references' ? 'reference' : 'stage', actor: stage.name, title: `${stage.name} ${stage.status}`, status: stage.status, stageId: stage.id, mode: stage.mode || job.currentMode, createdAt: stage.startedAt || new Date().toISOString(), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.query ? { input: { query: stage.query } } : {}), output: { ...(stage.outputKeys ? { outputKeys: stage.outputKeys } : {}), ...(Number.isFinite(stage.sourceCount) ? { sourceCount: stage.sourceCount } : {}), ...(stage.sourceKinds ? { sourceKinds: stage.sourceKinds } : {}) }, ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}), ...(stage.status === 'running' ? { summary: 'Agent stage started' } : { summary: `Agent stage ${stage.status}` }) });
+      recordRunEvent(state, job, { id: eventId, type: stage.id === 'references' ? 'reference' : 'stage', actor: stage.name, title: `${stage.name} ${stage.status}`, status: stage.status, stageId: stage.id, mode: stage.mode || job.currentMode, createdAt: stage.startedAt || new Date().toISOString(), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.query ? { input: { query: stage.query, ...(stage.queries ? { queries: stage.queries } : {}) } } : {}), output: { ...(stage.outputKeys ? { outputKeys: stage.outputKeys } : {}), ...(Number.isFinite(stage.sourceCount) ? { sourceCount: stage.sourceCount } : {}), ...(stage.sourceKinds ? { sourceKinds: stage.sourceKinds } : {}) }, ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}), ...(stage.status === 'running' ? { summary: 'Agent stage started' } : { summary: `Agent stage ${stage.status}` }) });
       updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress, ...(stage.expertGoal ? { expertGoal: stage.expertGoal, expertRoles: stage.expertRoles || [] } : {}), ...(stage.id === 'references' ? { referenceDiscovery: job.referenceDiscovery } : {}) });
       return true;
     });
@@ -1400,20 +1404,22 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentStage: job.currentStage, progress: job.progress });
       return true;
     });
-    const referenceRetriever = sourceCharged ? async ({ query }) => {
+    let successfulReferenceQueries = 0;
+    const referenceRetriever = sourceCharged ? async ({ query, queryIndex = 0, queryCount = 1 }) => {
       try {
-        let sources = await (dependencies.searchKnowledgeSources || searchKnowledgeSources)(query, 6);
+        let sources = await (dependencies.searchKnowledgeSources || searchKnowledgeSources)(query, 8);
         if (process.env.NOVI_VERIFY_SOURCES !== 'false') sources = await verifyEvidenceSources(sources);
+        successfulReferenceQueries += 1;
         return { sources, status: 'completed' };
       } catch (error) {
-        await store.update((state) => {
+        if (queryIndex >= queryCount - 1 && successfulReferenceQueries === 0) await store.update((state) => {
           const job = (state.jobs || []).find((item) => item.id === jobId);
           if (job?.sourceCharged && !job.sourceRefunded) {
             refundSourceQuery(state, user, sourcePeriod);
             job.sourceCharged = false; job.sourceRefunded = true; job.updatedAt = new Date().toISOString();
           }
         });
-        sourceCharged = false;
+        if (queryIndex >= queryCount - 1 && successfulReferenceQueries === 0) sourceCharged = false;
         throw error;
       }
     } : null;

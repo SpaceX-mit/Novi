@@ -9,9 +9,9 @@
 | 产品范围 | `goal.md`、`docs/PRD.md`、`docs/GOAL_TRACEABILITY.md` | Knowledge Builder、Deep Research、Paper Author 三条路径；Knowledge Builder 含完整 Wiki、案例、练习题与 Practice Lab，Deep Research 含独立 Wiki/Knowledge Graph/SOTA，Paper Author 含完整章节、研究缺口/新颖性矩阵、证据链和 IEEE/ACM LaTeX；不提供通用聊天入口 | 已实现并有引擎/API/Web 测试，原始目标逐项追溯 |
 | 软件规格 | `docs/SRS.md` | FR-01 至 FR-36、NFR-01 至 NFR-20 均有验收条件和实现位置 | 已文档化，自动化覆盖见第 2 节 |
 | 架构与详细设计 | `docs/ARCHITECTURE.md`、`docs/DETAILED_DESIGN.md` | 模块化单体、Repository、PostgreSQL/pgvector HNSW、对象/图谱 outbox、认证/计费/刷新/恢复边界 | 已文档化且与当前模块一致 |
-| API 契约 | `openapi.yaml` | `npm run openapi-check` 通过 OpenAPI 3.1 schema、引用、38 paths/44 operations | 已验证 |
+| API 契约 | `openapi.yaml` | `npm run openapi-check` 通过 OpenAPI 3.1 schema、引用、48 paths/60 operations | 已验证 |
 | Web UI | `public/` | 创建/生成/指定版本导出、历史选择/逐节比较、来源搜索、静态或 Browser Agent JS 渲染知识导入、浏览/语义检索/单文档删除、RAG 上下文核查、变化驱动的持续更新、组织切换、Provider 配置、工作空间删除；可选 Wiki 语言；Files 内生成 `llm-wiki.md` 并在 Document 安全预览；Practice Lab、Deep Research Wiki/Graph/SOTA、Paper Gap & Novelty/Sources、IEEE/ACM 下载、套餐定价与真实 checkout 入口 | desktop/mobile Chromium smoke 已验证 8 种语言控件、Markdown 文件/转义纯文本预览、Provider 设置入口/目录与 viewer 隐藏、知识检索、生成、删除与历史 excerpt 保留闭环、两版本比较、来源变化自动生成第 3 个不可变版本、差异/更新状态、SVG、研究套件、论文缺口和出版模板；Provider API/真实 LangGraph 调用另由 HTTP 集成测试验证 |
-| 生成工作流 | `src/agent-runtime.mjs`、`src/engine.mjs`、不可变 artifact | Web Provider 启用时 LangGraph.js 按 Goal → Reference Discovery → Research → Knowledge → Writing → Review → LLM Wiki Finalizer 执行；Goal 生成领域专家角色，Reference 再按 Goal 查询论文/GitHub/Web，Knowledge/Writing 产出知识体系/体系文档，Finalizer 必经并同步 `llmWiki`/`wikiSections`；每节点保存状态/token/实际输出计数，Artifact 固化目标语言、reference provenance 与 Markdown 快照；来源/evidence 不可由模型改写 | 本地 OpenAI-compatible HTTP 服务验证 6 次模型调用加 1 个无模型 Reference 节点、Goal 后检索、三类来源、失败退款、提前 finish 仍经过 Finalizer、Job 状态和 fallback；真实厂商账号仍待验收，checkpoint 目前仅进程内存 |
+| 生成工作流 | `src/agent-runtime.mjs`、`src/engine.mjs`、不可变 artifact | Web Provider 启用时 LangGraph.js 按 Goal → Reference Discovery → Research → Knowledge → Writing → Review → LLM Wiki Finalizer 执行；Reference 默认拆为 5 个 facet，Specialist 共享前序产物，质量失败会在预算内重试；Finalizer 同步 `llmWiki`/`wikiSections`；只有显式 `[S#]` 可建立 claim evidence | 本地 OpenAI-compatible HTTP 服务验证 7 节点、多 facet 完成/部分失败/全部失败退款、浅 Finalizer 拒绝后重试、跨阶段上下文和引用映射；真实厂商内容质量仍待验收，checkpoint 目前仅进程内存 |
 | 商业与来源集成 | `src/billing.mjs`、`src/payments.mjs`、`src/connectors.mjs`、`src/source-adapters.mjs`、`public/` | Free preview、Personal Knowledge、Pro Research、Enterprise 四档展示；未配置真实支付供应商时明确 503；IEEE/ACM/Springer 通过 Crossref DOI prefix 查询具体出版物；可选隔离 Browser Agent 和通用 MCP Streamable HTTP source tool 均带 HTTPS/凭据/超时/大小/字段边界 | 定价 UI/checkout、publisher catalogs、Browser Agent、MCP JSON/SSE 协议与运行时接线已测试；真实目标服务仍受第 3 节外部门禁约束 |
 | Electron UI | `desktop/main.cjs`、`package.json` | 内置服务、安全 BrowserWindow、单实例、OS userData、同源导航；electron-builder 三平台配置 | Ubuntu AppImage 窗口 smoke 已通过；Windows/macOS 签名制品仍待托管 CI 取证 |
 
@@ -23,7 +23,7 @@
 | `npm test` | 领域引擎、LangGraph Goal/参考发现/专家协作/Finalizer、生成语言、Markdown 快照、Provider 加密/endpoint/RBAC、HTTP、认证、配额、支付、OIDC、摄取、RAG 安全、生成竞态、持续更新、恢复、投影、Browser Agent、MCP 和三条产品输出 | 83 passed，1 个 PostgreSQL 条件跳过 |
 | `NOVI_PG_URL=... npm test` | 同上并包含真实 PostgreSQL 事务、关系、Job 清理和 JSONB 向量回退投影 | 67/67 passed |
 | pgvector 0.8.6 实例测试 | 原生扩展、24 维表、HNSW cosine 索引、租户/项目过滤 `<=>` 查询及生命周期清理 | 固定 digest `sha256:ccc6e83d…d6b` 的真实 `pgvector/pgvector:pg16` 临时实例 67/67 通过；删除后 document/chunk/JSONB vector/native vector/项目 Job rows 均为 0，临时容器已删除 |
-| `npm run openapi-check` | OpenAPI 3.1 schema 和引用 | 47 paths、59 operations 通过 |
+| `npm run openapi-check` | OpenAPI 3.1 schema 和引用 | 48 paths、60 operations 通过 |
 | `npm run browser-smoke` | desktop/mobile Chromium 角色感知控件、8 种 Wiki 语言、创建、知识导入/浏览/语义搜索、检索上下文生成、两次异步生成、版本比较、生成 Markdown 预览、可控来源刷新/自动版本、单文档删除、历史 excerpt 保留、Markdown 导出、Paper SVG、Expert Goal/专家团队/知识体系/体系文档/最终 Wiki、定价、研究套件、论文缺口和出版模板 | 通过；`llm-wiki.md` 在 Files 可见，Document 使用无 HTML 执行的纯文本预览；desktop/mobile 均通过原完整旅程，来源变化生成第 3 个不可变版本，viewer 写控件隐藏，删除后搜索为空且不可变成果上下文仍可见 |
 | `npm run desktop-smoke` | Electron 内置服务、安全窗口和共享 UI DOM | Electron 43.4.0 在当前 Ubuntu + 无 root 解包 Xvfb 下通过 |
 | `npm run desktop-package-smoke` | `app.asar` 内置服务、OS userData、安全窗口和 UI | Linux unpacked 与 AppImage 均通过；正式 AppImage `.desktop` 不默认关闭 sandbox |
