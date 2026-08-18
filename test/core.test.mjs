@@ -33,7 +33,7 @@ import { referenceQueryForGoal, runAgentWorkflow } from '../src/agent-runtime.mj
 import { DEFAULT_WIKI_LANGUAGE, normalizeWikiLanguage, WIKI_LANGUAGES } from '../src/wiki-language.mjs';
 import { agentModeCatalog, selectAgentMode } from '../src/agent-modes.mjs';
 import { appendSessionMessage, beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, sessionSummary, updateSessionRun, updateSessionRunEvent } from '../src/agent-sessions.mjs';
-import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings, sourceAccessTool } from '../src/agent-tools.mjs';
+import { builtinToolCatalog, createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings, sourceAccessTool } from '../src/agent-tools.mjs';
 import { fetchPaper } from '../src/paper-tools.mjs';
 import { discoverMcpServer, invokeMcpTool, publicMcpSettings, resolvedMcpTools, saveMcpSettings, validateMcpEndpoint } from '../src/mcp-runtime.mjs';
 import { publicSkillSettings, resolveSkills, saveSkillSettings, skillPrompt, skillProvenance } from '../src/skill-runtime.mjs';
@@ -318,7 +318,7 @@ test('Agent tools validate, encrypt, execute, and remain tenant/project scoped',
   assert.equal(saved.customTools[0].hasBearerToken, true); assert.equal('encryptedBearerToken' in saved.customTools[0], false);
   assert.doesNotMatch(state.agentToolConfigs[0].customTools[0].encryptedBearerToken, /custom-secret-token/);
   const tools = await resolvedTools(state, 'tenant'); assert.equal(tools.find((tool) => tool.name === 'domain_lookup').bearerToken, 'custom-secret-token');
-  assert.deepEqual(publicToolSettings({ agentToolConfigs: [] }, 'tenant').builtins.map((tool) => [tool.name, tool.enabled]), [['workspace_read', true], ['workspace_write', false], ['web_search', true], ['paper_search', true], ['paper_fetch', true]]);
+  assert.deepEqual(publicToolSettings({ agentToolConfigs: [] }, 'tenant').builtins.map((tool) => [tool.name, tool.enabled]), [['workspace_read', true], ['workspace_write', false], ['read_file', false], ['search_files', false], ['write_file', false], ['patch', false], ['web_search', true], ['paper_search', true], ['paper_fetch', true]]);
 
   const store = new JsonStore(process.env.NOVI_DATA_FILE);
   const project = await store.createProject({ title: 'Tool project', topic: 'Tool runtime', type: 'knowledge' });
@@ -332,6 +332,14 @@ test('Agent tools validate, encrypt, execute, and remain tenant/project scoped',
   assert.equal((await store.read()).documents.filter((document) => document.projectId === project.id).length, 2);
   const custom = await executor(tools.find((tool) => tool.name === 'domain_lookup'), { query: 'runtime' }); assert.equal(custom.result.answer, 'bounded result'); assert.equal(authorization, 'Bearer custom-secret-token');
   await assert.rejects(() => executor(readTool, { query: 'valid', unexpected: true }), /unsupported field/);
+  const fileTools = builtinToolCatalog();
+  const fileWriter = createToolExecutor({ store, project, principal: { id: 'local', tenantId: 'local' } });
+  const fileDefinition = (name) => fileTools.find((tool) => tool.name === name) || { name, kind: 'builtin', inputSchema: { type: 'object', additionalProperties: false, required: [], properties: {} } };
+  const savedFile = await fileWriter(fileDefinition('write_file'), { path: 'notes/runtime.md', content: '# Runtime\nAgent tools are bounded.', overwrite: true }); assert.equal(savedFile.result.path, 'notes/runtime.md');
+  const readFileResult = await fileWriter(fileDefinition('read_file'), { path: 'notes/runtime.md' }); assert.match(readFileResult.result.content, /Agent tools/);
+  const searchedFiles = await fileWriter(fileDefinition('search_files'), { query: 'bounded', pathPattern: '**/*.md' }); assert.equal(searchedFiles.result.files.length, 1);
+  const patchedFile = await fileWriter(fileDefinition('patch'), { path: 'notes/runtime.md', oldText: 'bounded', newText: 'tenant-scoped', expectedReplacements: 1 }); assert.match(patchedFile.result.content, /tenant-scoped/);
+  await assert.rejects(() => fileWriter(fileDefinition('read_file'), { path: '../outside.txt' }), /escapes/);
   const oversizedExecutor = createToolExecutor({ store, project, principal: { id: 'local', tenantId: 'local' }, fetchImpl: async () => new Response('x'.repeat(32 * 1024 + 1), { status: 200 }) });
   await assert.rejects(() => oversizedExecutor(tools.find((tool) => tool.name === 'domain_lookup'), { query: 'runtime' }), /exceeds 32 KB/);
 });

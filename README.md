@@ -41,7 +41,7 @@ Web 中保存的租户配置优先于 `NOVI_LLM_BASE_URL`、`NOVI_LLM_API_KEY`�
 
 ### 配置 Agent Tools
 
-组织 owner/admin 可从左侧 `Customize` 进入 Tools，启停 `workspace_read`、`workspace_write`、`web_search`、`paper_search`、`paper_fetch`，或增加自定义 HTTP 工具。ReAct、Plan & Execute 和 Supervisor 会在控制循环中决定是否调用工具，把观察结果作为不可信数据交给后续 Specialist；Workflow 保持固定的四 specialist 顺序，不自主调用工具，外层 Goal 和 Finalizer 仍会执行。每次运行最多调用 6 次工具，自定义响应最多 32 KB，默认超时 10 秒且最多 30 秒。调用状态和截断后的输入/结果会保存在 Job、完成 Session 消息和 Artifact runtime provenance 中。
+组织 owner/admin 可从左侧 `Customize` 进入 Tools，启停 `workspace_read`、`workspace_write`、`read_file`、`search_files`、`write_file`、`patch`、`web_search`、`paper_search`、`paper_fetch`，或增加自定义 HTTP 工具。ReAct、Plan & Execute 和 Supervisor 会在控制循环中决定是否调用工具，把观察结果作为不可信数据交给后续 Specialist；Workflow 保持固定的四 specialist 顺序，不自主调用工具，外层 Goal 和 Finalizer 仍会执行。每次运行最多调用 6 次工具，自定义响应最多 32 KB，默认超时 10 秒且最多 30 秒。调用状态和截断后的输入/结果会保存在 Job、完成 Session 消息和 Artifact runtime provenance 中。
 
 `workspace_read` 只能检索当前租户、当前工作空间的文档；`workspace_write` 默认关闭，启用后只能向当前工作空间写入受限文本知识。`web_search`、`paper_search` 和 `paper_fetch` 只在 `NOVI_LIVE_SOURCES=true` 且本次来源额度已取得时向模型公布：`paper_search` 仅查询 OpenAlex、arXiv、Crossref、Semantic Scholar 与 IEEE/ACM/Springer 定向目录；`paper_fetch` 接受 DOI、arXiv 标识或公开 HTTP(S) URL，按 SSRF、重定向、12 秒超时和 8 MB 上限获取内容，并明确报告 `metadata-only`、`abstract-only`、`public-page-text`、`public-full-text` 或 `unavailable`。只有成功下载并解析的公开 PDF 标记为全文，送入模型的文本仍限制为最多 12000 字符并用 `textTruncated` 标明截断；搜索命中、付费墙页面和无法访问的正文不会被伪装成已取得全文。editor 可以在生成任务中调用管理员已启用的工具，viewer 只读，只有 owner/admin 可以修改配置。配置 API 为 `GET/PUT /api/agent/tools`。
 
@@ -54,6 +54,8 @@ Web 中保存的租户配置优先于 `NOVI_LLM_BASE_URL`、`NOVI_LLM_API_KEY`�
 远端 MCP endpoint 必须使用 HTTPS 且主机列入 `NOVI_MCP_ALLOWED_HOSTS`；本地非生产开发可使用回环 HTTP。可选 Bearer token 以 AES-256-GCM 加密，更改 endpoint 时不会沿用旧 token。调用结果按不可信 tool observation 处理，不会自动成为 claim evidence；调用名称、服务器、状态和截断结果沿用 Job/Session/Artifact provenance。当前支持 Streamable HTTP 的普通即时 Tools；需要 MCP task lifecycle 的工具会显示为不可启用，OAuth 浏览器授权、stdio 和 MCP prompts/resources 直接注入仍待后续实现。配置 API 为 `GET/PUT /api/agent/mcp`，连接发现为 `POST /api/agent/mcp/servers/:serverId/sync`。
 
 现有 `NOVI_MCP_SOURCE_*` 仍是来源检索管线中的固定 source adapter，用于将 concrete URL 纳入来源排序；它与上述可由 Agent 自主选择的通用 MCP tools 相互独立。
+
+项目文件工具默认关闭：`read_file` 支持行范围读取，`search_files` 支持路径 glob 与内容匹配，`write_file` 创建或显式覆盖最多 200 KB 的文本文件，`patch` 只执行数量可验证的精确文本替换。文件保存于租户/项目隔离的虚拟 Workspace 文件树，拒绝绝对路径、`..` 穿越和跨项目访问；写入与 patch 会重新索引为 `workspace-file` knowledge 文档。
 
 ### 配置 Agent Skills
 

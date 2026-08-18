@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { posix as pathPosix } from 'node:path';
 import { enqueueDocumentProjection } from './external-projection.mjs';
-import { ingestDocument } from './knowledge.mjs';
+import { contentHash, ingestDocument } from './knowledge.mjs';
 import { decryptApiKey, encryptApiKey } from './llm-providers.mjs';
 import { searchKnowledgeSources, searchPaperSources } from './connectors.mjs';
 import { verifyEvidenceSources } from './evidence.mjs';
@@ -10,20 +11,48 @@ import { fetchPaper } from './paper-tools.mjs';
 const BUILTIN_TOOLS = Object.freeze([
   { name: 'workspace_read', label: 'Workspace read', description: 'Retrieve relevant passages from documents in the current workspace.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 500 }, limit: { type: 'number' } } } },
   { name: 'workspace_write', label: 'Workspace write', description: 'Create a text document in the current workspace semantic memory.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['title', 'content'], properties: { title: { type: 'string', maxLength: 200 }, content: { type: 'string', maxLength: 20000 } } } },
+  { name: 'read_file', label: 'Read file', description: 'Read a bounded text file from the current workspace.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['path'], properties: { path: { type: 'string', maxLength: 500 }, startLine: { type: 'number' }, endLine: { type: 'number' } } } },
+  { name: 'search_files', label: 'Search files', description: 'Search workspace file paths and text without leaving the current project.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 300 }, pathPattern: { type: 'string', maxLength: 300 }, limit: { type: 'number' } } } },
+  { name: 'write_file', label: 'Write file', description: 'Create or replace a bounded text file in the current workspace.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['path', 'content'], properties: { path: { type: 'string', maxLength: 500 }, content: { type: 'string', maxLength: 200000 }, overwrite: { type: 'boolean' } } } },
+  { name: 'patch', label: 'Patch file', description: 'Apply an exact bounded text replacement to a current workspace file.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['path', 'oldText', 'newText'], properties: { path: { type: 'string', maxLength: 500 }, oldText: { type: 'string', maxLength: 20000 }, newText: { type: 'string', maxLength: 20000 }, expectedReplacements: { type: 'number' } } } },
   { name: 'web_search', label: 'Web search', description: 'Search Novi source connectors for current scholarly and technical evidence.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 300 }, limit: { type: 'number' } } } },
   { name: 'paper_search', label: 'Paper search', description: 'Search scholarly catalogs for papers and preprints with traceable metadata and public links.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 300 }, limit: { type: 'number' } } } },
   { name: 'paper_fetch', label: 'Paper fetch', description: 'Fetch a paper by DOI, arXiv identifier, or public URL. Reports metadata and access status, and extracts bounded text only when publicly reachable.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['identifier'], properties: { identifier: { type: 'string', maxLength: 2000 }, includeText: { type: 'boolean' }, maxCharacters: { type: 'number' } } } },
 ]);
 
 const SOURCE_ACCESS_TOOLS = new Set(['web_search', 'paper_search', 'paper_fetch']);
+const FILE_TOOLS = new Set(['read_file', 'search_files', 'write_file', 'patch']);
 
 const customNamePattern = /^[a-z][a-z0-9_]{1,47}$/;
 const scalarTypes = new Set(['string', 'number', 'boolean']);
 const MAX_CUSTOM_TOOLS = 10;
 const MAX_RESULT_BYTES = 32 * 1024;
+const MAX_FILE_BYTES = 200_000;
+const MAX_FILES_PER_PROJECT = 500;
 
 function clean(value, max = 500) {
   return String(value || '').trim().slice(0, max);
+}
+
+function safeFilePath(value) {
+  const filePath = String(value || '').replaceAll('\\', '/').trim();
+  if (!filePath || filePath.startsWith('/') || /^[a-zA-Z]:\//u.test(filePath) || filePath.includes('\u0000')) throw new Error('File path must be a relative workspace path');
+  const normalized = pathPosix.normalize(filePath);
+  if (normalized === '.' || normalized.startsWith('../') || normalized.includes('/../') || normalized.includes('*') || normalized.includes('?')) throw new Error('File path escapes the workspace or contains a pattern');
+  return normalized;
+}
+
+function workspaceFile(state, project, tenantId, filePath) {
+  return (state.workspaceFiles || []).find((file) => file.projectId === project.id && file.tenantId === tenantId && file.path === filePath);
+}
+
+function fileSummary(file) {
+  return { path: file.path, content: file.content, size: Buffer.byteLength(file.content, 'utf8'), updatedAt: file.updatedAt, contentHash: file.contentHash };
+}
+
+function filePatternMatches(filePath, pattern) {
+  const escaped = String(pattern || '').replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('**', '.*').replaceAll('*', '[^/]*').replaceAll('?', '[^/]');
+  return new RegExp(`^${escaped}$`, 'u').test(filePath);
 }
 
 function allowedHosts() {
@@ -179,6 +208,53 @@ export function createToolExecutor({ store, project, principal, allowWebSearch =
         return result;
       });
       return { result: { documentId: inserted.document.id, title: inserted.document.title, chunkCount: inserted.document.chunkCount }, knowledgeContext: inserted.chunks.map((chunk) => ({ ...chunk, document: inserted.document.title })) };
+    }
+    if (FILE_TOOLS.has(definition.name)) {
+      const filePath = definition.name === 'search_files' ? null : safeFilePath(input.path);
+      if (definition.name === 'read_file') {
+        const state = await store.read(); const file = workspaceFile(state, project, principal.tenantId, filePath);
+        if (!file) throw new Error('Workspace file not found');
+        const lines = file.content.split('\n'); const start = Math.max(1, Math.floor(Number(input.startLine) || 1)); const end = Math.min(lines.length, Math.max(start, Math.floor(Number(input.endLine) || lines.length)));
+        return { result: { ...fileSummary(file), startLine: start, endLine: end, content: lines.slice(start - 1, end).join('\n') } };
+      }
+      if (definition.name === 'search_files') {
+        const query = String(input.query || '').trim(); if (!query) throw new Error('Search query is required');
+        const pattern = input.pathPattern ? String(input.pathPattern) : null; const state = await store.read();
+        const files = (state.workspaceFiles || []).filter((file) => file.projectId === project.id && file.tenantId === principal.tenantId && (!pattern || filePatternMatches(file.path, pattern)) && file.content.toLocaleLowerCase().includes(query.toLocaleLowerCase())).slice(0, Math.max(1, Math.min(50, Number(input.limit) || 20)));
+        return { result: { files: files.map((file) => ({ path: file.path, matches: file.content.split('\n').map((line, index) => line.toLocaleLowerCase().includes(query.toLocaleLowerCase()) ? { line: index + 1, text: line.slice(0, 500) } : null).filter(Boolean).slice(0, 20), size: Buffer.byteLength(file.content, 'utf8') })) } };
+      }
+      const content = String(input.content ?? input.newText ?? ''); if (Buffer.byteLength(content, 'utf8') > MAX_FILE_BYTES) throw new Error('Workspace file exceeds 200 KB');
+      const now = new Date().toISOString();
+      const result = await store.update((state) => {
+        state.workspaceFiles ||= []; const existing = workspaceFile(state, project, principal.tenantId, filePath);
+        if (definition.name === 'write_file' && existing && input.overwrite !== true) throw new Error('Workspace file already exists; set overwrite true');
+        if (definition.name === 'patch') {
+          if (!existing) throw new Error('Workspace file not found');
+          const oldText = String(input.oldText); const count = existing.content.split(oldText).length - 1; const expected = Number(input.expectedReplacements) || 1;
+          if (count !== expected) throw new Error(`Patch expected ${expected} replacement(s), found ${count}`);
+          const patched = existing.content.replaceAll(oldText, String(input.newText)); if (Buffer.byteLength(patched, 'utf8') > MAX_FILE_BYTES) throw new Error('Patched file exceeds 200 KB');
+          existing.content = patched; existing.contentHash = contentHash(patched); existing.updatedAt = now; return fileSummary(existing);
+        }
+        if (!existing && state.workspaceFiles.filter((file) => file.projectId === project.id && file.tenantId === principal.tenantId).length >= MAX_FILES_PER_PROJECT) throw new Error('Workspace file limit reached');
+        const file = existing || { id: randomUUID(), projectId: project.id, tenantId: principal.tenantId, path: filePath, createdAt: now };
+        file.content = content; file.contentHash = contentHash(content); file.updatedAt = now; if (!existing) state.workspaceFiles.push(file); return fileSummary(file);
+      });
+      if (definition.name !== 'patch' || result.content) {
+        const indexed = await store.update((state) => {
+          const current = workspaceFile(state, project, principal.tenantId, filePath); const ingested = ingestDocument({ title: filePath, content: current.content, sourceKind: 'workspace-file' }, { projectId: project.id, tenantId: principal.tenantId });
+          if (!ingested.error) {
+            const replacedIds = new Set((state.documents || []).filter((doc) => doc.projectId === project.id && doc.tenantId === principal.tenantId && doc.sourceKind === 'workspace-file' && doc.title === filePath).map((doc) => doc.id));
+            state.documents = (state.documents || []).filter((doc) => !replacedIds.has(doc.id));
+            state.chunks = (state.chunks || []).filter((chunk) => !replacedIds.has(chunk.documentId));
+            state.knowledgeEntities = (state.knowledgeEntities || []).filter((entity) => !replacedIds.has(entity.documentId));
+            state.knowledgeEdges = (state.knowledgeEdges || []).filter((edge) => !replacedIds.has(edge.documentId));
+            state.documents.push(ingested.document); state.chunks.push(...ingested.chunks); state.knowledgeEntities.push(...ingested.entities); state.knowledgeEdges.push(...ingested.edges); enqueueDocumentProjection(state, ingested);
+          }
+          return current;
+        });
+        return { result: indexed };
+      }
+      return { result };
     }
     if (definition.name === 'web_search') {
       if (!allowSourceAccess) throw new Error('Source access is unavailable for this run because it was not authorized');

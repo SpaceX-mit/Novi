@@ -75,6 +75,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 
 ## 更新记录
 
+- 2026-08-18：完成 Agent 项目文件工具组：新增默认关闭、管理员显式启用的 `read_file`、`search_files`、`write_file`、`patch`；文件持久化于 JSON/PostgreSQL 兼容状态中的租户/项目虚拟文件树，限制相对路径、200 KB/文件、500 文件/项目，拒绝绝对路径与 `..` 穿越。读取支持行范围，搜索支持路径 glob 和逐行内容命中，写入要求显式覆盖，patch 对预期 replacement 数进行原子校验；写入和 patch 会替换同路径 `workspace-file` knowledge 索引。验证：文件工具定向测试、`npm test` 85 passed + 1 PostgreSQL 条件跳过、browser smoke 9 个内置工具通过。Memory/Skill 工具和 Terminal/Exec 将作为后续独立功能提交。
+
 - 2026-08-18：完成 Agent/LLM Wiki 流式预览闭环：LangGraph Specialist、Planner 和 ReAct/Supervisor Controller 改用 `model.stream()`，以同一模型事件 ID 持续写入 `streaming` 增量；阶段仍在流结束后聚合并执行 reasoning/fenced JSON 提取和字段/schema 校验，校验失败不会提交 Artifact/`llm-wiki.md`。新增首个有效 token、流式空闲和阶段总时长保护（`NOVI_LLM_TIMEOUT_MS`、`NOVI_LLM_STREAM_IDLE_TIMEOUT_MS`、`NOVI_LLM_STAGE_MAX_MS`）。新增 `GET /api/jobs/:id/events` SSE，Web Session 首选 SSE、断开后回退轮询；测试 mock provider 改为 OpenAI-compatible SSE，HTTP 测试验证 streaming/completed 事件、SSE 终态和 404 租户边界。验证：`npm test` 85 passed + 1 PostgreSQL 条件跳过，`npm run check` 49 modules，`npm run openapi-check` 48 paths / 60 operations，browser smoke、release-check、凭据形状扫描和 `git diff --check` 通过。真实供应商流式兼容性和长时网络行为仍需外部账号验收。
 
 - 2026-08-18：修复 MiniMax M3 明明返回内容却全阶段 fallback 的问题。真实本地事件证明响应包含 `<think>...</think>` + fenced JSON，旧解析器会把推理文本和最终 JSON 拼在一起，且 Goal 返回完整草稿时因阶段外字段触发 schema fallback；另有长响应在 45 秒被中止。Runtime 现在去除 reasoning block、优先解析 JSON code fence、用字符串感知的平衡括号提取对象，并只合入当前阶段拥有且通过 schema 的字段；收到响应后的解析/校验失败明确记为 `LLM response rejected`，网络/超时才记为 `LLM request failed`。默认 `NOVI_LLM_TIMEOUT_MS` 提高为 90000（仍上限 120000）。新增 reasoning-wrapped 回归，确认各 Specialist 和 Finalizer 全部 completed 且内容确实采用模型输出。验证：`npm test` 85 passed + 1 PostgreSQL 条件跳过。真实供应商复测仍需用户用已轮换的 Key 重新 Generate；历史 fallback Artifact 保持不可变。
