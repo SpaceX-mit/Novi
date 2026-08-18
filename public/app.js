@@ -1,6 +1,8 @@
+import { marked } from '/vendor/marked.esm.js';
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, toolSettings: null, mcpSettings: null, skillSettings: null, pluginSettings: null, customizeTab: 'tools', activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, contextPanel: 'wiki', activeDocumentId: null, monitoringJobId: null, composerDraft: '', composerMode: 'auto', composerLanguage: 'zh-CN' };
+const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, toolSettings: null, mcpSettings: null, skillSettings: null, pluginSettings: null, customizeTab: 'tools', activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, contextPanel: 'wiki', activeDocumentId: null, documentViewMode: 'preview', monitoringJobId: null, composerDraft: '', composerMode: 'auto', composerLanguage: 'zh-CN' };
 let authRegister = false;
 const roleRank = Object.freeze({ viewer: 10, editor: 20, admin: 30, owner: 40 });
 const canRole = (required) => (roleRank[state.role] || 0) >= roleRank[required];
@@ -69,6 +71,33 @@ function renderProjects() {
 
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char])); }
 function safeExternalUrl(value) { try { const url = new URL(String(value)); return ['http:', 'https:'].includes(url.protocol) ? url.toString() : '#'; } catch { return '#'; } }
+
+const markdownTags = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'P', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'PRE', 'CODE', 'STRONG', 'EM', 'A', 'HR', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'DEL', 'BR']);
+
+function renderMarkdown(value) {
+  const template = document.createElement('template');
+  template.innerHTML = marked.parse(String(value || ''), { gfm: true, breaks: false });
+  for (const node of [...template.content.querySelectorAll('*')]) {
+    if (!markdownTags.has(node.tagName)) {
+      node.replaceWith(document.createTextNode(node.textContent || ''));
+      continue;
+    }
+    const href = node.tagName === 'A' ? String(node.getAttribute('href') || '') : '';
+    const languageClass = node.tagName === 'CODE' && /^language-[a-z0-9_-]+$/iu.test(node.className) ? node.className : '';
+    for (const attribute of [...node.attributes]) node.removeAttribute(attribute.name);
+    if (languageClass) node.className = languageClass;
+    if (node.tagName === 'A') {
+      const documentName = decodeURIComponent(href.replace(/^\.\//u, ''));
+      if (/^[a-z0-9][a-z0-9._-]*\.md$/iu.test(documentName)) {
+        node.href = '#'; node.dataset.markdownDocument = documentName;
+      } else {
+        const safeHref = safeExternalUrl(href);
+        if (safeHref !== '#') { node.href = safeHref; node.target = '_blank'; node.rel = 'noopener noreferrer'; }
+      }
+    }
+  }
+  return template.innerHTML;
+}
 function renderFigureSvg(figure) {
   const nodes = new Map((figure.nodes || []).slice(0, 12).map((node) => [String(node.id), { label: String(node.label || node.id), x: Math.max(0, Math.min(550, Number(node.x) || 0)), y: Math.max(0, Math.min(176, Number(node.y) || 0)) }]));
   if (!nodes.size) return `<pre class="figure-diagram">${escapeHtml(figure.diagram || '')}</pre>`;
@@ -305,7 +334,10 @@ function runEventsSection(events) {
 
 function renderDocumentViewer(artifact) {
   const generated = (artifact?.documents || []).find((item) => item.id === state.activeDocumentId);
-  if (generated) return `<article class="document-viewer generated-document"><span>${escapeHtml(generated.mediaType)} · ${escapeHtml(generated.language || artifact.language || 'en')}</span><h3>${escapeHtml(generated.name)}</h3><pre>${escapeHtml(generated.content || '')}</pre></article>`;
+  if (generated) {
+    const sourceMode = state.documentViewMode === 'source';
+    return `<article class="document-viewer generated-document"><span>${escapeHtml(generated.mediaType)} · ${escapeHtml(generated.language || artifact.language || 'en')}</span><h3>${escapeHtml(generated.name)}</h3><div class="document-view-switch" role="group" aria-label="Document view"><button data-document-view-mode="preview" class="${sourceMode ? '' : 'active'}">Preview</button><button data-document-view-mode="source" class="${sourceMode ? 'active' : ''}">Source</button></div>${sourceMode ? `<pre class="markdown-source">${escapeHtml(generated.content || '')}</pre>` : `<div class="markdown-document">${renderMarkdown(generated.content || '')}</div>`}</article>`;
+  }
   const knowledge = state.workspaceKnowledge || { documents: [], chunks: [] };
   const document = knowledge.documents?.find((item) => item.id === state.activeDocumentId) || knowledge.documents?.[0];
   if (!document) return '<div class="context-empty"><b>No document selected</b><p>Import notes or a public URL to inspect it here.</p></div>';
@@ -360,8 +392,15 @@ function renderWorkspace(project, selected = state.activeTab) {
   $('#delete-session')?.addEventListener('click', () => deleteAgentSessionUi(project.id, state.activeSessionId));
   $$('[data-session-id]').forEach((button) => button.addEventListener('click', () => selectAgentSession(project.id, button.dataset.sessionId)));
   $$('[data-context-panel]').forEach((button) => button.addEventListener('click', () => { state.contextPanel = button.dataset.contextPanel; renderWorkspace(project, state.activeTab); }));
-  $$('[data-document-id]').forEach((button) => button.addEventListener('click', () => { state.activeDocumentId = button.dataset.documentId; state.contextPanel = 'document'; renderWorkspace(project, state.activeTab); }));
-  $$('[data-generated-document-id]').forEach((button) => button.addEventListener('click', () => { state.activeDocumentId = button.dataset.generatedDocumentId; state.contextPanel = 'document'; renderWorkspace(project, state.activeTab); }));
+  $$('[data-document-id]').forEach((button) => button.addEventListener('click', () => { state.activeDocumentId = button.dataset.documentId; state.contextPanel = 'document'; state.documentViewMode = 'preview'; renderWorkspace(project, state.activeTab); }));
+  $$('[data-generated-document-id]').forEach((button) => button.addEventListener('click', () => { state.activeDocumentId = button.dataset.generatedDocumentId; state.contextPanel = 'document'; state.documentViewMode = 'preview'; renderWorkspace(project, state.activeTab); }));
+  $$('[data-document-view-mode]').forEach((button) => button.addEventListener('click', () => { state.documentViewMode = button.dataset.documentViewMode; renderWorkspace(project, state.activeTab); }));
+  $$('[data-markdown-document]').forEach((link) => link.addEventListener('click', (event) => {
+    event.preventDefault();
+    const document = (artifact?.documents || []).find((item) => item.name === link.dataset.markdownDocument);
+    if (!document) return;
+    state.activeDocumentId = document.id; state.contextPanel = 'document'; state.documentViewMode = 'preview'; renderWorkspace(project, state.activeTab);
+  }));
   $$('[data-artifact-id]').forEach((button) => button.addEventListener('click', () => { state.activeArtifactId = button.dataset.artifactId; state.contextPanel = 'wiki'; state.compareVersions = false; renderWorkspace(project, state.activeTab); }));
   $('#pin-workspace')?.addEventListener('click', () => pin(project.id)); $('#copy-summary')?.addEventListener('click', async () => { if (!navigator.clipboard) return showToast('Clipboard is unavailable'); await navigator.clipboard.writeText(c.summary); showToast('Summary copied'); });
   $('#delete-workspace')?.addEventListener('click', () => deleteWorkspace(project));

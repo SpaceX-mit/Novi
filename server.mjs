@@ -33,6 +33,9 @@ import { normalizeWikiLanguage } from './src/wiki-language.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const publicDir = join(root, 'public');
+const staticVendorFiles = new Map([
+  ['/vendor/marked.esm.js', join(root, 'node_modules', 'marked', 'lib', 'marked.esm.js')],
+]);
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || '127.0.0.1';
 const types = new Set(['knowledge', 'research', 'paper']);
@@ -1477,6 +1480,15 @@ async function runQueuedJobs(store, auth, metrics, dependencies = {}) {
 async function staticFile(req, res, url) {
   let pathname = decodeURIComponent(url.pathname);
   if (pathname === '/') pathname = '/index.html';
+  const vendorPath = staticVendorFiles.get(pathname);
+  if (vendorPath) {
+    try {
+      const content = await readFile(vendorPath);
+      return send(res, 200, content, { 'Content-Type': mime['.js'], 'Cache-Control': 'public, max-age=86400' });
+    } catch {
+      return send(res, 404, { error: 'Not found' });
+    }
+  }
   const path = resolve(publicDir, `.${pathname}`);
   if (path !== publicDir && !path.startsWith(`${publicDir}/`)) return send(res, 403, { error: 'Forbidden' });
   try {

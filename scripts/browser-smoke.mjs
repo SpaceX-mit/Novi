@@ -138,9 +138,12 @@ try {
   await evaluate(`document.querySelector('[data-context-panel="files"]').click()`);
   await waitFor(`document.querySelectorAll('[data-generated-document-id]').length === 7 && document.querySelector('[data-generated-document-id]')?.textContent.includes('llm-wiki.md')`);
   await evaluate(`document.querySelector('[data-generated-document-id]').click()`);
-  await waitFor(`document.querySelector('.generated-document pre')?.textContent.includes('# Knowledge Base')`);
-  const markdownPreview = await evaluate(`({ text: document.querySelector('.generated-document pre').textContent, renderedHeading: !!document.querySelector('.generated-document pre h1') })`);
-  if (!markdownPreview.text.includes('## LLM Wiki') || markdownPreview.renderedHeading) throw new Error(`Generated Markdown preview is unsafe or incomplete: ${JSON.stringify(markdownPreview)}`);
+  await waitFor(`document.querySelector('.generated-document .markdown-document h1')?.textContent.includes('Knowledge Base')`);
+  const markdownPreview = await evaluate(`({ heading: document.querySelector('.generated-document .markdown-document h1')?.textContent, sections: document.querySelectorAll('.generated-document .markdown-document h2').length, sourceVisible: !!document.querySelector('.generated-document .markdown-source') })`);
+  if (!markdownPreview.heading.includes('Knowledge Base') || markdownPreview.sections < 3 || markdownPreview.sourceVisible) throw new Error(`Generated Markdown preview is not rendered cleanly: ${JSON.stringify(markdownPreview)}`);
+  await evaluate(`document.querySelector('[data-document-view-mode="source"]').click()`);
+  await waitFor(`document.querySelector('.generated-document .markdown-source')?.textContent.includes('## LLM Wiki')`);
+  if (await evaluate(`!!document.querySelector('.generated-document .markdown-source h1')`)) throw new Error('Markdown source view rendered untrusted HTML');
   await evaluate(`document.querySelector('[data-context-panel="wiki"]').click()`);
   await waitFor(`document.querySelector('[data-artifact-tab="practice"]') !== null`);
   await evaluate(`(() => { window.prompt = () => 'Focused follow-up'; document.querySelector('#new-session').click(); })()`);

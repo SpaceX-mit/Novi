@@ -44,6 +44,7 @@
     "@langchain/langgraph": "^1.4.9",
     "@langchain/openai": "^1.5.7",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "marked": "^16.4.2",
     "pdf-parse": "^2.4.5",
     "pg": "^8.16.3",
     "zod": "^4.2.0"
@@ -80,11 +81,17 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "icon": "build/icon.svg",
@@ -99,7 +106,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.svg",
@@ -120,7 +129,9 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.svg",
