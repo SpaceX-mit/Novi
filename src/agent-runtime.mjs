@@ -12,7 +12,7 @@ const referenceStage = Object.freeze({ id: 'references', name: 'Reference Discov
 const specialistStageDefinitions = Object.freeze([
   { id: 'research', name: 'Research Agent', progress: 54, fields: ['summary', 'researchGaps', 'sota', 'opportunities'] },
   { id: 'knowledge', name: 'Knowledge Agent', progress: 66, fields: ['sections', 'wikiSections', 'learningPath', 'caseStudies', 'practiceQuestions', 'graph', 'knowledgeSystem'] },
-  { id: 'writing', name: 'Writing Agent', progress: 78, fields: ['summary', 'title', 'abstract', 'sections', 'contributions', 'noveltyAnalysis', 'method', 'experiments', 'figures', 'systemDocument'] },
+  { id: 'writing', name: 'Writing Agent', progress: 78, fields: ['summary', 'title', 'abstract', 'sections', 'contributions', 'noveltyAnalysis', 'method', 'experiments', 'figures', 'systemDocument', 'deepDiveDocuments'] },
   { id: 'review', name: 'Review Agent', progress: 88, fields: ['review'] },
 ]);
 const finalizerStage = Object.freeze({ id: 'finalizer', name: 'LLM Wiki Finalizer', progress: 96, fields: ['llmWiki', 'wikiSections'] });
@@ -149,9 +149,14 @@ function validateCollaborativeCandidate(stage, candidate) {
   if (candidate.knowledgeSystem && (candidate.knowledgeSystem.layers.length < 5 || candidate.knowledgeSystem.validationQuestions.length < 4)) throw new Error('LLM knowledge system does not meet the minimum quality contract');
   if (candidate.systemDocument && (!candidate.systemDocument.sections?.length || !candidate.systemDocument.completionChecklist?.length)) throw new Error('LLM system document is incomplete');
   if (candidate.systemDocument && (candidate.systemDocument.sections.length < 5 || candidate.systemDocument.completionChecklist.length < 4)) throw new Error('LLM system document does not meet the minimum quality contract');
+  if (candidate.deepDiveDocuments) {
+    const slugs = new Set(candidate.deepDiveDocuments.map((document) => document?.slug));
+    const shallow = candidate.deepDiveDocuments.some((document) => !document?.id || !document?.slug || !document?.title || !document?.purpose || document.sections?.length < 6 || document.sections.some((section) => !section?.title || String(section?.body || '').trim().length < 40));
+    if (candidate.deepDiveDocuments.length < 5 || candidate.deepDiveDocuments.length > 8 || slugs.size !== candidate.deepDiveDocuments.length || shallow) throw new Error('LLM Deep Dive document suite does not meet the minimum quality contract');
+  }
   if (stage.id === 'review' && candidate.review && candidate.review.length < 3) throw new Error('LLM review does not meet the minimum quality contract');
-  if (stage.id === 'finalizer' && candidate.llmWiki && (!candidate.llmWiki.sections?.length || !candidate.llmWiki.glossary?.length || !candidate.llmWiki.nextQuestions?.length)) throw new Error('LLM Wiki is incomplete');
-  if (stage.id === 'finalizer' && candidate.llmWiki && (candidate.llmWiki.sections.length < 6 || candidate.llmWiki.glossary.length < 4 || candidate.llmWiki.nextQuestions.length < 3 || candidate.llmWiki.sections.some((section) => String(section?.body || '').trim().length < 20))) throw new Error('LLM Wiki does not meet the minimum quality contract');
+  if (stage.id === 'finalizer' && candidate.llmWiki && (!candidate.llmWiki.sections?.length || !candidate.llmWiki.documentMap?.length || !candidate.llmWiki.glossary?.length || !candidate.llmWiki.nextQuestions?.length)) throw new Error('LLM Wiki is incomplete');
+  if (stage.id === 'finalizer' && candidate.llmWiki && (candidate.llmWiki.sections.length < 6 || candidate.llmWiki.documentMap.length < 5 || candidate.llmWiki.glossary.length < 4 || candidate.llmWiki.nextQuestions.length < 3 || candidate.llmWiki.sections.some((section) => String(section?.body || '').trim().length < 20))) throw new Error('LLM Wiki does not meet the minimum quality contract');
   if (stage.id === 'finalizer' && candidate.wikiSections && (candidate.wikiSections.length < 6 || candidate.wikiSections.some((section) => String(section?.body || '').trim().length < 20))) throw new Error('LLM Wiki sections do not meet the minimum quality contract');
 }
 
@@ -288,6 +293,7 @@ function collaborationContext(state) {
       graph: state.content.graph,
     },
     systemDocument: state.content.systemDocument,
+    deepDiveDocuments: (state.content.deepDiveDocuments || []).slice(0, 8).map((document) => ({ ...document, sections: (document.sections || []).slice(0, 8).map((section) => ({ title: section.title, body: String(section.body || '').slice(0, 2_000) })) })),
     review: state.content.review,
   };
 }
@@ -316,9 +322,9 @@ function stageQualityContract(stage) {
     references: 'Reference Discovery must cover independent facets: landscape, foundations, implementation, evaluation, and risks. Prefer primary papers, official documentation, and reproducible repositories over SEO summaries.',
     research: 'Build a comparative evidence synthesis. Separate established findings, plausible interpretations, and unknowns; compare at least three approaches or dimensions and turn gaps into falsifiable tests.',
     knowledge: 'Build a teachable dependency graph from foundations to advanced practice. Each layer needs prerequisites, concepts, a concrete example, a common failure mode, and a validation question.',
-    writing: 'Write a coherent system document, not disconnected summaries. Explain mechanisms and interfaces end to end, include an implementation path, operational checks, alternatives, and explicit limitations.',
+    writing: 'Write a coherent system document and at least five distinct Deep Dive documents, not disconnected summaries or bullet catalogs. Preserve each document id and slug. Every Deep Dive document needs at least six substantive narrative sections covering its technical question, mechanism/architecture, concrete implementation or case, trade-offs/alternatives, failure modes/limits, and validation/evidence gaps.',
     review: 'Act as a hostile but constructive reviewer. Find unsupported claims, missing evidence, contradictions, unsafe assumptions, weak evaluation, and concrete revisions required before publication.',
-    finalizer: 'Produce a usable LLM Wiki with a logical progression, at least six substantive sections when the schema permits, a glossary of domain terms, next research questions, and visible evidence gaps. Reconcile conflicting specialist outputs instead of copying them verbatim.',
+    finalizer: 'Produce a concise summary and navigation LLM Wiki over the completed Deep Dive document suite, with a logical progression, at least six substantive synthesis sections when the schema permits, a document map, glossary, next research questions, and visible evidence gaps. Reconcile conflicting specialist outputs instead of copying the Deep Dive documents verbatim.',
   };
   return `${common} ${contracts[stage.id] || ''}`.trim();
 }
@@ -712,7 +718,7 @@ export async function runAgentWorkflow(project, fallback, config, options = {}) 
   return {
     content: { ...result.content, sources: result.sources || result.content.sources || [], knowledgeContext: result.knowledgeContext || result.content.knowledgeContext || [] },
     stages: result.stages,
-    runtime: { name: 'langgraph', version: 7, checkpoint: 'memory', provider: config.provider, model: config.model, threadId, language, budgets, references: result.referenceDiscovery, stageAttempts: result.stageAttempts || {}, requestedMode, initialMode: result.initialMode, mode: result.activeMode, modeHistory: result.modeHistory, plan: result.plan || [], controlEvents: result.controlEvents, toolCalls: result.toolCalls || [], skills: skillProvenance(result.skills || []), plugins: pluginProvenance(result.plugins || []), usage },
+    runtime: { name: 'langgraph', version: 8, checkpoint: 'memory', provider: config.provider, model: config.model, threadId, language, budgets, references: result.referenceDiscovery, stageAttempts: result.stageAttempts || {}, requestedMode, initialMode: result.initialMode, mode: result.activeMode, modeHistory: result.modeHistory, plan: result.plan || [], controlEvents: result.controlEvents, toolCalls: result.toolCalls || [], skills: skillProvenance(result.skills || []), plugins: pluginProvenance(result.plugins || []), usage },
   };
 }
 

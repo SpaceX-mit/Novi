@@ -1287,21 +1287,26 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
 }
 
 function indexWikiIteration(state, project, artifact, job) {
-  const markdown = (artifact.documents || []).find((document) => document.name === 'llm-wiki.md')?.content;
-  if (!markdown) return null;
+  const generatedDocuments = (artifact.documents || []).filter((document) => document.mediaType === 'text/markdown' && document.content);
+  if (!generatedDocuments.length) return null;
   const sourceCount = (artifact.content?.sources || []).filter((source) => source.mapped === true).length;
-  const title = `Wiki iteration ${project.artifacts.length + 1}: ${project.title}`.slice(0, 200);
-  const ingested = ingestDocument({ title, content: markdown, sourceKind: 'agent-wiki', mimeType: 'text/markdown' }, { projectId: project.id, tenantId: project.tenantId });
-  if (ingested.error) throw new Error(ingested.error);
   state.documents ||= []; state.chunks ||= []; state.knowledgeEntities ||= []; state.knowledgeEdges ||= [];
-  const duplicate = state.documents.find((document) => document.projectId === project.id && document.tenantId === project.tenantId && document.contentHash === ingested.document.contentHash);
-  const document = duplicate || ingested.document;
-  if (!duplicate) {
-    state.documents.unshift(ingested.document); state.chunks.push(...ingested.chunks); state.knowledgeEntities.push(...ingested.entities); state.knowledgeEdges.push(...ingested.edges);
-    enqueueDocumentProjection(state, ingested);
+  const indexed = [];
+  for (const generated of [...generatedDocuments].reverse()) {
+    const title = `Wiki iteration ${project.artifacts.length + 1}: ${generated.name} - ${project.title}`.slice(0, 200);
+    const ingested = ingestDocument({ title, content: generated.content, sourceKind: 'agent-wiki', mimeType: 'text/markdown' }, { projectId: project.id, tenantId: project.tenantId });
+    if (ingested.error) throw new Error(ingested.error);
+    const duplicate = state.documents.find((document) => document.projectId === project.id && document.tenantId === project.tenantId && document.contentHash === ingested.document.contentHash);
+    const document = duplicate || ingested.document;
+    if (!duplicate) {
+      state.documents.unshift(ingested.document); state.chunks.push(...ingested.chunks); state.knowledgeEntities.push(...ingested.entities); state.knowledgeEdges.push(...ingested.edges);
+      enqueueDocumentProjection(state, ingested);
+    }
+    indexed.unshift({ name: generated.name, documentId: document.id, contentHash: document.contentHash, reused: Boolean(duplicate) });
   }
-  artifact.workflow.runtime.knowledgeEnrichment = { documentId: document.id, contentHash: document.contentHash, sourceCount, reused: Boolean(duplicate), indexedAt: new Date().toISOString(), jobId: job.id };
-  return document;
+  const summary = indexed.find((document) => document.name === 'llm-wiki.md') || indexed[0];
+  artifact.workflow.runtime.knowledgeEnrichment = { documentId: summary.documentId, contentHash: summary.contentHash, documents: indexed, documentCount: indexed.length, sourceCount, reused: indexed.every((document) => document.reused), indexedAt: new Date().toISOString(), jobId: job.id };
+  return indexed;
 }
 
 function recordRunEvent(state, job, event) {
