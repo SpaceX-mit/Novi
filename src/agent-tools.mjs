@@ -7,6 +7,8 @@ import { searchKnowledgeSources, searchPaperSources } from './connectors.mjs';
 import { verifyEvidenceSources } from './evidence.mjs';
 import { invokeMcpTool } from './mcp-runtime.mjs';
 import { fetchPaper } from './paper-tools.mjs';
+import { publicSkillSettings, saveSkillSettings } from './skill-runtime.mjs';
+import { can, roleFor } from './rbac.mjs';
 
 const BUILTIN_TOOLS = Object.freeze([
   { name: 'workspace_read', label: 'Workspace read', description: 'Retrieve relevant passages from documents in the current workspace.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 500 }, limit: { type: 'number' } } } },
@@ -15,6 +17,10 @@ const BUILTIN_TOOLS = Object.freeze([
   { name: 'search_files', label: 'Search files', description: 'Search workspace file paths and text without leaving the current project.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 300 }, pathPattern: { type: 'string', maxLength: 300 }, limit: { type: 'number' } } } },
   { name: 'write_file', label: 'Write file', description: 'Create or replace a bounded text file in the current workspace.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['path', 'content'], properties: { path: { type: 'string', maxLength: 500 }, content: { type: 'string', maxLength: 200000 }, overwrite: { type: 'boolean' } } } },
   { name: 'patch', label: 'Patch file', description: 'Apply an exact bounded text replacement to a current workspace file.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['path', 'oldText', 'newText'], properties: { path: { type: 'string', maxLength: 500 }, oldText: { type: 'string', maxLength: 20000 }, newText: { type: 'string', maxLength: 20000 }, expectedReplacements: { type: 'number' } } } },
+  { name: 'memory', label: 'Memory', description: 'Remember, recall, or forget bounded project-scoped Agent memory.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['action'], properties: { action: { type: 'string', maxLength: 20 }, key: { type: 'string', maxLength: 120 }, content: { type: 'string', maxLength: 20000 }, query: { type: 'string', maxLength: 500 }, tags: { type: 'string', maxLength: 500 }, limit: { type: 'number' } } } },
+  { name: 'skills_list', label: 'Skills list', description: 'List organization Skills visible to this Agent.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: [], properties: { enabledOnly: { type: 'boolean' } } } },
+  { name: 'skill_view', label: 'Skill view', description: 'View one organization Skill and its bounded instructions.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['name'], properties: { name: { type: 'string', maxLength: 48 } } } },
+  { name: 'skill_manage', label: 'Skill manage', description: 'Create, update, enable, disable, or delete an organization Skill. Requires owner/admin.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['action', 'name'], properties: { action: { type: 'string', maxLength: 20 }, name: { type: 'string', maxLength: 48 }, title: { type: 'string', maxLength: 80 }, description: { type: 'string', maxLength: 500 }, instructions: { type: 'string', maxLength: 4000 }, activation: { type: 'string', maxLength: 20 }, productTypes: { type: 'string', maxLength: 200 }, triggerTerms: { type: 'string', maxLength: 1000 }, enabled: { type: 'boolean' } } } },
   { name: 'web_search', label: 'Web search', description: 'Search Novi source connectors for current scholarly and technical evidence.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 300 }, limit: { type: 'number' } } } },
   { name: 'paper_search', label: 'Paper search', description: 'Search scholarly catalogs for papers and preprints with traceable metadata and public links.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 300 }, limit: { type: 'number' } } } },
   { name: 'paper_fetch', label: 'Paper fetch', description: 'Fetch a paper by DOI, arXiv identifier, or public URL. Reports metadata and access status, and extracts bounded text only when publicly reachable.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['identifier'], properties: { identifier: { type: 'string', maxLength: 2000 }, includeText: { type: 'boolean' }, maxCharacters: { type: 'number' } } } },
@@ -53,6 +59,15 @@ function fileSummary(file) {
 function filePatternMatches(filePath, pattern) {
   const escaped = String(pattern || '').replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('**', '.*').replaceAll('*', '[^/]*').replaceAll('?', '[^/]');
   return new RegExp(`^${escaped}$`, 'u').test(filePath);
+}
+
+function commaList(value, fallback = []) {
+  if (value === undefined) return fallback;
+  return [...new Set(String(value).split(',').map((item) => item.trim()).filter(Boolean))];
+}
+
+function publicMemory(memory) {
+  return { key: memory.key, content: memory.content, tags: [...(memory.tags || [])], createdAt: memory.createdAt, updatedAt: memory.updatedAt };
 }
 
 function allowedHosts() {
@@ -255,6 +270,54 @@ export function createToolExecutor({ store, project, principal, allowWebSearch =
         return { result: indexed };
       }
       return { result };
+    }
+    if (definition.name === 'memory') {
+      const action = String(input.action).toLowerCase();
+      if (!['remember', 'recall', 'forget'].includes(action)) throw new Error('Memory action must be remember, recall, or forget');
+      if (action === 'recall') {
+        const state = await store.read(); const query = String(input.query || input.key || '').toLocaleLowerCase();
+        const memories = (state.agentMemories || []).filter((memory) => memory.projectId === project.id && memory.tenantId === principal.tenantId && (!query || `${memory.key}\n${memory.content}\n${(memory.tags || []).join(' ')}`.toLocaleLowerCase().includes(query))).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))).slice(0, Math.max(1, Math.min(20, Number(input.limit) || 10)));
+        return { result: { memories: memories.map(publicMemory) } };
+      }
+      const key = String(input.key || '').trim().toLocaleLowerCase(); if (!key) throw new Error('Memory key is required');
+      const result = await store.update((state) => {
+        state.agentMemories ||= []; const index = state.agentMemories.findIndex((memory) => memory.projectId === project.id && memory.tenantId === principal.tenantId && memory.key === key);
+        if (action === 'forget') { if (index < 0) return { forgotten: false, key }; state.agentMemories.splice(index, 1); return { forgotten: true, key }; }
+        const content = String(input.content || '').trim(); if (!content) throw new Error('Memory content is required');
+        if (index < 0 && state.agentMemories.filter((memory) => memory.projectId === project.id && memory.tenantId === principal.tenantId).length >= 200) throw new Error('Project memory limit reached');
+        const now = new Date().toISOString(); const memory = index >= 0 ? state.agentMemories[index] : { id: randomUUID(), tenantId: principal.tenantId, projectId: project.id, key, createdAt: now };
+        memory.content = content; memory.tags = commaList(input.tags); memory.updatedAt = now; memory.updatedBy = principal.id; if (index < 0) state.agentMemories.push(memory); return publicMemory(memory);
+      });
+      return { result };
+    }
+    if (definition.name === 'skills_list') {
+      const settings = publicSkillSettings(await store.read(), principal.tenantId); const skills = input.enabledOnly === true ? settings.skills.filter((skill) => skill.enabled !== false) : settings.skills;
+      return { result: { skills: skills.map(({ instructions: _instructions, ...skill }) => skill) } };
+    }
+    if (definition.name === 'skill_view') {
+      const skill = publicSkillSettings(await store.read(), principal.tenantId).skills.find((item) => item.name === String(input.name).toLowerCase());
+      if (!skill) throw new Error('Skill not found'); return { result: { skill } };
+    }
+    if (definition.name === 'skill_manage') {
+      const action = String(input.action).toLowerCase(); if (!['create', 'update', 'enable', 'disable', 'delete'].includes(action)) throw new Error('Skill action must be create, update, enable, disable, or delete');
+      const name = String(input.name).toLowerCase();
+      const settings = await store.update((state) => {
+        if (!can(roleFor(state, principal), 'admin')) throw new Error('Skill management requires owner or admin');
+        const current = publicSkillSettings(state, principal.tenantId).skills; const index = current.findIndex((skill) => skill.name === name);
+        if (action === 'create' && index >= 0) throw new Error('Skill already exists');
+        if (action !== 'create' && index < 0) throw new Error('Skill not found');
+        if (action === 'delete') current.splice(index, 1);
+        else if (action === 'enable' || action === 'disable') current[index] = { ...current[index], enabled: action === 'enable' };
+        else {
+          const prior = index >= 0 ? current[index] : {};
+          const next = { ...prior, name, title: input.title ?? prior.title ?? name, description: input.description ?? prior.description, instructions: input.instructions ?? prior.instructions, activation: input.activation ?? prior.activation ?? 'auto', productTypes: commaList(input.productTypes, prior.productTypes), triggerTerms: commaList(input.triggerTerms, prior.triggerTerms), enabled: input.enabled ?? prior.enabled ?? true };
+          if (index >= 0) current[index] = next; else current.push(next);
+        }
+        const saved = saveSkillSettings(state, principal.tenantId, principal.id, { skills: current });
+        state.audit ||= []; state.audit.unshift({ id: randomUUID(), at: new Date().toISOString(), action: `agent.skill.${action}`, userId: principal.id, tenantId: principal.tenantId, resourceId: name }); state.audit = state.audit.slice(0, 5_000);
+        return saved;
+      });
+      return { result: { action, skill: settings.skills.find((skill) => skill.name === name) || null, skillCount: settings.skills.length } };
     }
     if (definition.name === 'web_search') {
       if (!allowSourceAccess) throw new Error('Source access is unavailable for this run because it was not authorized');

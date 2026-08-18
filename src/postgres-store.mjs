@@ -3,7 +3,7 @@ import { normalizeWikiLanguage } from './wiki-language.mjs';
 import { embedText, searchProjectKnowledge } from './knowledge.mjs';
 import { failSessionRun, findAgentSession } from './agent-sessions.mjs';
 
-const initialState = () => ({ version: 3, projects: [], jobs: [], users: [], sessions: [], agentSessions: [], agentToolConfigs: [], mcpServerConfigs: [], agentSkillConfigs: [], agentPluginConfigs: [], workspaceFiles: [], audit: [], usage: [], subscriptions: [], paymentEvents: [], organizations: [], memberships: [], invitations: [], oidcStates: [], llmProviderConfigs: [], documents: [], chunks: [], knowledgeEntities: [], knowledgeEdges: [], watchConfigs: [], sourceSnapshots: [], externalProjectionJobs: [] });
+const initialState = () => ({ version: 3, projects: [], jobs: [], users: [], sessions: [], agentSessions: [], agentToolConfigs: [], mcpServerConfigs: [], agentSkillConfigs: [], agentPluginConfigs: [], workspaceFiles: [], agentMemories: [], audit: [], usage: [], subscriptions: [], paymentEvents: [], organizations: [], memberships: [], invitations: [], oidcStates: [], llmProviderConfigs: [], documents: [], chunks: [], knowledgeEntities: [], knowledgeEdges: [], watchConfigs: [], sourceSnapshots: [], externalProjectionJobs: [] });
 
 /**
  * PostgreSQL repository. `novi_state` is a compatibility envelope for legacy
@@ -55,6 +55,7 @@ export class PostgresStore {
     if (!result.rows[0]) return initialState();
     const state = result.rows[0].state;
     state.version = 3; state.projects ||= []; state.jobs ||= []; state.users ||= []; state.sessions ||= []; state.agentSessions ||= []; state.agentToolConfigs ||= []; state.mcpServerConfigs ||= []; state.agentSkillConfigs ||= []; state.agentPluginConfigs ||= []; state.workspaceFiles ||= []; state.audit ||= []; state.usage ||= []; state.subscriptions ||= []; state.paymentEvents ||= []; state.organizations ||= []; state.memberships ||= []; state.invitations ||= []; state.oidcStates ||= []; state.llmProviderConfigs ||= []; state.documents ||= []; state.chunks ||= []; state.knowledgeEntities ||= []; state.knowledgeEdges ||= []; state.watchConfigs ||= []; state.sourceSnapshots ||= []; state.externalProjectionJobs ||= [];
+    state.agentMemories ||= [];
     return state;
   }
 
@@ -67,6 +68,7 @@ export class PostgresStore {
       const locked = await client.query('SELECT state FROM novi_state WHERE id = 1 FOR UPDATE');
       const state = locked.rows[0]?.state || initialState();
       state.version = 3; state.projects ||= []; state.jobs ||= []; state.users ||= []; state.sessions ||= []; state.agentSessions ||= []; state.agentToolConfigs ||= []; state.mcpServerConfigs ||= []; state.agentSkillConfigs ||= []; state.agentPluginConfigs ||= []; state.workspaceFiles ||= []; state.audit ||= []; state.usage ||= []; state.subscriptions ||= []; state.paymentEvents ||= []; state.organizations ||= []; state.memberships ||= []; state.invitations ||= []; state.oidcStates ||= []; state.llmProviderConfigs ||= []; state.documents ||= []; state.chunks ||= []; state.knowledgeEntities ||= []; state.knowledgeEdges ||= []; state.watchConfigs ||= []; state.sourceSnapshots ||= []; state.externalProjectionJobs ||= [];
+      state.agentMemories ||= [];
       const result = await mutator(state);
       await client.query('UPDATE novi_state SET version = 3, state = $1::jsonb, updated_at = now() WHERE id = 1', [JSON.stringify(state)]);
       await this.projectProjection(client, state);

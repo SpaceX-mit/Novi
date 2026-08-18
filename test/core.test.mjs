@@ -318,7 +318,7 @@ test('Agent tools validate, encrypt, execute, and remain tenant/project scoped',
   assert.equal(saved.customTools[0].hasBearerToken, true); assert.equal('encryptedBearerToken' in saved.customTools[0], false);
   assert.doesNotMatch(state.agentToolConfigs[0].customTools[0].encryptedBearerToken, /custom-secret-token/);
   const tools = await resolvedTools(state, 'tenant'); assert.equal(tools.find((tool) => tool.name === 'domain_lookup').bearerToken, 'custom-secret-token');
-  assert.deepEqual(publicToolSettings({ agentToolConfigs: [] }, 'tenant').builtins.map((tool) => [tool.name, tool.enabled]), [['workspace_read', true], ['workspace_write', false], ['read_file', false], ['search_files', false], ['write_file', false], ['patch', false], ['web_search', true], ['paper_search', true], ['paper_fetch', true]]);
+  assert.deepEqual(publicToolSettings({ agentToolConfigs: [] }, 'tenant').builtins.map((tool) => [tool.name, tool.enabled]), [['workspace_read', true], ['workspace_write', false], ['read_file', false], ['search_files', false], ['write_file', false], ['patch', false], ['memory', false], ['skills_list', false], ['skill_view', false], ['skill_manage', false], ['web_search', true], ['paper_search', true], ['paper_fetch', true]]);
 
   const store = new JsonStore(process.env.NOVI_DATA_FILE);
   const project = await store.createProject({ title: 'Tool project', topic: 'Tool runtime', type: 'knowledge' });
@@ -340,6 +340,15 @@ test('Agent tools validate, encrypt, execute, and remain tenant/project scoped',
   const searchedFiles = await fileWriter(fileDefinition('search_files'), { query: 'bounded', pathPattern: '**/*.md' }); assert.equal(searchedFiles.result.files.length, 1);
   const patchedFile = await fileWriter(fileDefinition('patch'), { path: 'notes/runtime.md', oldText: 'bounded', newText: 'tenant-scoped', expectedReplacements: 1 }); assert.match(patchedFile.result.content, /tenant-scoped/);
   await assert.rejects(() => fileWriter(fileDefinition('read_file'), { path: '../outside.txt' }), /escapes/);
+  await fileWriter(fileDefinition('memory'), { action: 'remember', key: 'review-policy', content: 'Always review tenant isolation.', tags: 'security,review' });
+  const recalled = await fileWriter(fileDefinition('memory'), { action: 'recall', query: 'tenant isolation' }); assert.equal(recalled.result.memories[0].key, 'review-policy');
+  const managed = await fileWriter(fileDefinition('skill_manage'), { action: 'create', name: 'runtime_review', title: 'Runtime review', description: 'Review Agent runtime boundaries.', instructions: 'Check tenant isolation and provenance.', activation: 'auto', productTypes: 'knowledge,research', triggerTerms: 'runtime review,tenant isolation', enabled: true }); assert.equal(managed.result.skill.name, 'runtime_review');
+  const skillList = await fileWriter(fileDefinition('skills_list'), { enabledOnly: true }); assert.equal(skillList.result.skills[0].name, 'runtime_review'); assert.equal('instructions' in skillList.result.skills[0], false);
+  const viewedSkill = await fileWriter(fileDefinition('skill_view'), { name: 'runtime_review' }); assert.match(viewedSkill.result.skill.instructions, /tenant isolation/);
+  await fileWriter(fileDefinition('skill_manage'), { action: 'disable', name: 'runtime_review' });
+  const viewerExecutor = createToolExecutor({ store, project, principal: { id: 'viewer-user', tenantId: 'local', role: 'viewer' } });
+  await assert.rejects(() => viewerExecutor(fileDefinition('skill_manage'), { action: 'delete', name: 'runtime_review' }), /owner or admin/);
+  const forgotten = await fileWriter(fileDefinition('memory'), { action: 'forget', key: 'review-policy' }); assert.equal(forgotten.result.forgotten, true);
   const oversizedExecutor = createToolExecutor({ store, project, principal: { id: 'local', tenantId: 'local' }, fetchImpl: async () => new Response('x'.repeat(32 * 1024 + 1), { status: 200 }) });
   await assert.rejects(() => oversizedExecutor(tools.find((tool) => tool.name === 'domain_lookup'), { query: 'runtime' }), /exceeds 32 KB/);
 });

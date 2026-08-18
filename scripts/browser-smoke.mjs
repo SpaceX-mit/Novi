@@ -57,9 +57,9 @@ try {
   await waitFor(`document.readyState === 'complete' && document.querySelector('#new-project') !== null && !document.querySelector('#new-project').hidden`);
   await sleep(500);
   await evaluate(`document.querySelector('#customize-nav').click()`);
-  await waitFor(`document.querySelector('#view-customize').classList.contains('active-view') && document.querySelectorAll('[data-builtin-tool]').length === 9`);
+  await waitFor(`document.querySelector('#view-customize').classList.contains('active-view') && document.querySelectorAll('[data-builtin-tool]').length === 13`);
   const toolUi = await evaluate(`({ tabs: [...document.querySelectorAll('.customize-tabs button')].map((button) => button.textContent.trim()), builtins: [...document.querySelectorAll('[data-builtin-tool]')].map((input) => input.dataset.builtinTool), configurable: !document.querySelector('#save-tools').disabled, overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth })`);
-  if (JSON.stringify(toolUi.tabs) !== JSON.stringify(['Tools', 'MCP', 'Skills', 'Plugins']) || JSON.stringify(toolUi.builtins) !== JSON.stringify(['workspace_read', 'workspace_write', 'read_file', 'search_files', 'write_file', 'patch', 'web_search', 'paper_search', 'paper_fetch']) || !toolUi.configurable || toolUi.overflow) throw new Error(`Customize tools UI is incorrect: ${JSON.stringify(toolUi)}`);
+  if (JSON.stringify(toolUi.tabs) !== JSON.stringify(['Tools', 'MCP', 'Skills', 'Plugins']) || JSON.stringify(toolUi.builtins) !== JSON.stringify(['workspace_read', 'workspace_write', 'read_file', 'search_files', 'write_file', 'patch', 'memory', 'skills_list', 'skill_view', 'skill_manage', 'web_search', 'paper_search', 'paper_fetch']) || !toolUi.configurable || toolUi.overflow) throw new Error(`Customize tools UI is incorrect: ${JSON.stringify(toolUi)}`);
   await evaluate(`(() => { const write = document.querySelector('[data-builtin-tool="workspace_write"]'); write.checked = true; document.querySelector('#save-tools').click(); })()`);
   await waitFor(`document.querySelector('#toast').textContent === 'Agent tools saved'`);
   await evaluate(`document.querySelector('[data-customize-tab="mcp"]').click()`);
