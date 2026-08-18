@@ -534,21 +534,56 @@ function updateConversationRun(job) {
   }
 }
 
+function streamJobEvents(jobId, onJob) {
+  if (typeof EventSource === 'undefined') return Promise.reject(new Error('SSE is not supported by this browser'));
+  return new Promise((resolve, reject) => {
+    const source = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events`);
+    let settled = false; let lastEventAt = Date.now();
+    const watchdog = window.setInterval(() => {
+      if (Date.now() - lastEventAt > 35_000) finish(new Error('Agent event stream timed out'));
+    }, 5_000);
+    const finish = (error, job) => {
+      if (settled) return;
+      settled = true; window.clearInterval(watchdog); source.close();
+      if (error) reject(error); else resolve(job);
+    };
+    source.addEventListener('job', (event) => {
+      lastEventAt = Date.now();
+      try {
+        const job = JSON.parse(event.data).job; onJob(job);
+        if (['completed', 'failed', 'cancelled'].includes(job.status)) finish(null, job);
+      } catch (error) { finish(error); }
+    });
+    source.addEventListener('heartbeat', () => { lastEventAt = Date.now(); });
+    source.addEventListener('error', (event) => {
+      lastEventAt = Date.now();
+      if (event?.data) { try { finish(new Error(JSON.parse(event.data).error || 'Agent event stream failed')); } catch { finish(new Error('Agent event stream failed')); } }
+    });
+    source.onerror = () => { if (source.readyState === EventSource.CLOSED) finish(new Error('Agent event stream closed')); };
+  });
+}
+
+async function followJob(initialJob, onJob) {
+  onJob(initialJob);
+  try { return await streamJobEvents(initialJob.id, onJob); }
+  catch {
+    let job = initialJob;
+    for (let attempt = 0; attempt < 7_200; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      job = (await request(`/api/jobs/${job.id}`)).job; onJob(job);
+      if (['completed', 'failed', 'cancelled'].includes(job.status)) return job;
+    }
+    throw new Error('Generation timed out');
+  }
+}
+
 async function monitorGeneration(id, initialJob, sessionId, notifyStages = true) {
   if (state.monitoringJobId === initialJob.id) return;
   state.monitoringJobId = initialJob.id;
   let job = initialJob; let lastStage = '';
   try {
-    state.activeJob = job; updateAgentRunStatus(job); updateConversationRun(job);
-    for (let attempt = 0; attempt < 1200; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      job = (await request(`/api/jobs/${job.id}`)).job;
-      state.activeJob = job; updateAgentRunStatus(job); updateConversationRun(job);
-      if (notifyStages && job.currentStage && job.currentStage !== lastStage) { lastStage = job.currentStage; showToast(`${job.currentModeLabel || job.currentMode} · ${job.currentStage}`); }
-      if (job.status === 'completed') break;
-      if (job.status === 'failed') throw new Error(job.error || 'Generation failed');
-    }
-    if (job.status !== 'completed') throw new Error('Generation timed out');
+    job = await followJob(job, (next) => { job = next; state.activeJob = job; updateAgentRunStatus(job); updateConversationRun(job); if (notifyStages && job.currentStage && job.currentStage !== lastStage) { lastStage = job.currentStage; showToast(`${job.currentModeLabel || job.currentMode} · ${job.currentStage}`); } });
+    if (job.status !== 'completed') throw new Error(job.error || 'Generation failed');
     const result = await request(`/api/projects/${id}`);
     state.projects = state.projects.map((project) => project.id === id ? result.project : project);
     state.activeProject = result.project; state.activeJob = null;
@@ -568,16 +603,8 @@ async function monitorConversation(id, initialJob, sessionId, notifyStages = tru
   state.monitoringJobId = initialJob.id;
   let job = initialJob; let lastStage = '';
   try {
-    state.activeJob = job; updateAgentRunStatus(job); updateConversationRun(job);
-    for (let attempt = 0; attempt < 1200; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      job = (await request(`/api/jobs/${job.id}`)).job;
-      state.activeJob = job; updateAgentRunStatus(job); updateConversationRun(job);
-      if (notifyStages && job.currentStage && job.currentStage !== lastStage) { lastStage = job.currentStage; showToast(`${job.currentModeLabel || job.currentMode} · ${job.currentStage}`); }
-      if (job.status === 'completed') break;
-      if (job.status === 'failed') throw new Error(job.error || 'Wiki refinement failed');
-    }
-    if (job.status !== 'completed') throw new Error('Wiki refinement timed out');
+    job = await followJob(job, (next) => { job = next; state.activeJob = job; updateAgentRunStatus(job); updateConversationRun(job); if (notifyStages && job.currentStage && job.currentStage !== lastStage) { lastStage = job.currentStage; showToast(`${job.currentModeLabel || job.currentMode} · ${job.currentStage}`); } });
+    if (job.status !== 'completed') throw new Error(job.error || 'Wiki refinement failed');
     state.activeJob = null; await loadProjects(); state.activeProject = state.projects.find((project) => project.id === id) || state.activeProject; state.activeArtifactId = state.activeProject?.artifacts?.[0]?.id || state.activeArtifactId; await loadAgentWorkspace(id, sessionId); showToast('Wiki and knowledge updated');
   } catch (error) {
     state.activeJob = null; showToast(error.message); await loadAgentWorkspace(id, sessionId).catch(() => {});

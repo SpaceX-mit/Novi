@@ -57,6 +57,33 @@ function send(res, status, body, headers = {}) {
   res.end(payload);
 }
 
+async function streamJobEvents(req, res, store, user, jobId) {
+  const initialJob = (await store.read()).jobs.find((item) => item.id === jobId && item.tenantId === user.tenantId);
+  if (!initialJob) return send(res, 404, { error: 'Job not found' });
+  const headers = {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  };
+  res.writeHead(200, { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer', ...headers });
+  let closed = false; let lastUpdatedAt = ''; let lastHeartbeat = Date.now();
+  const close = () => { closed = true; };
+  req.on('close', close);
+  const write = (event, payload) => {
+    if (!closed && !res.destroyed) res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+  };
+  while (!closed && !res.destroyed) {
+    const job = (await store.read()).jobs.find((item) => item.id === jobId && item.tenantId === user.tenantId);
+    if (!job) { write('error', { error: 'Job not found' }); break; }
+    if (job.updatedAt !== lastUpdatedAt) { lastUpdatedAt = job.updatedAt; write('job', { job }); }
+    if (Date.now() - lastHeartbeat >= 15_000) { write('heartbeat', { at: new Date().toISOString() }); lastHeartbeat = Date.now(); }
+    if (['completed', 'failed', 'cancelled'].includes(job.status)) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!res.destroyed) res.end();
+}
+
 async function jsonBody(req) {
   let body = '';
   for await (const chunk of req) {
@@ -993,6 +1020,8 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
   }
 
   const jobMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
+  const jobEventsMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)\/events$/);
+  if (req.method === 'GET' && jobEventsMatch) return streamJobEvents(req, res, store, user, decodeURIComponent(jobEventsMatch[1]));
   if (req.method === 'GET' && jobMatch) {
     const job = (await store.read()).jobs.find((item) => item.id === decodeURIComponent(jobMatch[1]) && item.tenantId === user.tenantId);
     return job ? send(res, 200, { job }) : send(res, 404, { error: 'Job not found' });
@@ -1142,7 +1171,7 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
         const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
         if (!session?.activeRun || session.activeRun.jobId !== syncRunId) return false;
         recordSessionRunEvent(state, session, event);
-        updateSessionRun(session, { currentStage: event.type === 'model-request' ? `${event.actor} sending` : `${event.actor} replied` }); return true;
+        updateSessionRun(session, { currentStage: event.type === 'model-request' ? `${event.actor} sending` : event.status === 'streaming' ? `${event.actor} streaming` : `${event.actor} replied` }); return true;
       });
       const referenceRetriever = sourceCharged ? async ({ query }) => {
         try {
@@ -1362,7 +1391,7 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       const job = (state.jobs || []).find((item) => item.id === jobId && item.status === 'running');
       if (!job) return false;
       recordRunEvent(state, job, event);
-      job.currentStage = event.type === 'model-request' ? `${event.actor} sending` : `${event.actor} replied`;
+      job.currentStage = event.type === 'model-request' ? `${event.actor} sending` : event.status === 'streaming' ? `${event.actor} streaming` : `${event.actor} replied`;
       job.updatedAt = new Date().toISOString();
       updateSessionRun(findAgentSession(state, job.sessionId, job.projectId, job.tenantId), { currentStage: job.currentStage, progress: job.progress });
       return true;

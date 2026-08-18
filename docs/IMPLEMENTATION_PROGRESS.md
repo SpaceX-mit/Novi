@@ -13,7 +13,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 | 范围 | 已实现内容 | 当前证据 |
 | --- | --- | --- |
 | 核心产品 | Knowledge Builder、Deep Research、Paper Author；成果版本、导出、Research/Knowledge/Writing/Review provenance | 默认测试与浏览器核心旅程覆盖 |
-| Web 与 API | 共享 REST API/UI、工作区、知识导入与检索、异步 Job/Agent 模式与阶段、来源刷新、成果历史、Provider/Tools/MCP/Skills/Plugins 设置、指标 | OpenAPI 3.1 契约共 47 paths / 59 operations；语法检查覆盖 49 modules |
+| Web 与 API | 共享 REST API/UI、工作区、知识导入与检索、异步 Job/Agent 模式与阶段、来源刷新、成果历史、Provider/Tools/MCP/Skills/Plugins 设置、指标、Job SSE 事件流 | OpenAPI 3.1 契约共 48 paths / 60 operations；语法检查覆盖 49 modules |
 | 账户与商业边界 | Cookie-only Web 会话、OIDC 边界、组织与 RBAC、配额、支付 provider 边界、审计与生命周期取消；本地开发租户每月 1000 次生成，生产/打包态自动收紧为 100 次 | 本地 HTTP/provider 契约和领域测试通过；登录账户套餐额度保持独立；未配置真实支付 provider 时明确返回 503，不创建模拟订单 |
 | 知识与生成 | 文本/Web/PDF/GitHub 导入、离线向量、RAG 上下文、来源连接器、Browser Agent/MCP 接口、Goal/专家角色/Knowledge System/System Document/LLM Wiki 生成、默认中文和 8 种生成语言、每版本 `llm-wiki.md`、连续更新 | 本地契约、集成和 desktop/mobile 浏览器 smoke 已覆盖；真实来源与多语言供应商质量仍需生产级人工核验 |
 | Agent Runtime | 意图路由的 Workflow、ReAct、Plan & Execute、Supervisor 四模式 LangGraph.js StateGraph；Goal Architect → Goal 驱动 Reference Discovery → Research/Knowledge/Writing/Review specialist → 必经 LLM Wiki Finalizer；Composer 与直接生成共享完整图，Composer 以前一成果和累计来源为基线；controller/阶段 fallback 可运行中切换模式，最多 8 个 Specialist 步骤；字段/形状校验、token、语言、参考 provenance、模式历史、计划和 Job 进度可追溯；运行事件记录模型请求/回复、Agent 路由和阶段 | 本地 OpenAI-compatible HTTP 验证四种成果模式、7 节点 Goal/Reference/专家协作/Finalizer、两轮累积来源与 Wiki refinement、检索失败退款、提前 finish 仍经 Finalizer、ReAct → Plan & Execute 运行中切换及工具循环；测试验证模型事件进入 Job/Session，Chromium 验证实时事件时间线和历史详情 |
@@ -27,7 +27,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 | Web/容器交付 | Web 本地运行、Docker 多阶段非 root 运行、健康与就绪检查 | Docker 镜像已构建并检查；最近记录的镜像为 `sha256:5af027f80df589bc4f7fe746e3464669576e6c5bf28a3b8fd3b9300f7f0e0cb1` |
 | Electron 构建兼容 | Node.js 商业开发基线设为 22.12+，`.nvmrc` 固定 22.22.2，desktop lifecycle 增加版本预检 | 已消除旧 Node 加载 `@noble/hashes` 时的 `ERR_REQUIRE_ESM` |
 | Linux 桌面制品 | electron-builder 配置、安全 BrowserWindow、Linux unpacked/AppImage 构建与打包态 smoke | AppImage 已生成；最近记录 SHA-256 为 `b956734a2233861e8feb160ae7941142bb87a80559217f33efd715f5a403016d` |
-| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 2026-08-18：85 passed + 1 PostgreSQL 条件跳过；49 个 JavaScript 模块语法通过；OpenAPI 47 paths / 59 operations；desktop/mobile 浏览器、Provider/存储契约和 release-check 通过；凭据形状扫描与 `git diff --check` 通过 |
+| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 2026-08-18：`npm test` 85 passed + 1 PostgreSQL 条件跳过；49 个 JavaScript 模块语法通过；OpenAPI 48 paths / 60 operations；browser smoke、Provider/存储契约和 release-check 通过；凭据形状扫描与 `git diff --check` 通过 |
 
 ## 未完成
 
@@ -74,6 +74,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 4. 在已配置的 GitHub 远程仓库运行持续集成门禁并归档结果；随后接入真实供应商/目标基础设施并关闭正式发布门禁。
 
 ## 更新记录
+
+- 2026-08-18：完成 Agent/LLM Wiki 流式预览闭环：LangGraph Specialist、Planner 和 ReAct/Supervisor Controller 改用 `model.stream()`，以同一模型事件 ID 持续写入 `streaming` 增量；阶段仍在流结束后聚合并执行 reasoning/fenced JSON 提取和字段/schema 校验，校验失败不会提交 Artifact/`llm-wiki.md`。新增首个有效 token、流式空闲和阶段总时长保护（`NOVI_LLM_TIMEOUT_MS`、`NOVI_LLM_STREAM_IDLE_TIMEOUT_MS`、`NOVI_LLM_STAGE_MAX_MS`）。新增 `GET /api/jobs/:id/events` SSE，Web Session 首选 SSE、断开后回退轮询；测试 mock provider 改为 OpenAI-compatible SSE，HTTP 测试验证 streaming/completed 事件、SSE 终态和 404 租户边界。验证：`npm test` 85 passed + 1 PostgreSQL 条件跳过，`npm run check` 49 modules，`npm run openapi-check` 48 paths / 60 operations，browser smoke、release-check、凭据形状扫描和 `git diff --check` 通过。真实供应商流式兼容性和长时网络行为仍需外部账号验收。
 
 - 2026-08-18：修复 MiniMax M3 明明返回内容却全阶段 fallback 的问题。真实本地事件证明响应包含 `<think>...</think>` + fenced JSON，旧解析器会把推理文本和最终 JSON 拼在一起，且 Goal 返回完整草稿时因阶段外字段触发 schema fallback；另有长响应在 45 秒被中止。Runtime 现在去除 reasoning block、优先解析 JSON code fence、用字符串感知的平衡括号提取对象，并只合入当前阶段拥有且通过 schema 的字段；收到响应后的解析/校验失败明确记为 `LLM response rejected`，网络/超时才记为 `LLM request failed`。默认 `NOVI_LLM_TIMEOUT_MS` 提高为 90000（仍上限 120000）。新增 reasoning-wrapped 回归，确认各 Specialist 和 Finalizer 全部 completed 且内容确实采用模型输出。验证：`npm test` 85 passed + 1 PostgreSQL 条件跳过。真实供应商复测仍需用户用已轮换的 Key 重新 Generate；历史 fallback Artifact 保持不可变。
 

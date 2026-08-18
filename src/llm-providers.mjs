@@ -32,6 +32,16 @@ function configuredTimeout() {
   return Number.isFinite(value) ? Math.min(Math.max(value, 1_000), 120_000) : 90_000;
 }
 
+function configuredStreamIdleTimeout() {
+  const value = Number(process.env.NOVI_LLM_STREAM_IDLE_TIMEOUT_MS || 30_000);
+  return Number.isFinite(value) ? Math.min(Math.max(value, 5_000), 120_000) : 30_000;
+}
+
+function configuredStageMaxDuration() {
+  const value = Number(process.env.NOVI_LLM_STAGE_MAX_MS || 600_000);
+  return Number.isFinite(value) ? Math.min(Math.max(value, 60_000), 1_800_000) : 600_000;
+}
+
 function configuredMaxOutputTokens() {
   const value = Number(process.env.NOVI_LLM_MAX_OUTPUT_TOKENS || 8_192);
   return Number.isFinite(value) ? Math.min(Math.max(value, 512), 32_768) : 8_192;
@@ -178,4 +188,4 @@ export async function testProviderConnection(config) {
   return { ok: true, provider: config.provider, model: config.model, latencyMs: Date.now() - started };
 }
 
-export { configuredTimeout, messageText };
+export { configuredStageMaxDuration, configuredStreamIdleTimeout, configuredTimeout, messageText };

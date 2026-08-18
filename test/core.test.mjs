@@ -44,6 +44,30 @@ import * as z from 'zod/v4';
 
 const fixtureDnsLookup = async (hostname) => [{ address: hostname === '127.0.0.1' ? '127.0.0.1' : '93.184.216.34', family: 4 }];
 
+async function sendOpenAiChat(res, request, content, { id = 'test-chat', model = 'test-model', usage = { prompt_tokens: 5, completion_tokens: 3 }, delayMs = 0 } = {}) {
+  if (request.stream) {
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+    const chunks = String(content).match(/[\s\S]{1,96}/g) || [''];
+    for (const chunk of chunks) {
+      res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }] })}\n\n`);
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage })}\n\n`);
+    res.end('data: [DONE]\n\n');
+    return;
+  }
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ id, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage }));
+}
+
+function parseSseEvents(body) {
+  return String(body).split(/\n\n/u).map((block) => {
+    const event = block.match(/^event: (.+)$/mu)?.[1];
+    const data = block.match(/^data: (.+)$/mu)?.[1];
+    return event && data ? { event, data: JSON.parse(data) } : null;
+  }).filter(Boolean);
+}
+
 test('engine generates complete artifacts for all product paths', () => {
   const base = { id: 'p', title: 'Agent OS', topic: 'Agent OS security', description: 'Study threat models' };
   const knowledgeContext = [{ id: 'chunk-1', documentId: 'document-1', document: 'Private security notes', sourceUrl: 'https://example.com/notes', text: 'Sandbox boundaries must be tested under adversarial workloads.', score: 0.82 }];
@@ -184,8 +208,7 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
       const key = Object.keys(editable)[0]; content = JSON.stringify(key ? { [key]: editable[key] } : {});
     }
     calls.push({ system, prompt, content });
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id: `adaptive-${calls.length}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } }));
+    await sendOpenAiChat(res, request, content, { id: `adaptive-${calls.length}`, model: 'test-model', usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } });
   });
   await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
   t.after(() => modelServer.close());
@@ -222,7 +245,10 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
   assert.deepEqual(early.stages.map((stage) => stage.id), ['goal', 'references', 'research', 'finalizer']);
   assert.equal(early.content.llmWiki.sections.length, early.content.wikiSections.length);
   assert.ok(modelEvents.some((event) => event.type === 'model-request' && event.request?.user.includes('Run in workflow')));
-  assert.ok(modelEvents.some((event) => event.type === 'model-response' && event.response));
+  assert.ok(modelEvents.some((event) => event.type === 'model-response' && event.status === 'streaming' && event.response));
+  assert.ok(modelEvents.some((event) => event.type === 'model-response' && event.status === 'completed' && event.response));
+  const streamedResponse = modelEvents.find((event) => event.type === 'model-response' && event.status === 'streaming');
+  assert.ok(modelEvents.some((event) => event.id === streamedResponse.id && event.status === 'completed'));
 });
 
 test('LangGraph accepts reasoning-wrapped fenced JSON without falling back to offline content', async (t) => {
@@ -235,8 +261,7 @@ test('LangGraph accepts reasoning-wrapped fenced JSON without falling back to of
     const editable = line ? JSON.parse(line.slice(marker.length)) : {};
     if (editable.expertGoal) editable.expertGoal.outcome = 'MiniMax reasoning response accepted.';
     const content = `<think>Private reasoning with a decoy {"ignore":true} must not be parsed.</think>\n\`\`\`json\n${JSON.stringify({ ...editable, unownedField: 'ignored by stage schema' })}\n\`\`\``;
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id: 'reasoning-json', object: 'chat.completion', created: 1, model: 'reasoning-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }] }));
+    await sendOpenAiChat(res, request, content, { id: 'reasoning-json', model: 'reasoning-model', usage: { prompt_tokens: 5, completion_tokens: 3 } });
   });
   await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
   t.after(() => modelServer.close());
@@ -431,8 +456,7 @@ test('ReAct, Plan and Supervisor execute bounded Agent tool observations', async
     } else {
       const marker = 'Editable schema and current draft: '; const line = prompt.split('\n').find((value) => value.startsWith(marker)); const editable = line ? JSON.parse(line.slice(marker.length)) : {}; const key = Object.keys(editable)[0]; content = JSON.stringify(key ? { [key]: editable[key] } : {});
     }
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id: 'tool-loop', object: 'chat.completion', created: 1, model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }] }));
+    await sendOpenAiChat(res, request, content, { id: 'tool-loop', model: 'test-model' });
   });
   await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve)); t.after(() => modelServer.close());
   const project = { id: 'tool-loop-project', tenantId: 'tenant', title: 'Tool loop', topic: 'Agent tools', type: 'knowledge' }; const fallback = generateArtifact(project);
@@ -491,8 +515,7 @@ test('Web-configured provider runs the Goal, expert collaboration, and Wiki fina
       else content = JSON.stringify({ [key]: editable[key] });
       modelCalls += 1;
     }
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id: `call-${modelCalls}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 } }));
+    await sendOpenAiChat(res, request, content, { id: `call-${modelCalls}`, model: 'test-model', usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 }, delayMs: 20 });
   });
   await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
   const server = createServer(); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -514,9 +537,13 @@ test('Web-configured provider runs the Goal, expert collaboration, and Wiki fina
   const created = await response.json(); const project = created.project; const initialSession = created.session;
   assert.equal(initialSession.messages.length, 1); assert.equal(initialSession.messages[0].kind, 'welcome');
   response = await fetch(`${base}/api/projects/${project.id}/generate?async=true`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: 'Generate a systematic review artifact', mode: 'auto', sessionId: initialSession.id }) }); assert.equal(response.status, 202); const queued = await response.json(); const jobId = queued.job.id; assert.equal(queued.sessionId, initialSession.id);
-  let job;
-  for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 30)); job = (await (await fetch(`${base}/api/jobs/${jobId}`)).json()).job; if (job.status !== 'queued' && job.status !== 'running') break; }
-  assert.equal(job.status, 'completed'); assert.equal(job.currentMode, 'workflow'); assert.equal(job.currentModeLabel, 'Workflow'); assert.equal(job.language, 'zh-CN'); assert.equal(job.agentStages.length, 7); assert.deepEqual(job.agentStages.map((stage) => stage.id), ['goal', 'references', 'research', 'knowledge', 'writing', 'review', 'finalizer']); assert.equal(job.agentStages.find((stage) => stage.id === 'references').status, 'offline'); assert.ok(job.agentStages.filter((stage) => stage.id !== 'references').every((stage) => stage.status === 'completed')); assert.equal(job.activeSkills[0].name, 'systematic_review'); assert.equal(job.activePlugins[0].name, 'paper_quality');
+  response = await fetch(`${base}/api/jobs/${jobId}/events`); assert.equal(response.status, 200); assert.match(response.headers.get('content-type'), /^text\/event-stream/u);
+  const streamedJobs = parseSseEvents(await response.text()).filter((event) => event.event === 'job').map((event) => event.data.job);
+  assert.ok(streamedJobs.length >= 1); const job = streamedJobs.at(-1); assert.equal(job.status, 'completed');
+  response = await fetch(`${base}/api/jobs/missing-job/events`); assert.equal(response.status, 404);
+  assert.equal(job.currentMode, 'workflow'); assert.equal(job.currentModeLabel, 'Workflow'); assert.equal(job.language, 'zh-CN'); assert.equal(job.agentStages.length, 7); assert.deepEqual(job.agentStages.map((stage) => stage.id), ['goal', 'references', 'research', 'knowledge', 'writing', 'review', 'finalizer']); assert.equal(job.agentStages.find((stage) => stage.id === 'references').status, 'offline'); assert.ok(job.agentStages.filter((stage) => stage.id !== 'references').every((stage) => stage.status === 'completed')); assert.equal(job.activeSkills[0].name, 'systematic_review'); assert.equal(job.activePlugins[0].name, 'paper_quality');
+  assert.ok(streamedJobs.some((item) => (item.runEvents || []).some((event) => event.type === 'model-response' && event.status === 'streaming')));
+  assert.ok(job.runEvents.some((event) => event.type === 'model-response' && event.status === 'completed'));
   assert.equal(job.expertGoal.outcome, 'Provider-defined expert outcome.'); assert.match(job.referenceDiscovery.query, /Provider-defined expert outcome/); assert.equal(job.referenceDiscovery.status, 'offline');
   const generated = await (await fetch(`${base}/api/projects/${project.id}`)).json(); const artifact = generated.project.artifacts[0];
   assert.equal(modelCalls, 6); assert.equal(skillPromptSeen, true); assert.equal(pluginPromptSeen, true); assert.equal(languagePromptSeen, true); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.version, 5); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.equal(artifact.workflow.runtime.language, 'zh-CN'); assert.equal(artifact.workflow.runtime.skills[0].name, 'systematic_review'); assert.equal(artifact.workflow.runtime.plugins[0].name, 'paper_quality'); assert.equal('instructions' in artifact.workflow.runtime.skills[0], false); assert.equal('instructions' in artifact.workflow.runtime.plugins[0], false); assert.equal(artifact.workflow.agents.find((agent) => agent.id === 'references').status, 'offline');
@@ -546,7 +573,7 @@ test('async Agent generation persists tool provenance in Job, Session, and Artif
     } else {
       const marker = 'Editable schema and current draft: '; const line = prompt.split('\n').find((value) => value.startsWith(marker)); const editable = line ? JSON.parse(line.slice(marker.length)) : {}; const key = Object.keys(editable)[0]; content = JSON.stringify(key ? { [key]: editable[key] } : {});
     }
-    res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ id: 'tool-provenance', object: 'chat.completion', created: 1, model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }] }));
+    await sendOpenAiChat(res, request, content, { id: 'tool-provenance', model: 'test-model' });
   });
   await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
   const server = createServer(); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -583,8 +610,7 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
         content = JSON.stringify({ llmWiki: { ...editable.llmWiki, summary: `${editable.llmWiki.summary} Provider-refined Wiki.` } });
       } else content = JSON.stringify({ [key]: editable[key] });
     }
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id: 'agent-chat', object: 'chat.completion', created: 1, model: 'test-chat-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 10 } }));
+    await sendOpenAiChat(res, request, content, { id: 'agent-chat', model: 'test-chat-model', usage: { prompt_tokens: 20, completion_tokens: 10 } });
   });
   await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
   const server = createServer({ searchKnowledgeSources: async (query) => {

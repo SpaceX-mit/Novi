@@ -291,6 +291,15 @@ paths:
     get:
       parameters: [ { $ref: '#/components/parameters/JobId' } ]
       responses: { '200': { description: Job status } }
+  /api/jobs/{id}/events:
+    get:
+      parameters: [ { $ref: '#/components/parameters/JobId' } ]
+      responses:
+        '200':
+          description: Server-sent Job and Agent run event stream
+          content:
+            text/event-stream: { schema: { type: string } }
+        '404': { description: Job not found }
   /api/agent/modes:
     get:
       responses:

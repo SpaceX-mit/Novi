@@ -13,11 +13,26 @@ const viewportHeight = Number(process.env.NOVI_BROWSER_HEIGHT || 900);
 const dataDir = await mkdtemp(join(tmpdir(), 'novi-browser-'));
 const previous = { auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER, refresh: process.env.NOVI_REFRESH_WORKER, verify: process.env.NOVI_VERIFY_SOURCES, file: process.env.NOVI_DATA_FILE };
 process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_JOB_WORKER = 'true'; process.env.NOVI_REFRESH_WORKER = 'false'; process.env.NOVI_VERIFY_SOURCES = 'false'; process.env.NOVI_DATA_FILE = join(dataDir, 'state.json');
-const modelServer = http.createServer(async (req, res) => {
-  for await (const _chunk of req) { /* consume request */ }
-  await new Promise((resolve) => setTimeout(resolve, 150));
+async function sendOpenAiChat(res, request, content) {
+  const id = 'browser-chat'; const model = 'browser-chat'; const usage = { prompt_tokens: 10, completion_tokens: 8 };
+  if (request.stream) {
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+    for (const chunk of String(content).match(/[\s\S]{1,24}/g) || ['']) {
+      res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }] })}\n\n`);
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    }
+    res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage })}\n\n`);
+    res.end('data: [DONE]\n\n');
+    return;
+  }
   res.writeHead(200, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ id: 'browser-chat', object: 'chat.completion', created: 1, model: 'browser-chat', choices: [{ index: 0, message: { role: 'assistant', content: 'Browser Harness response from the configured LLM.' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 8 } }));
+  res.end(JSON.stringify({ id, object: 'chat.completion', created: 1, model, choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage }));
+}
+const modelServer = http.createServer(async (req, res) => {
+  let body = ''; for await (const chunk of req) body += chunk;
+  const request = JSON.parse(body);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  await sendOpenAiChat(res, request, 'Browser Harness response from the configured LLM.');
 });
 await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
 const server = createServer();
@@ -99,9 +114,9 @@ try {
   const chatProvider = await evaluate(`fetch('/api/llm/provider', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'custom', model: 'browser-chat', baseUrl: ${JSON.stringify(`http://127.0.0.1:${modelServer.address().port}/v1`)}, apiKey: 'fixture' }) }).then(async (response) => ({ status: response.status, body: await response.json() }))`);
   if (chatProvider.status !== 200) throw new Error(`Browser chat provider setup failed: ${JSON.stringify(chatProvider)}`);
   await evaluate(`(() => { const prompt = document.querySelector('#agent-prompt'); const mode = document.querySelector('#agent-mode'); prompt.value = 'Research authoritative sources and improve this Wiki'; prompt.dispatchEvent(new Event('input', { bubbles: true })); mode.value = 'workflow'; mode.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('#agent-composer').requestSubmit(); })()`);
-  await waitFor(`document.querySelector('.live-events .run-event') !== null`, 15_000);
-  const liveTrace = await evaluate(`({ events: document.querySelectorAll('.live-events .run-event').length, request: document.querySelector('.live-events').textContent.includes('Request sent to LLM') })`);
-  if (liveTrace.events < 2 || !liveTrace.request) throw new Error(`Live Agent run timeline is incomplete: ${JSON.stringify(liveTrace)}`);
+  await waitFor(`document.querySelector('.live-events .run-event') !== null && document.querySelector('.live-events').textContent.includes('streaming')`, 15_000);
+  const liveTrace = await evaluate(`({ events: document.querySelectorAll('.live-events .run-event').length, request: document.querySelector('.live-events').textContent.includes('Request sent to LLM'), streaming: document.querySelector('.live-events').textContent.includes('streaming') })`);
+  if (liveTrace.events < 2 || !liveTrace.request || !liveTrace.streaming) throw new Error(`Live Agent run timeline is incomplete: ${JSON.stringify(liveTrace)}`);
   await waitFor(`document.querySelectorAll('.agent-message').length === 3 && document.querySelector('.message-artifact') !== null`, 15_000);
   const conversationUi = await evaluate(`(async () => { const projects = await (await fetch('/api/projects')).json(); const project = projects.projects.find((item) => item.title === 'Browser smoke workspace'); const knowledge = await (await fetch('/api/projects/' + encodeURIComponent(project.id) + '/knowledge')).json(); const last = document.querySelector('.agent-message:last-child'); return { artifacts: project.artifacts.length, artifactLinks: document.querySelectorAll('.message-artifact').length, lastKind: last.className, wikiDocuments: knowledge.documents.filter((document) => document.sourceKind === 'agent-wiki').length, runEvents: last.querySelectorAll('.run-event').length, trace: last.textContent, details: [...last.querySelectorAll('.run-event pre')].map((node) => node.textContent).join('\\n') }; })()`);
   if (conversationUi.artifacts !== 1 || conversationUi.artifactLinks !== 1 || !conversationUi.lastKind.includes('artifact') || conversationUi.wikiDocuments !== 1 || conversationUi.runEvents < 10 || !conversationUi.trace.includes('LLM response') || !conversationUi.trace.includes('Artifact saved') || !conversationUi.details.includes('Browser Harness response')) throw new Error(`Composer did not create an auditable cumulative Wiki artifact: ${JSON.stringify(conversationUi)}`);

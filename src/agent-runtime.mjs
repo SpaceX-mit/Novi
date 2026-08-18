@@ -1,5 +1,5 @@
 import { Annotation, END, MemorySaver, START, StateGraph } from '@langchain/langgraph';
-import { configuredTimeout, createChatModel, messageText } from './llm-providers.mjs';
+import { configuredStageMaxDuration, configuredStreamIdleTimeout, configuredTimeout, createChatModel, messageText } from './llm-providers.mjs';
 import { allowedAgentMode, publicMode, selectAgentMode, validateRequestedMode } from './agent-modes.mjs';
 import { toolDefinitionFor } from './agent-tools.mjs';
 import { skillPrompt, skillProvenance } from './skill-runtime.mjs';
@@ -186,6 +186,74 @@ function usageFor(response) {
   };
 }
 
+function reasoningText(message) {
+  const value = message?.additional_kwargs?.reasoning_content ?? message?.response_metadata?.reasoning_content;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map((part) => typeof part === 'string' ? part : part?.text || '').join('');
+  return '';
+}
+
+function streamTimeout(message, code) {
+  return Object.assign(new Error(message), { code });
+}
+
+async function nextStreamChunk(iterator, timeoutMs, controller, message, code) {
+  let timer;
+  try {
+    return await Promise.race([
+      iterator.next(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(streamTimeout(message, code));
+        }, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
+async function streamModelResponse(model, messages, onDelta) {
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const maxDuration = configuredStageMaxDuration();
+  let output = ''; let reasoning = ''; let usage = { inputTokens: 0, outputTokens: 0 }; let firstChunk = true;
+  const firstTokenDeadline = startedAt + configuredTimeout(); let lastMeaningfulAt = startedAt;
+  let lastEmittedAt = 0; let lastEmittedLength = 0;
+  const preview = () => `${reasoning ? `<think>${reasoning}</think>\n` : ''}${output}`;
+  const emit = async (force = false) => {
+    const text = preview(); const current = Date.now();
+    if (!text || !onDelta || !force && lastEmittedAt && current - lastEmittedAt < 500 && text.length - lastEmittedLength < 512) return;
+    await onDelta({ text, usage, firstChunk: lastEmittedAt === 0 });
+    lastEmittedAt = current; lastEmittedLength = text.length;
+  };
+  try {
+    const stream = await model.stream(messages, { signal: controller.signal });
+    const iterator = stream[Symbol.asyncIterator]();
+    while (true) {
+      const remaining = maxDuration - (Date.now() - startedAt);
+      if (remaining <= 0) throw streamTimeout('LLM stage exceeded its maximum streaming duration', 'LLM_STAGE_TIMEOUT');
+      const deadline = firstChunk ? firstTokenDeadline : lastMeaningfulAt + configuredStreamIdleTimeout();
+      const wait = Math.min(Math.max(1, deadline - Date.now()), remaining);
+      const next = await nextStreamChunk(iterator, wait, controller, firstChunk ? 'LLM did not return a first stream chunk in time' : 'LLM stream became idle', firstChunk ? 'LLM_FIRST_TOKEN_TIMEOUT' : 'LLM_STREAM_IDLE_TIMEOUT');
+      if (next.done) break;
+      const outputDelta = messageText(next.value); const reasoningDelta = reasoningText(next.value);
+      if (reasoningDelta) reasoning += reasoningDelta;
+      if (outputDelta) output += outputDelta;
+      const chunkUsage = usageFor(next.value);
+      if (chunkUsage.inputTokens || chunkUsage.outputTokens) usage = chunkUsage;
+      if (outputDelta || reasoningDelta) {
+        firstChunk = false;
+        lastMeaningfulAt = Date.now();
+        await emit(lastEmittedAt === 0);
+      }
+    }
+    if (!output && !reasoning) throw Object.assign(new Error('LLM returned an empty streamed response'), { code: 'LLM_RESPONSE_INVALID' });
+    await emit(true);
+    return { content: preview(), usage_metadata: { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens } };
+  } finally { controller.abort(); }
+}
+
 function boundedSources(sources) {
   return (sources || []).slice(0, 12).map((source) => ({ name: source.name, kind: source.kind, url: source.url, publishedAt: source.publishedAt, snippet: String(source.snippet || '').slice(0, 1_000), verified: source.verified === true || source.mapped === true }));
 }
@@ -266,10 +334,13 @@ function stageNode(stage, model, config, onStage, onModel) {
     let responseReceived = false;
     try {
       await notifyModel(onModel, { id: `${modelEventId}:request`, type: 'model-request', actor: name, title: 'Request sent to LLM', status: 'sent', stageId: stage.id, mode: state.activeMode, provider: config.provider, model: config.model, request: { system: safeModelText(systemPrompt, config.apiKey), user: safeModelText(userPrompt, config.apiKey) }, createdAt: startedAt });
-      const response = await model.invoke([
+      const response = await streamModelResponse(model, [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
-      ], { signal: AbortSignal.timeout(configuredTimeout()) });
+      ], async ({ text, usage }) => {
+        responseReceived = true;
+        await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'LLM streaming', status: 'streaming', stageId: stage.id, mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(text, config.apiKey), usage, createdAt: new Date().toISOString() });
+      });
       responseReceived = true;
       await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'LLM response', status: 'completed', stageId: stage.id, mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(messageText(response), config.apiKey), usage: usageFor(response), createdAt: new Date().toISOString() });
       const candidate = parseJsonResponse(response);
@@ -409,10 +480,13 @@ function plannerNode(model, config, onMode, onModel) {
     let responseReceived = false;
     try {
       await notifyModel(onModel, { id: `${modelEventId}:request`, type: 'model-request', actor: 'Planner', title: 'Plan request sent to LLM', status: 'sent', stageId: 'planner', mode: 'plan-execute', provider: config.provider, model: config.model, request: { system: safeModelText(systemPrompt, config.apiKey), user: safeModelText(userPrompt, config.apiKey) }, createdAt: startedAt });
-      const response = await model.invoke([
+      const response = await streamModelResponse(model, [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
-      ], { signal: AbortSignal.timeout(configuredTimeout()) });
+      ], async ({ text, usage }) => {
+        responseReceived = true;
+        await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'Planner streaming', status: 'streaming', stageId: 'planner', mode: 'plan-execute', provider: config.provider, model: config.model, response: safeModelText(text, config.apiKey), usage, createdAt: new Date().toISOString() });
+      });
       responseReceived = true;
       await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'Planner response', status: 'completed', stageId: 'planner', mode: 'plan-execute', provider: config.provider, model: config.model, response: safeModelText(messageText(response), config.apiKey), usage: usageFor(response), createdAt: new Date().toISOString() });
       const candidate = parseJsonResponse(response);
@@ -446,10 +520,13 @@ function controllerNode(kind, model, config, onMode, onModel) {
     let responseReceived = false;
     try {
       await notifyModel(onModel, { id: `${modelEventId}:request`, type: 'model-request', actor: kind === 'react' ? 'ReAct controller' : 'Supervisor', title: 'Control request sent to LLM', status: 'sent', stageId: `${kind}-controller`, mode: kind, provider: config.provider, model: config.model, request: { system: safeModelText(systemPrompt, config.apiKey), user: safeModelText(userPrompt, config.apiKey) }, createdAt: startedAt });
-      const response = await model.invoke([
+      const response = await streamModelResponse(model, [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
-      ], { signal: AbortSignal.timeout(configuredTimeout()) });
+      ], async ({ text, usage }) => {
+        responseReceived = true;
+        await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'Controller streaming', status: 'streaming', stageId: `${kind}-controller`, mode: kind, provider: config.provider, model: config.model, response: safeModelText(text, config.apiKey), usage, createdAt: new Date().toISOString() });
+      });
       responseReceived = true;
       await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'Controller response', status: 'completed', stageId: `${kind}-controller`, mode: kind, provider: config.provider, model: config.model, response: safeModelText(messageText(response), config.apiKey), usage: usageFor(response), createdAt: new Date().toISOString() });
       const candidate = parseJsonResponse(response);
