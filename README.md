@@ -61,6 +61,8 @@ Web 中保存的租户配置优先于 `NOVI_LLM_BASE_URL`、`NOVI_LLM_API_KEY`�
 
 `memory` 提供项目内持久的 `remember`、`recall`、`forget` 动作，最多保存 200 条、单条最多 20000 字符，并随账户导出、备份恢复和项目删除生命周期处理。`skills_list` 返回组织 Skill 摘要但不泄露完整指令，`skill_view` 查看指定 Skill，`skill_manage` 支持 create/update/enable/disable/delete；四项工具默认关闭，其中 `skill_manage` 即使被启用也会在每次调用时再次要求 owner/admin 身份并写入审计。
 
+`terminal` 和 `exec` 同样默认关闭，除管理员在 Tools 中启用外，服务进程还必须设置 `NOVI_AGENT_EXEC_ENABLED=true`。每次调用将当前项目的虚拟文件树复制到独立临时目录：`terminal` 运行受 `NOVI_AGENT_EXEC_ALLOWED` 约束的一次性 shell 命令，`exec` 使用无 shell 的 program 与 JSON 字符串参数数组；默认 10 秒、最多 30 秒，stdout+stderr 最多 64 KB，最多回写 500 个、总计 2 MB、单个 200 KB 的纯文本文件，符号链接和二进制文件拒绝持久化。子进程只获得最小环境，不继承 Provider、支付或其他应用密钥。该边界不是容器、VM、seccomp 或网络沙箱；生产环境应保持关闭，或只在额外的 OS/容器隔离执行节点中显式启用。
+
 组织 owner/admin 可在 `Customize → Skills` 创建最多 20 个租户级 playbook。每个 Skill 包含稳定名称、用途说明、最多 4000 字符的指令、Knowledge Builder/Deep Research/Paper Author 产品范围，以及 `Always for product scope` 或按触发词匹配的激活方式；用户也可在生成提示中用 `/skill skill_name` 显式激活。每次运行最多应用 3 个 Skill，优先级为显式指令、always、触发词匹配。
 
 Skill 只在已配置 Web LLM Provider 的 LangGraph 运行中生效；完全离线的确定性生成不会伪装成已应用 Skill。Skill 指令会进入 Planner、ReAct/Supervisor controller 和 Research/Knowledge/Writing/Review prompt，但始终低于 Novi 的安全与数据边界：不能增加工具权限、添加来源、绕过字段 schema 或把 observation 变成 evidence。实际选择结果写入异步 Job、Session 和 Artifact，只固化 Skill 元数据、匹配原因与指令 SHA-256，不复制完整指令到成果 provenance。配置 API 为 `GET/PUT /api/agent/skills`；所有组织成员可审查会影响成果的指令，只有 owner/admin 可修改。

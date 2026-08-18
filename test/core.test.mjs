@@ -308,9 +308,9 @@ test('Agent Plugins compose only existing Skills and authorized tools', () => {
 
 test('Agent tools validate, encrypt, execute, and remain tenant/project scoped', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'novi-agent-tools-'));
-  const previous = { file: process.env.NOVI_DATA_FILE, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY, hosts: process.env.NOVI_TOOL_ALLOWED_HOSTS };
-  process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-agent-tool-encryption-key-32-characters'; process.env.NOVI_TOOL_ALLOWED_HOSTS = 'tools.example.com';
-  t.after(() => { for (const [key, value] of Object.entries(previous)) { const env = { file: 'NOVI_DATA_FILE', encryption: 'NOVI_CONFIG_ENCRYPTION_KEY', hosts: 'NOVI_TOOL_ALLOWED_HOSTS' }[key]; if (value === undefined) delete process.env[env]; else process.env[env] = value; } });
+  const previous = { file: process.env.NOVI_DATA_FILE, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY, hosts: process.env.NOVI_TOOL_ALLOWED_HOSTS, exec: process.env.NOVI_AGENT_EXEC_ENABLED };
+  process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-agent-tool-encryption-key-32-characters'; process.env.NOVI_TOOL_ALLOWED_HOSTS = 'tools.example.com'; process.env.NOVI_AGENT_EXEC_ENABLED = 'true';
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { const env = { file: 'NOVI_DATA_FILE', encryption: 'NOVI_CONFIG_ENCRYPTION_KEY', hosts: 'NOVI_TOOL_ALLOWED_HOSTS', exec: 'NOVI_AGENT_EXEC_ENABLED' }[key]; if (value === undefined) delete process.env[env]; else process.env[env] = value; } });
   const state = { agentToolConfigs: [] };
   const schema = { type: 'object', additionalProperties: false, properties: { query: { type: 'string', maxLength: 100 } }, required: ['query'] };
   await assert.rejects(() => saveToolSettings(state, 'tenant', 'owner', { customTools: [{ name: 'blocked_tool', description: 'Blocked', endpoint: 'https://blocked.example/invoke', inputSchema: schema }] }), /NOVI_TOOL_ALLOWED_HOSTS/);
@@ -318,7 +318,7 @@ test('Agent tools validate, encrypt, execute, and remain tenant/project scoped',
   assert.equal(saved.customTools[0].hasBearerToken, true); assert.equal('encryptedBearerToken' in saved.customTools[0], false);
   assert.doesNotMatch(state.agentToolConfigs[0].customTools[0].encryptedBearerToken, /custom-secret-token/);
   const tools = await resolvedTools(state, 'tenant'); assert.equal(tools.find((tool) => tool.name === 'domain_lookup').bearerToken, 'custom-secret-token');
-  assert.deepEqual(publicToolSettings({ agentToolConfigs: [] }, 'tenant').builtins.map((tool) => [tool.name, tool.enabled]), [['workspace_read', true], ['workspace_write', false], ['read_file', false], ['search_files', false], ['write_file', false], ['patch', false], ['memory', false], ['skills_list', false], ['skill_view', false], ['skill_manage', false], ['web_search', true], ['paper_search', true], ['paper_fetch', true]]);
+  assert.deepEqual(publicToolSettings({ agentToolConfigs: [] }, 'tenant').builtins.map((tool) => [tool.name, tool.enabled]), [['workspace_read', true], ['workspace_write', false], ['read_file', false], ['search_files', false], ['write_file', false], ['patch', false], ['memory', false], ['skills_list', false], ['skill_view', false], ['skill_manage', false], ['terminal', false], ['exec', false], ['web_search', true], ['paper_search', true], ['paper_fetch', true]]);
 
   const store = new JsonStore(process.env.NOVI_DATA_FILE);
   const project = await store.createProject({ title: 'Tool project', topic: 'Tool runtime', type: 'knowledge' });
@@ -349,6 +349,10 @@ test('Agent tools validate, encrypt, execute, and remain tenant/project scoped',
   const viewerExecutor = createToolExecutor({ store, project, principal: { id: 'viewer-user', tenantId: 'local', role: 'viewer' } });
   await assert.rejects(() => viewerExecutor(fileDefinition('skill_manage'), { action: 'delete', name: 'runtime_review' }), /owner or admin/);
   const forgotten = await fileWriter(fileDefinition('memory'), { action: 'forget', key: 'review-policy' }); assert.equal(forgotten.result.forgotten, true);
+  const terminal = await fileWriter(fileDefinition('terminal'), { command: "printf 'terminal result' > generated.txt && cat generated.txt", timeoutMs: 5000 }); assert.equal(terminal.result.exitCode, 0); assert.match(terminal.result.stdout, /terminal result/); assert.ok(terminal.result.files.includes('generated.txt'));
+  const generated = await fileWriter(fileDefinition('read_file'), { path: 'generated.txt' }); assert.equal(generated.result.content, 'terminal result');
+  const executed = await fileWriter(fileDefinition('exec'), { program: 'node', args: '["-e","console.log(\\"exec result\\")"]', timeoutMs: 5000 }); assert.equal(executed.result.exitCode, 0); assert.match(executed.result.stdout, /exec result/);
+  process.env.NOVI_AGENT_EXEC_ENABLED = 'false'; await assert.rejects(() => fileWriter(fileDefinition('exec'), { program: 'node', args: '[]' }), /NOVI_AGENT_EXEC_ENABLED/); process.env.NOVI_AGENT_EXEC_ENABLED = 'true';
   const oversizedExecutor = createToolExecutor({ store, project, principal: { id: 'local', tenantId: 'local' }, fetchImpl: async () => new Response('x'.repeat(32 * 1024 + 1), { status: 200 }) });
   await assert.rejects(() => oversizedExecutor(tools.find((tool) => tool.name === 'domain_lookup'), { query: 'runtime' }), /exceeds 32 KB/);
 });

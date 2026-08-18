@@ -9,6 +9,7 @@ import { invokeMcpTool } from './mcp-runtime.mjs';
 import { fetchPaper } from './paper-tools.mjs';
 import { publicSkillSettings, saveSkillSettings } from './skill-runtime.mjs';
 import { can, roleFor } from './rbac.mjs';
+import { executeWorkspaceCommand } from './agent-exec-tools.mjs';
 
 const BUILTIN_TOOLS = Object.freeze([
   { name: 'workspace_read', label: 'Workspace read', description: 'Retrieve relevant passages from documents in the current workspace.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 500 }, limit: { type: 'number' } } } },
@@ -21,6 +22,8 @@ const BUILTIN_TOOLS = Object.freeze([
   { name: 'skills_list', label: 'Skills list', description: 'List organization Skills visible to this Agent.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: [], properties: { enabledOnly: { type: 'boolean' } } } },
   { name: 'skill_view', label: 'Skill view', description: 'View one organization Skill and its bounded instructions.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['name'], properties: { name: { type: 'string', maxLength: 48 } } } },
   { name: 'skill_manage', label: 'Skill manage', description: 'Create, update, enable, disable, or delete an organization Skill. Requires owner/admin.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['action', 'name'], properties: { action: { type: 'string', maxLength: 20 }, name: { type: 'string', maxLength: 48 }, title: { type: 'string', maxLength: 80 }, description: { type: 'string', maxLength: 500 }, instructions: { type: 'string', maxLength: 4000 }, activation: { type: 'string', maxLength: 20 }, productTypes: { type: 'string', maxLength: 200 }, triggerTerms: { type: 'string', maxLength: 1000 }, enabled: { type: 'boolean' } } } },
+  { name: 'terminal', label: 'Terminal', description: 'Run an allowlisted one-shot shell command in a temporary project workspace sandbox.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['command'], properties: { command: { type: 'string', maxLength: 8000 }, timeoutMs: { type: 'number' } } } },
+  { name: 'exec', label: 'Exec', description: 'Execute an allowlisted program without a shell in a temporary project workspace sandbox.', defaultEnabled: false, inputSchema: { type: 'object', additionalProperties: false, required: ['program'], properties: { program: { type: 'string', maxLength: 200 }, args: { type: 'string', maxLength: 8000 }, timeoutMs: { type: 'number' } } } },
   { name: 'web_search', label: 'Web search', description: 'Search Novi source connectors for current scholarly and technical evidence.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 300 }, limit: { type: 'number' } } } },
   { name: 'paper_search', label: 'Paper search', description: 'Search scholarly catalogs for papers and preprints with traceable metadata and public links.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['query'], properties: { query: { type: 'string', maxLength: 300 }, limit: { type: 'number' } } } },
   { name: 'paper_fetch', label: 'Paper fetch', description: 'Fetch a paper by DOI, arXiv identifier, or public URL. Reports metadata and access status, and extracts bounded text only when publicly reachable.', defaultEnabled: true, inputSchema: { type: 'object', additionalProperties: false, required: ['identifier'], properties: { identifier: { type: 'string', maxLength: 2000 }, includeText: { type: 'boolean' }, maxCharacters: { type: 'number' } } } },
@@ -68,6 +71,15 @@ function commaList(value, fallback = []) {
 
 function publicMemory(memory) {
   return { key: memory.key, content: memory.content, tags: [...(memory.tags || [])], createdAt: memory.createdAt, updatedAt: memory.updatedAt };
+}
+
+function syncExecutedFiles(state, project, tenantId, files) {
+  state.workspaceFiles ||= []; const prior = new Map(state.workspaceFiles.filter((file) => file.projectId === project.id && file.tenantId === tenantId).map((file) => [file.path, file])); const now = new Date().toISOString();
+  state.workspaceFiles = state.workspaceFiles.filter((file) => file.projectId !== project.id || file.tenantId !== tenantId);
+  for (const item of files) { const existing = prior.get(item.path); state.workspaceFiles.push({ id: existing?.id || randomUUID(), projectId: project.id, tenantId, path: item.path, content: item.content, contentHash: contentHash(item.content), createdAt: existing?.createdAt || now, updatedAt: now }); }
+  const replacedIds = new Set((state.documents || []).filter((doc) => doc.projectId === project.id && doc.tenantId === tenantId && doc.sourceKind === 'workspace-file').map((doc) => doc.id));
+  state.documents = (state.documents || []).filter((doc) => !replacedIds.has(doc.id)); state.chunks = (state.chunks || []).filter((chunk) => !replacedIds.has(chunk.documentId)); state.knowledgeEntities = (state.knowledgeEntities || []).filter((entity) => !replacedIds.has(entity.documentId)); state.knowledgeEdges = (state.knowledgeEdges || []).filter((edge) => !replacedIds.has(edge.documentId));
+  for (const item of files) { const ingested = ingestDocument({ title: item.path, content: item.content, sourceKind: 'workspace-file' }, { projectId: project.id, tenantId }); if (!ingested.error) { state.documents.push(ingested.document); state.chunks.push(...ingested.chunks); state.knowledgeEntities.push(...ingested.entities); state.knowledgeEdges.push(...ingested.edges); enqueueDocumentProjection(state, ingested); } }
 }
 
 function allowedHosts() {
@@ -318,6 +330,14 @@ export function createToolExecutor({ store, project, principal, allowWebSearch =
         return saved;
       });
       return { result: { action, skill: settings.skills.find((skill) => skill.name === name) || null, skillCount: settings.skills.length } };
+    }
+    if (definition.name === 'terminal' || definition.name === 'exec') {
+      const snapshot = await store.read(); const files = (snapshot.workspaceFiles || []).filter((file) => file.projectId === project.id && file.tenantId === principal.tenantId).map(({ path, content }) => ({ path, content }));
+      let args = [];
+      if (definition.name === 'exec' && input.args) { try { args = JSON.parse(input.args); } catch { throw new Error('Exec args must be a JSON array of strings'); } if (!Array.isArray(args) || args.some((item) => typeof item !== 'string')) throw new Error('Exec args must be a JSON array of strings'); }
+      const executed = await executeWorkspaceCommand({ files, kind: definition.name, command: input.command, program: input.program, args, timeoutMs: input.timeoutMs });
+      await store.update((state) => syncExecutedFiles(state, project, principal.tenantId, executed.files));
+      return { result: { ...executed.result, files: executed.files.map((file) => file.path) } };
     }
     if (definition.name === 'web_search') {
       if (!allowSourceAccess) throw new Error('Source access is unavailable for this run because it was not authorized');
