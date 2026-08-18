@@ -27,7 +27,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 | Web/容器交付 | Web 本地运行、Docker 多阶段非 root 运行、健康与就绪检查 | Docker 镜像已构建并检查；最近记录的镜像为 `sha256:5af027f80df589bc4f7fe746e3464669576e6c5bf28a3b8fd3b9300f7f0e0cb1` |
 | Electron 构建兼容 | Node.js 商业开发基线设为 22.12+，`.nvmrc` 固定 22.22.2，desktop lifecycle 增加版本预检 | 已消除旧 Node 加载 `@noble/hashes` 时的 `ERR_REQUIRE_ESM` |
 | Linux 桌面制品 | electron-builder 配置、安全 BrowserWindow、Linux unpacked/AppImage 构建与打包态 smoke | AppImage 已生成；最近记录 SHA-256 为 `b956734a2233861e8feb160ae7941142bb87a80559217f33efd715f5a403016d` |
-| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 2026-08-18：84 passed + 1 PostgreSQL 条件跳过；49 个 JavaScript 模块语法通过；OpenAPI 47 paths / 59 operations；desktop/mobile 浏览器、Provider/存储契约和 release-check 通过；凭据形状扫描与 `git diff --check` 通过 |
+| 自动化门禁 | 测试、语法、OpenAPI、供应商/存储契约、浏览器、SBOM、依赖与镜像扫描、release-check | 2026-08-18：85 passed + 1 PostgreSQL 条件跳过；49 个 JavaScript 模块语法通过；OpenAPI 47 paths / 59 operations；desktop/mobile 浏览器、Provider/存储契约和 release-check 通过；凭据形状扫描与 `git diff --check` 通过 |
 
 ## 未完成
 
@@ -62,6 +62,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 | `npm run desktop:dist` 后没有出现 UI | `desktop:dist` 是制品构建命令，只生成安装包，不负责启动应用 | 已澄清：开发启动使用 `npm run desktop`，构建后需单独运行产物 |
 | `chrome-sandbox` 即使执行 `chmod 4755` 仍显示 `777` | `/data` 为 `fuseblk`/NTFS，不保存 Linux setuid 权限；Ubuntu AppArmor 同时限制非特权 user namespace | 环境待处理：推荐迁移到 ext4；或使用 README 中 root 管理的 `/opt` runtime。不得把正式启动默认改成 `--no-sandbox` |
 | MiniMax 表单填写后测试显示 `No active LLM provider configured` | 原 UI 的 Test 只测试已激活配置，不保存刚填写的表单；状态文件确认 `llmProviderConfigs` 为空 | 已修复：按钮改为 `Save & test`，先 PUT 加密保存/激活当前表单，再 POST 测试连接；已暴露的旧 Key 必须在供应商侧轮换 |
+| MiniMax M3 的每轮 `LLM response` 后都出现 error，最终 Wiki 仍像离线模板 | M3 返回 `<think>` 推理段和 fenced JSON；旧解析器从首个 `{` 截到最后 `}`，且把阶段外字段当 schema 错误，部分长响应还触发 45 秒中止 | 已修复：优先提取 reasoning 标签外的 JSON fence，并以平衡括号解析；仅接纳当前阶段的 schema 字段，解析拒绝与请求失败分开显示；默认阶段超时提高到 90 秒。既有失败 Artifact 不会追溯重写，需重新 Generate |
 | 桌面手动测试提示达到本月限制次数 | 未认证桌面租户沿用 Free Preview 每月 5 次生成额度，开发测试很快耗尽 | 已修复：`tenantId=local` 在开发态为 1000 次；生产 Web 或 Electron 打包态自动为 100 次，登录账户套餐额度不变 |
 | Composer 对话始终返回 `...is organized as a progressive knowledge system...` | 早期 Composer 错误把离线模板 `summary` 当作普通回复；随后独立 chat Harness 虽接入 LLM，但不会持续完善成果 | 已修复并按最新产品目标升级：Composer 必须有当前实例的激活 Provider，每轮运行完整 Goal/Reference/Specialist/Finalizer，创建新 Artifact/Markdown、累计来源并索引知识；无 Provider 在扣配额前返回 `LLM_PROVIDER_REQUIRED` |
 
@@ -73,6 +74,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 4. 在已配置的 GitHub 远程仓库运行持续集成门禁并归档结果；随后接入真实供应商/目标基础设施并关闭正式发布门禁。
 
 ## 更新记录
+
+- 2026-08-18：修复 MiniMax M3 明明返回内容却全阶段 fallback 的问题。真实本地事件证明响应包含 `<think>...</think>` + fenced JSON，旧解析器会把推理文本和最终 JSON 拼在一起，且 Goal 返回完整草稿时因阶段外字段触发 schema fallback；另有长响应在 45 秒被中止。Runtime 现在去除 reasoning block、优先解析 JSON code fence、用字符串感知的平衡括号提取对象，并只合入当前阶段拥有且通过 schema 的字段；收到响应后的解析/校验失败明确记为 `LLM response rejected`，网络/超时才记为 `LLM request failed`。默认 `NOVI_LLM_TIMEOUT_MS` 提高为 90000（仍上限 120000）。新增 reasoning-wrapped 回归，确认各 Specialist 和 Finalizer 全部 completed 且内容确实采用模型输出。验证：`npm test` 85 passed + 1 PostgreSQL 条件跳过。真实供应商复测仍需用户用已轮换的 Key 重新 Generate；历史 fallback Artifact 保持不可变。
 
 - 2026-08-18：完成聊天 Session 的 Agent 运行可观测时间线：LangGraph 在 Goal/Planner/Controller/Specialist/Finalizer 的模型调用前后记录有界 request/response 与 token，Router/阶段/Reference、工具输入输出和 Artifact 提交统一写入 Job 与 active Session；每次运行最多 100 条事件、单条详情约 12000 字符，Provider API Key 在事件形成前脱敏。运行中 Web 轮询实时显示可展开事件，完成/失败后助手消息保留完整时间线；同步和异步 Generate/Composer 均接入。OpenAPI 增加 `AgentRunEvent` 与消息 `runEvents` 契约。验证：`npm test` 84 passed + 1 PostgreSQL 条件跳过，`npm run check` 49 modules，`npm run openapi-check` 47 paths / 59 operations，1360x900 与 390x844 `npm run browser-smoke` 验证实时和历史事件，`git diff --check` 通过。运行事件仍受 Session 租户/项目权限保护，生产真实供应商内容质量和持久 LangGraph checkpoint 仍属外部门禁。
 

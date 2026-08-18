@@ -7,8 +7,8 @@ function configured() {
 }
 
 function requestTimeout() {
-  const configuredMs = Number(process.env.NOVI_LLM_TIMEOUT_MS || 45_000);
-  return AbortSignal.timeout(Number.isFinite(configuredMs) ? Math.min(Math.max(configuredMs, 100), 120_000) : 45_000);
+  const configuredMs = Number(process.env.NOVI_LLM_TIMEOUT_MS || 90_000);
+  return AbortSignal.timeout(Number.isFinite(configuredMs) ? Math.min(Math.max(configuredMs, 100), 120_000) : 90_000);
 }
 
 function validModelValue(value, fallback) {

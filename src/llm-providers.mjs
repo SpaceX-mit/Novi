@@ -28,8 +28,8 @@ export function providerCatalog() {
 }
 
 function configuredTimeout() {
-  const value = Number(process.env.NOVI_LLM_TIMEOUT_MS || 45_000);
-  return Number.isFinite(value) ? Math.min(Math.max(value, 1_000), 120_000) : 45_000;
+  const value = Number(process.env.NOVI_LLM_TIMEOUT_MS || 90_000);
+  return Number.isFinite(value) ? Math.min(Math.max(value, 1_000), 120_000) : 90_000;
 }
 
 function configuredMaxOutputTokens() {

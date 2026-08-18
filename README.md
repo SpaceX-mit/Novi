@@ -67,7 +67,9 @@ Workspace Composer 是累积式研究入口：发送每一轮消息都会调用 
 
 `Customize → Plugins` 提供声明式组合层：每租户最多 10 个版本化 manifest，每次最多激活 2 个，可按 `/plugin plugin_name`、always 或触发词选择，并引用现有 Skill 与当前已授权 Tool/MCP。引用 Skill 进入同一 3-Skill 上限；推荐工具在运行时再次与实际 registry 取交集。Plugin 不下载 npm 包、不执行租户 JavaScript、不保存密钥，也不能启用被关闭的工具。Job、Session、Artifact 只固化 manifest 元数据、实际推荐工具和 SHA-256。远程 marketplace、第三方签名包和可执行沙箱不属于当前实现。配置 API 为 `GET/PUT /api/agent/plugins`。
 
-API Key 以 AES-256-GCM 加密保存在租户状态中，API、账户导出和浏览器都不会收到明文或密文。生产必须通过 Secret Manager 设置稳定的 `NOVI_CONFIG_ENCRYPTION_KEY`（至少 32 字符）；本地开发会在数据文件旁生成权限为 0600 的 `data/.novi-config-key`。已知 Provider 使用固定官方 endpoint；Ollama 只允许回环地址；远端自定义 OpenAI-compatible 主机必须使用 HTTPS 并列入逗号分隔的 `NOVI_LLM_ALLOWED_HOSTS`。每阶段超时由 `NOVI_LLM_TIMEOUT_MS` 控制，最大输出 token 由 `NOVI_LLM_MAX_OUTPUT_TOKENS` 控制，完整示例见 `.env.example`。
+API Key 以 AES-256-GCM 加密保存在租户状态中，API、账户导出和浏览器都不会收到明文或密文。生产必须通过 Secret Manager 设置稳定的 `NOVI_CONFIG_ENCRYPTION_KEY`（至少 32 字符）；本地开发会在数据文件旁生成权限为 0600 的 `data/.novi-config-key`。已知 Provider 使用固定官方 endpoint；Ollama 只允许回环地址；远端自定义 OpenAI-compatible 主机必须使用 HTTPS 并列入逗号分隔的 `NOVI_LLM_ALLOWED_HOSTS`。每阶段超时由 `NOVI_LLM_TIMEOUT_MS` 控制，默认为 90 秒、上限 120 秒，以容纳 MiniMax 等 reasoning 模型；最大输出 token 由 `NOVI_LLM_MAX_OUTPUT_TOKENS` 控制，完整示例见 `.env.example`。
+
+MiniMax M3 等 reasoning 模型可能返回 `<think>...</think>` 和 Markdown JSON 代码块。LangGraph Runtime 会优先提取代码块中的完整 JSON，只把当前阶段负责且通过 schema 的字段合入成果；其他字段被忽略，不能越权改写运行状态。Session 时间线中的 `LLM response` 表示供应商已经返回内容；若随后出现 `LLM response rejected`，表示内容无法解析或未通过字段校验，而 `LLM request failed` 才表示网络、供应商或超时失败。
 
 ### Electron 桌面端
 

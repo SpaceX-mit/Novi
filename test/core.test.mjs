@@ -225,6 +225,32 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
   assert.ok(modelEvents.some((event) => event.type === 'model-response' && event.response));
 });
 
+test('LangGraph accepts reasoning-wrapped fenced JSON without falling back to offline content', async (t) => {
+  const modelEvents = [];
+  const modelServer = http.createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
+    const marker = 'Editable schema and current draft: ';
+    const line = prompt.split('\n').find((value) => value.startsWith(marker));
+    const editable = line ? JSON.parse(line.slice(marker.length)) : {};
+    if (editable.expertGoal) editable.expertGoal.outcome = 'MiniMax reasoning response accepted.';
+    const content = `<think>Private reasoning with a decoy {"ignore":true} must not be parsed.</think>\n\`\`\`json\n${JSON.stringify({ ...editable, unownedField: 'ignored by stage schema' })}\n\`\`\``;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'reasoning-json', object: 'chat.completion', created: 1, model: 'reasoning-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }] }));
+  });
+  await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
+  t.after(() => modelServer.close());
+  const project = { id: 'reasoning-project', tenantId: 'tenant', title: 'Reasoning runtime', topic: 'Agent reasoning', description: '', type: 'knowledge' };
+  const fallback = generateArtifact(project);
+  const config = { provider: 'custom', model: 'reasoning-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'test-key' };
+  const result = await runAgentWorkflow(project, fallback, config, { mode: 'workflow', prompt: 'Use the reasoning model', onModel: async (event) => { modelEvents.push(event); return true; } });
+  assert.equal(result.content.expertGoal.outcome, 'MiniMax reasoning response accepted.');
+  assert.equal('unownedField' in result.content, false);
+  assert.ok(result.stages.filter((stage) => stage.id !== 'references').every((stage) => stage.status === 'completed'));
+  assert.equal(modelEvents.some((event) => event.status === 'failed'), false);
+  assert.ok(modelEvents.every((event) => event.type !== 'model-response' || event.response?.includes('<think>')));
+});
+
 test('Agent Skills validate, match deterministically, and remain bounded guidance', () => {
   const state = { agentSkillConfigs: [] };
   const saved = saveSkillSettings(state, 'tenant', 'owner', { skills: [
