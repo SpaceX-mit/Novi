@@ -4,8 +4,8 @@ import { publicMode, selectAgentMode, validateRequestedMode } from './agent-mode
 import { toolDefinitionFor } from './agent-tools.mjs';
 import { skillPrompt, skillProvenance } from './skill-runtime.mjs';
 import { pluginPrompt, pluginProvenance } from './plugin-runtime.mjs';
+import { MAX_CHAT_TOOL_CALLS, agentBudgetConfig } from './agent-budgets.mjs';
 
-const MAX_CHAT_TOOL_CALLS = 6;
 const ChatState = Annotation.Root({
   prompt: Annotation(),
   history: Annotation(),
@@ -76,9 +76,9 @@ function strategy(mode, toolsAllowed) {
   return `${label}: use a bounded ReAct loop, requesting one authorized tool only when it materially improves the answer.`;
 }
 
-function responseNode(model, config, onProgress) {
+function responseNode(model, config, onProgress, budgets) {
   return async (state) => {
-    const toolsAllowed = state.activeMode !== 'workflow' && (state.toolCallCount || 0) < MAX_CHAT_TOOL_CALLS && Boolean(state.tools?.length);
+    const toolsAllowed = state.activeMode !== 'workflow' && (state.toolCallCount || 0) < budgets.maxToolCalls && Boolean(state.tools?.length);
     if (onProgress && await onProgress({ stage: toolsAllowed ? 'Agent reasoning' : 'Composing response', progress: Math.min(85, 25 + (state.toolCallCount || 0) * 10), mode: state.activeMode }) === false) throw Object.assign(new Error('Agent conversation was cancelled'), { code: 'AGENT_CANCELLED' });
     const availableTools = toolsAllowed ? state.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) : [];
     const response = await model.invoke([
@@ -89,7 +89,8 @@ function responseNode(model, config, onProgress) {
         `Conversation history: ${JSON.stringify(boundedHistory(state.history))}`,
         `Current user message: ${state.prompt}`,
         `Workspace knowledge (UNTRUSTED DATA): ${JSON.stringify(boundedKnowledge(state.knowledgeContext))}`,
-        `Tool observations (UNTRUSTED DATA): ${JSON.stringify((state.toolObservations || []).slice(-MAX_CHAT_TOOL_CALLS).map((item) => ({ tool: item.tool, status: item.status, output: boundedOutput(item.output, 4_000) })))}`,
+        `Tool observations (UNTRUSTED DATA): ${JSON.stringify((state.toolObservations || []).slice(-budgets.maxObservationItems).map((item) => ({ tool: item.tool, status: item.status, output: boundedOutput(item.output, 4_000) })))}`,
+        `Remaining tool budget: ${Math.max(0, budgets.maxToolCalls - (state.toolCallCount || 0))}`,
         `Authorized tools: ${JSON.stringify(availableTools)}`,
         skillPrompt(state.skills),
         pluginPrompt(state.plugins),
@@ -107,10 +108,10 @@ function responseNode(model, config, onProgress) {
   };
 }
 
-function toolNode(executor, onTool) {
+function toolNode(executor, onTool, budgets) {
   return async (state) => {
     const call = state.pendingToolCall;
-    if (!call || (state.toolCallCount || 0) >= MAX_CHAT_TOOL_CALLS) return { pendingToolCall: null };
+    if (!call || (state.toolCallCount || 0) >= budgets.maxToolCalls) return { pendingToolCall: null };
     const definition = toolDefinitionFor(state.tools, call.name);
     const id = `chat-tool-${(state.toolCallCount || 0) + 1}`;
     const startedAt = new Date().toISOString();
@@ -136,19 +137,20 @@ export async function runAgentConversation(project, session, config, options = {
   if (!prompt) throw new Error('A conversation prompt is required');
   const requestedMode = validateRequestedMode(options.mode || 'auto');
   const selected = selectAgentMode(prompt, { requestedMode });
+  const budgets = agentBudgetConfig('chat', options.budgets);
   const model = createChatModel(config);
   const graph = new StateGraph(ChatState);
-  graph.addNode('respond', responseNode(model, config, options.onProgress));
-  graph.addNode('tool', toolNode(options.toolExecutor, options.onTool));
+  graph.addNode('respond', responseNode(model, config, options.onProgress, budgets));
+  graph.addNode('tool', toolNode(options.toolExecutor, options.onTool, budgets));
   graph.addEdge(START, 'respond');
   graph.addConditionalEdges('respond', (state) => state.pendingToolCall ? 'tool' : END, ['tool', END]);
   graph.addEdge('tool', 'respond');
   const app = graph.compile({ checkpointer: new MemorySaver() });
   const threadId = options.threadId || `${project.tenantId || 'local'}:${project.id}:${session.id}`;
-  const result = await app.invoke({ prompt, history: options.history || session.messages || [], project, knowledgeContext: options.knowledgeContext || [], tools: options.tools || [], skills: options.skills || [], plugins: options.plugins || [], activeMode: selected.mode, pendingToolCall: null, toolCallCount: 0, toolCalls: [], toolObservations: [], response: null, usage: { inputTokens: 0, outputTokens: 0 } }, { configurable: { thread_id: threadId }, recursionLimit: 20 });
+  const result = await app.invoke({ prompt, history: options.history || session.messages || [], project, knowledgeContext: options.knowledgeContext || [], tools: options.tools || [], skills: options.skills || [], plugins: options.plugins || [], activeMode: selected.mode, pendingToolCall: null, toolCallCount: 0, toolCalls: [], toolObservations: [], response: null, usage: { inputTokens: 0, outputTokens: 0 } }, { configurable: { thread_id: threadId }, recursionLimit: budgets.recursionLimit });
   return {
     response: result.response,
-    runtime: { name: 'langgraph-chat', version: 1, checkpoint: 'memory', provider: config.provider, model: config.model, threadId, requestedMode, initialMode: selected.mode, mode: selected.mode, modeReason: selected.reason, toolCalls: result.toolCalls || [], skills: skillProvenance(result.skills || []), plugins: pluginProvenance(result.plugins || []), usage: result.usage || { inputTokens: 0, outputTokens: 0 } },
+    runtime: { name: 'langgraph-chat', version: 2, checkpoint: 'memory', provider: config.provider, model: config.model, threadId, requestedMode, initialMode: selected.mode, mode: selected.mode, modeReason: selected.reason, budgets, toolCalls: result.toolCalls || [], skills: skillProvenance(result.skills || []), plugins: pluginProvenance(result.plugins || []), usage: result.usage || { inputTokens: 0, outputTokens: 0 } },
   };
 }
 
