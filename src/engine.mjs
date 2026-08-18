@@ -342,7 +342,7 @@ function workflowFor(project, content, completedAt, execution = null) {
     agents: pipeline.map(({ id, name, responsibility }, index) => {
       const stage = stages.get(id);
       const status = stage?.status || (id === 'references' ? (execution?.runtime?.references?.status || 'offline') : execution ? 'not-run' : 'completed');
-      return { order: index + 1, id, name, responsibility, status, outputs: outputCounts[index], ...(stage ? { startedAt: stage.startedAt, completedAt: stage.completedAt, usage: stage.usage, ...(stage.error ? { error: stage.error } : {}) } : {}) };
+      return { order: index + 1, id, name, responsibility, status, outputs: outputCounts[index], ...(stage ? { startedAt: stage.startedAt, completedAt: stage.completedAt, usage: stage.usage, ...(stage.warning ? { warning: stage.warning } : {}), ...(stage.error ? { error: stage.error } : {}) } : {}) };
     }),
   };
 }

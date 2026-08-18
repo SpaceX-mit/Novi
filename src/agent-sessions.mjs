@@ -44,6 +44,7 @@ export function normalizeRunEvent(input = {}) {
     ...(input.response !== undefined ? { response: boundedEventDetail(input.response) } : {}),
     ...(input.input !== undefined ? { input: boundedEventDetail(input.input) } : {}),
     ...(input.output !== undefined ? { output: boundedEventDetail(input.output) } : {}),
+    ...(input.warning ? { warning: String(input.warning).slice(0, 500) } : {}),
     ...(input.error ? { error: String(input.error).slice(0, 500) } : {}),
     ...(input.usage ? { usage: boundedEventDetail(input.usage) } : {}),
   };

@@ -81,7 +81,7 @@ export async function updateProjectFromSnapshot(store, snapshot, user) {
       if (!job || !updaterActive(state, user, marked.project.tenantId)) return false;
       job.agentStages ||= [];
       const index = job.agentStages.findIndex((item) => item.id === stage.id);
-      const publicStage = { id: stage.id, name: stage.name, status: stage.status, ...(stage.startedAt ? { startedAt: stage.startedAt } : {}), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.error ? { error: stage.error } : {}) };
+      const publicStage = { id: stage.id, name: stage.name, status: stage.status, ...(stage.startedAt ? { startedAt: stage.startedAt } : {}), ...(stage.completedAt ? { completedAt: stage.completedAt } : {}), ...(stage.usage ? { usage: stage.usage } : {}), ...(stage.warning ? { warning: stage.warning } : {}), ...(stage.error ? { error: stage.error } : {}) };
       if (index >= 0) job.agentStages[index] = publicStage; else job.agentStages.push(publicStage);
       job.progress = Math.max(job.progress || 0, stage.progress || 0); job.currentStage = stage.name; job.updatedAt = new Date().toISOString();
       return true;

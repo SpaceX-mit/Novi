@@ -266,6 +266,7 @@ function renderRunEvent(event) {
     event.response !== undefined ? `<div><b>Response</b><pre>${eventDetail(event.response)}</pre></div>` : '',
     event.input !== undefined ? `<div><b>Input</b><pre>${eventDetail(event.input)}</pre></div>` : '',
     event.output !== undefined ? `<div><b>Output</b><pre>${eventDetail(event.output)}</pre></div>` : '',
+    event.warning ? `<div class="run-event-warning"><b>Warning</b><pre>${escapeHtml(event.warning)}</pre></div>` : '',
     event.error ? `<div class="run-event-error"><b>Error</b><pre>${escapeHtml(event.error)}</pre></div>` : '',
     event.usage ? `<small>Tokens: ${eventDetail(event.usage)}</small>` : '',
   ].join('');

@@ -168,11 +168,11 @@ test('Agent sessions preserve bounded conversation and run lifecycle state', () 
   assert.equal(userMessage.status, 'queued'); assert.equal(session.status, 'running'); assert.equal(session.activeRun.currentMode, 'react');
   updateSessionRun(session, { currentMode: 'plan-execute', currentStage: 'Writing', progress: 70 });
   assert.equal(userMessage.status, 'running'); assert.equal(userMessage.mode, 'plan-execute'); assert.equal(session.activeRun.progress, 70);
-  updateSessionRunEvent(session, { id: 'model-1', type: 'model-response', actor: 'custom / test', title: 'LLM response', status: 'completed', response: 'bounded response', usage: { inputTokens: 3, outputTokens: 2 } });
+  updateSessionRunEvent(session, { id: 'model-1', type: 'model-response', actor: 'custom / test', title: 'LLM response', status: 'rejected', response: 'bounded response', warning: 'Response needs a deeper revision', usage: { inputTokens: 3, outputTokens: 2 } });
   updateSessionRunEvent(session, { id: 'tool-1', type: 'tool', actor: 'Workspace read', title: 'Tool completed', status: 'completed', input: { query: 'runtime' }, output: { passages: 1 } });
   const assistantMessage = completeSessionRun(session, { jobId: 'job-1', artifact: { id: 'artifact-1', content: { summary: 'Completed result' } }, mode: 'plan-execute' });
   assert.equal(assistantMessage.artifactId, 'artifact-1'); assert.equal(session.status, 'idle'); assert.equal(session.activeRun, null); assert.equal(userMessage.status, 'completed');
-  assert.equal(assistantMessage.runEvents.length, 2); assert.equal(assistantMessage.runEvents[0].type, 'model-response'); assert.equal(assistantMessage.runEvents[1].output.passages, 1);
+  assert.equal(assistantMessage.runEvents.length, 2); assert.equal(assistantMessage.runEvents[0].type, 'model-response'); assert.equal(assistantMessage.runEvents[0].warning, 'Response needs a deeper revision'); assert.equal(assistantMessage.runEvents[0].error, undefined); assert.equal(assistantMessage.runEvents[1].output.passages, 1);
   beginSessionRun(session, { jobId: 'job-2', prompt: 'Retry with evidence', requestedMode: 'supervisor', currentMode: 'supervisor' });
   failSessionRun(session, { jobId: 'job-2', mode: 'supervisor', error: 'Provider unavailable' });
   failSessionRun(session, { jobId: 'job-2', mode: 'supervisor', error: 'Provider unavailable' });
@@ -283,6 +283,7 @@ test('LangGraph accepts reasoning-wrapped fenced JSON without falling back to of
 
 test('LangGraph retries a shallow Wiki finalizer until the quality contract passes', async (t) => {
   let finalizerCalls = 0;
+  const modelEvents = [];
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
@@ -296,9 +297,13 @@ test('LangGraph retries a shallow Wiki finalizer until the quality contract pass
   const project = { id: 'quality-project', tenantId: 'tenant', title: 'Quality runtime', topic: 'Evidence agents', description: '', type: 'knowledge' };
   const fallback = generateArtifact(project);
   const config = { provider: 'custom', model: 'quality-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'test-key' };
-  const result = await runAgentWorkflow(project, fallback, config, { mode: 'workflow', prompt: 'Produce a publication-ready Wiki' });
+  const result = await runAgentWorkflow(project, fallback, config, { mode: 'workflow', prompt: 'Produce a publication-ready Wiki', onModel: async (event) => { modelEvents.push(event); return true; } });
   const finalizerStages = result.stages.filter((stage) => stage.id === 'finalizer');
   assert.deepEqual(finalizerStages.map((stage) => stage.status), ['fallback', 'completed']); assert.equal(finalizerCalls, 2); assert.ok(result.content.llmWiki.sections.length >= 6);
+  assert.ok(finalizerStages[0].warning); assert.equal(finalizerStages[0].error, undefined);
+  assert.ok(modelEvents.some((event) => event.stageId === 'finalizer' && event.status === 'rejected' && event.title === 'LLM response needs revision'));
+  assert.equal(modelEvents.some((event) => event.stageId === 'finalizer' && event.status === 'failed'), false);
+  assert.equal(modelEvents.some((event) => event.stageId === 'finalizer' && event.title === 'LLM response' && event.status === 'completed'), true);
 });
 
 test('Agent Skills validate, match deterministically, and remain bounded guidance', () => {

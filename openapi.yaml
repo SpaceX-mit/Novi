@@ -572,6 +572,7 @@ components:
         response: { type: [string, object], description: Bounded model response content }
         input: { type: [string, object], description: Bounded Agent or tool input }
         output: { type: [string, object], description: Bounded Agent or tool output }
+        warning: { type: string, maxLength: 500, description: A complete model response that needs a bounded retry; not a request failure }
         error: { type: string, maxLength: 500 }
         usage: { type: object }
         completedAt: { type: string, format: date-time }
