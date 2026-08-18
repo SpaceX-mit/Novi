@@ -260,6 +260,7 @@ function eventDetail(value) {
 
 function renderRunEvent(event) {
   const status = String(event.status || 'completed');
+  const eventId = String(event.id || `${event.type || 'activity'}:${event.createdAt || event.title || ''}`);
   const detail = [
     event.summary ? `<p>${escapeHtml(event.summary)}</p>` : '',
     event.request !== undefined ? `<div><b>Request</b><pre>${eventDetail(event.request)}</pre></div>` : '',
@@ -271,7 +272,8 @@ function renderRunEvent(event) {
     event.usage ? `<small>Tokens: ${eventDetail(event.usage)}</small>` : '',
   ].join('');
   const meta = [event.actor, event.mode, event.stageId, formatDateTime(event.createdAt)].filter(Boolean).join(' · ');
-  return `<details class="run-event ${escapeHtml(status)}" ${event.type === 'model-response' || event.type === 'tool' ? '' : 'open'}><summary><span class="run-event-type">${escapeHtml(event.type || 'activity')}</span><b>${escapeHtml(event.title || 'Agent activity')}</b><small>${escapeHtml(meta)}</small><i>${escapeHtml(status)}</i></summary><div class="run-event-body">${detail || '<p>No additional detail.</p>'}</div></details>`;
+  const open = event.type !== 'tool';
+  return `<details class="run-event ${escapeHtml(status)}" data-event-id="${escapeHtml(eventId)}" ${open ? 'open' : ''}><summary><span class="run-event-type">${escapeHtml(event.type || 'activity')}</span><b>${escapeHtml(event.title || 'Agent activity')}</b><small>${escapeHtml(meta)}</small><i>${escapeHtml(status)}</i></summary><div class="run-event-body">${detail || '<p>No additional detail.</p>'}</div></details>`;
 }
 
 function renderRunEvents(events, title = 'Agent run details') {
@@ -522,7 +524,14 @@ function updateConversationRun(job) {
   if (messages) {
     const current = messages.querySelector('#live-events');
     const html = runEventsSection(job.runEvents || state.activeSession?.activeRun?.runEvents || []);
-    if (current && html) current.outerHTML = html;
+    if (current && html) {
+      const openState = new Map([...current.querySelectorAll('details[data-event-id]')].map((detail) => [detail.dataset.eventId, detail.open]));
+      current.outerHTML = html;
+      const replacement = messages.querySelector('#live-events');
+      replacement?.querySelectorAll('details[data-event-id]').forEach((detail) => {
+        if (openState.has(detail.dataset.eventId)) detail.open = openState.get(detail.dataset.eventId);
+      });
+    }
     else if (!current && html) messages.insertAdjacentHTML('beforeend', html);
   }
   if (job.expertGoal) {
