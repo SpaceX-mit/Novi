@@ -28,8 +28,12 @@ export function providerCatalog() {
 }
 
 function configuredTimeout() {
-  const value = Number(process.env.NOVI_LLM_TIMEOUT_MS || 90_000);
-  return Number.isFinite(value) ? Math.min(Math.max(value, 1_000), 120_000) : 90_000;
+  // Reasoning-capable providers may spend several minutes before emitting
+  // the first useful JSON token on a large research stage. Streaming still
+  // bounds the total stage duration below, but a short first-token cap turns
+  // valid deep-research work into a misleading provider failure.
+  const value = Number(process.env.NOVI_LLM_TIMEOUT_MS || 180_000);
+  return Number.isFinite(value) ? Math.min(Math.max(value, 1_000), 300_000) : 180_000;
 }
 
 function configuredStreamIdleTimeout() {

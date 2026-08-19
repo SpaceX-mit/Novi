@@ -75,6 +75,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 
 ## 更新记录
 
+- 2026-08-19：真实 Agent OS 质量诊断继续暴露 reasoning Provider 的长首 token 问题：Goal 首次响应被修订后成功，Research 成功，但 Knowledge 多次在流首 token窗口内请求失败；这不是离线质量通过证据。将流式首 token默认保护从 90 秒提高到 180 秒、上限 300 秒，仍保留单阶段 10 分钟总时长和 120 秒分片空闲上限；真实诊断脚本现在保存脱敏 warning/error 摘要、response diagnostics 和 stop reason，便于区分网络/超时与 schema 拒绝。验证：`npm run check`、定向 LangGraph/Provider 测试、`git diff --check`；真实完整 Agent OS 生成仍需重新运行并达到 `publicationReady=true`。
+
 - 2026-08-19：明确 Research Intake 的产品边界：外部 ChatGPT 或其他工具整理主题不属于 Novi，Novi 收到的最终提示词仍按未批准请求处理；第一步必须由 Intake Agent 判断深度研究所需的问题、范围、交付物、证据和边界是否完整。新增上下文约束，禁止把外部提示词当作已批准计划；不完整时继续多轮追问/提供选项，完整后仍需用户确认才启动检索和 Wiki 生成。验证：`npm run check`、Research Intake/Composer 定向测试、`npm test`、`git diff --check`。真实供应商对话和领域质量仍需外部门禁。
 
 - 2026-08-19：强化证据质量门禁：`publicationReady` 的 claim/citation coverage 现在只统计能与已验证来源 excerpt 产生足够词项重叠的 `[S#]`，无支持的 marker 不再被误计为证据覆盖；当 Agent OS 真实来源包存在时，未支持 marker 会触发硬失败。新增 `supportedCitationIds` 回归测试，覆盖支持、无关主张和 marker 独立成句场景。验证：`npm run check`（55 modules）、`npm test`（92 passed + 1 PostgreSQL 条件跳过）、`git diff --check`。真实来源正确性和领域专家抽检仍是外部门禁。
