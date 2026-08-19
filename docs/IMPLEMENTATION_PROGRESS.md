@@ -75,6 +75,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 
 ## 更新记录
 
+- 2026-08-19：优化 Agent Chat UI 阅读体验，参考 WorkBuddy 类聊天编辑器的层级与留白：助手正文从 11px 调整为 15px/1.8 行高并取消厚重气泡，用户消息保持独立浅色气泡；扩大消息阅读宽度和段间距，Goal、运行事件、输入框、事件详情和移动端断点同步提升字号与可读性；保留流式事件默认展开、工具详情和响应式无横向溢出行为。此项仅修改 Web 样式，不改变 Agent、LLM、工具调用或消息数据契约。验证：`npm test` 88 passed + 1 PostgreSQL 条件跳过；`npm run check`（51 modules）；`npm run browser-smoke` 在 1360×900 和 390×844 均通过；`git diff --check` 通过。
+
 - 2026-08-19：完成全工具提示词注入：新增统一 `toolPrompt` 工具目录渲染器，将本次实际授权且已解析的内置、Custom HTTP 和 MCP 工具的名称、类型、描述及完整输入 schema 注入所有 Workflow Specialist/Deep Dive、Planner、ReAct/Supervisor Controller 和聊天 Agent；目录明确工具是否可在当前节点调用，并排除 endpoint、Bearer token 等敏感执行字段。禁用工具、未授权来源工具和未启用 MCP 不会被伪装为可执行能力，工具输出仍按不可信数据处理。验证：`npm test` 88 passed + 1 PostgreSQL 条件跳过，`npm run browser-smoke`、`npm run check`（51 modules）、`npm run openapi-check`（48 paths / 60 operations）、`npm run release-check`、SBOM（runtime 130 components）和 `git diff --check` 通过；新增回归确认内置/MCP/Custom 工具均可发现且 endpoint/token 不进入 prompt。
 
 - 2026-08-18：修复生成 Markdown 在 Document 面板中以小字号纯文本 `<pre>` 展示导致的格式凌乱问题。新增本地 `marked` 解析依赖和只暴露固定依赖文件的静态路由；Preview 支持标题、段落、列表、引用、代码、表格和链接，并在插入 DOM 前按标签/属性白名单清洗，拒绝 LLM 原始 HTML、事件属性和非 HTTP(S) 外链；相对 `.md` 链接可打开同 Artifact 文档。Document 增加 Preview/Source 分段切换，Source 保留转义后的原始 Markdown。验证：`npm test` 86 passed + 1 PostgreSQL 条件跳过，`npm run browser-smoke` 验证渲染标题/章节与 Source 原文，`npm run check`（51 modules）、`npm run release-check`、SBOM（runtime 130 components）和 `git diff --check` 通过。
