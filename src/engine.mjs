@@ -496,6 +496,7 @@ function evidenceFor(content, sources = []) {
     authority: source.authority ?? 0,
     relevanceScore: source.relevanceScore ?? null,
     contentHash: source.contentHash || createHash('sha256').update(`${source.url}|${source.name}|${source.publishedAt || ''}`).digest('hex'),
+    excerpt: String(source.excerpt || source.snippet || '').slice(0, 3_000),
     verification: source.verification || 'source-mapped',
     verifiedAt: source.verifiedAt,
     httpStatus: source.httpStatus,
@@ -512,7 +513,7 @@ function evidenceFor(content, sources = []) {
   ].filter(Boolean))].slice(0, 24);
   const byCitation = new Map(usable.map((source) => [source.citationId, source]));
   const claims = claimTexts.map((claim, index) => {
-    const citations = [...String(claim).matchAll(/\[S(\d+)\]/g)].map((match) => `S${match[1]}`);
+    const citations = [...new Set([...String(claim).matchAll(/\[S(\d+)\]/g)].map((match) => `S${match[1]}`))];
     const evidenceIds = [...new Set(citations.map((citation) => byCitation.get(citation)?.id).filter(Boolean))];
     return {
       id: `claim-${index + 1}`,
@@ -557,7 +558,10 @@ function workflowFor(project, content, completedAt, execution = null) {
   ];
   const agentOsTopic = /agent\s*os|agent operating system|agent runtime.*(?:stack|technology|技术栈)|自主.?agent.*(?:runtime|技术栈)/iu.test(`${project.topic || ''} ${project.description || ''} ${content.expertGoal?.question || ''}`);
   const runtime = execution?.runtime || { name: 'offline-deterministic', version: 2, language: content.language || project.wikiLanguage || 'en', references: { status: 'offline', sourceCount: 0, sourceKinds: [] } };
-  const quality = runtime.quality || assessWikiQuality({ content }, { topic: project.topic, requireAgentOs: agentOsTopic });
+  // Recompute after the controlled evidence layer has been attached. The
+  // runtime stage may have assessed a pre-evidence draft; the persisted
+  // artifact must report the final claim/source coverage.
+  const quality = assessWikiQuality({ content }, { topic: project.topic, requireAgentOs: agentOsTopic, sources: content.sources || [] });
   return {
     version: 4,
     strategy: execution?.runtime?.mode ? `adaptive-${execution.runtime.mode}` : 'goal-expert-wiki-pipeline',

@@ -13,7 +13,7 @@ const project = {
 };
 
 const artifact = generateArtifact(project, { prompt: '以深度调查 Agent OS 技术栈，输出详细的 LLM Wiki' });
-const audit = assessWikiQuality(artifact, { topic: project.topic, requireAgentOs: true });
+const audit = assessWikiQuality(artifact, { topic: project.topic, requireAgentOs: true, sources: artifact.content.sources });
 const lines = [
   '# Agent OS LLM Wiki 质量审计',
   '',

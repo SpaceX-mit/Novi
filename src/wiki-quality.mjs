@@ -72,7 +72,7 @@ function assessDeepDive(document, { minSectionChars = 420, minParagraphs = 2 } =
   };
 }
 
-export function assessWikiQuality(artifact, { topic = '', requireAgentOs = false, minSectionChars = 420 } = {}) {
+export function assessWikiQuality(artifact, { topic = '', requireAgentOs = false, minSectionChars = 420, sources = null } = {}) {
   const content = artifact?.content || {};
   const documents = Array.isArray(content.deepDiveDocuments) ? content.deepDiveDocuments : [];
   const wiki = content.llmWiki || {};
@@ -88,9 +88,12 @@ export function assessWikiQuality(artifact, { topic = '', requireAgentOs = false
   const requiredAgentOsTerms = requireAgentOs ? AGENT_OS_TERMS.length : 0;
   const evidenceStatus = textOf(content.evidence?.status || 'unverified');
   const evidenceDisclaimer = textOf(content.evidence?.disclaimer);
-  const mappedSources = Array.isArray(content.evidence?.sources) ? content.evidence.sources.length : 0;
+  const evidenceSources = Array.isArray(sources) ? sources.filter((source) => source?.mapped === true && source.verification !== 'unreachable' && source.status !== 'unreachable') : content.evidence?.sources;
+  const mappedSources = Array.isArray(evidenceSources) ? evidenceSources.length : 0;
   const mappedClaims = Array.isArray(content.evidence?.claims) ? content.evidence.claims.filter((claim) => claim?.evidenceIds?.length).length : 0;
   const totalClaims = Array.isArray(content.evidence?.claims) ? content.evidence.claims.length : 0;
+  const citationCount = (corpus.match(/\[s\d+\]/gu) || []).length;
+  const explicitSourceClaims = Array.isArray(content.evidence?.claims) ? content.evidence.claims.filter((claim) => Array.isArray(claim?.citationIds) && claim.citationIds.length).length : 0;
   const mapSlugs = (wiki.documentMap || []).map((document) => document?.slug);
   const expectedSlugs = documents.map((document) => document?.slug);
   const coherenceFailures = [];
@@ -121,11 +124,13 @@ export function assessWikiQuality(artifact, { topic = '', requireAgentOs = false
     if (runtimeHits.length < 3) hardFailures.push(`runtime comparison names only ${runtimeHits.length}; at least 3 required`);
     const requiredSignals = ['MCP', 'memory', 'approval', 'sandbox', 'evaluation', 'replay', 'idempotency'];
     for (const term of requiredSignals) if (!corpus.includes(normalized(term))) hardFailures.push(`missing required Agent OS concept: ${term}`);
+    if (mappedSources >= 5 && citationCount < 8) hardFailures.push(`verified source packet is present but only ${citationCount} citation markers were emitted; at least 8 required`);
   }
   const values = Object.values(dimensions);
   const overall = Number((values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length)).toFixed(3));
   const mappedCoverage = totalClaims ? mappedClaims / totalClaims : 0;
-  const publicationReady = hardFailures.length === 0 && overall >= 0.9 && (!requireAgentOs || (mappedSources >= 5 && mappedCoverage >= 0.5));
+  const evidenceCoverage = totalClaims ? Math.max(mappedCoverage, explicitSourceClaims / totalClaims, (mappedSources && citationCount ? Math.min(1, citationCount / totalClaims) : 0)) : 0;
+  const publicationReady = hardFailures.length === 0 && overall >= 0.9 && (!requireAgentOs || (mappedSources >= 5 && mappedCoverage >= 0.5 && evidenceCoverage >= 0.5 && citationCount >= 8));
   return {
     version: 1,
     topic,
@@ -137,7 +142,7 @@ export function assessWikiQuality(artifact, { topic = '', requireAgentOs = false
     dimensions,
     termCoverage: { hits: termHits, count: termHits.length, required: requiredAgentOsTerms },
     runtimeCoverage: { hits: runtimeHits, count: runtimeHits.length, required: requireAgentOs ? 3 : 0 },
-    evidence: { status: evidenceStatus, mappedSources, mappedClaims, totalClaims, disclaimer: evidenceDisclaimer },
+    evidence: { status: evidenceStatus, mappedSources, mappedClaims, totalClaims, explicitSourceClaims, citationCount, coverage: Number(evidenceCoverage.toFixed(3)), disclaimer: evidenceDisclaimer },
     deepDive,
     hardFailures,
     recommendation: hardFailures.length ? '修复硬门禁失败项后重新生成并审计；结构完整不等于专业质量。' : publicationReady ? '达到高质量发布候选门禁；仍需领域专家最终验收。' : overall >= 0.9 ? '达到高质量结构门禁，但受控来源/claim 覆盖不足，不能作为已验证专业结论发布。' : '结构通过但仍需补充技术细节、对比证据或实验结果。',

@@ -74,6 +74,20 @@ async function readBounded(response, maxBytes = MAX_BYTES) {
   return Buffer.concat(chunks);
 }
 
+function textExcerpt(body, contentType = '') {
+  const type = String(contentType || '').toLowerCase();
+  if (!type.includes('text') && !type.includes('html') && !type.includes('json') && !type.includes('xml')) return '';
+  const raw = Buffer.isBuffer(body) ? body.toString('utf8') : String(body || '');
+  return raw
+    .replace(/<script[\s\S]*?<\/script>/giu, ' ')
+    .replace(/<style[\s\S]*?<\/style>/giu, ' ')
+    .replace(/<[^>]+>/gu, ' ')
+    .replace(/&(?:nbsp|amp|lt|gt|quot|#39);/giu, (entity) => ({ '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" }[entity.toLowerCase()] || ' '))
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, 3_000);
+}
+
 async function fetchSource(urlValue, { fetchImpl = globalThis.fetch, skipDns = false, timeoutMs = 12_000, maxBytes = MAX_BYTES, includeBody = false } = {}) {
   let target = await validateUrl(urlValue, { skipDns });
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
@@ -85,9 +99,11 @@ async function fetchSource(urlValue, { fetchImpl = globalThis.fetch, skipDns = f
     }
     if (!response.ok) return { status: 'unreachable', httpStatus: response.status, url: target.toString() };
     const body = await readBounded(response, maxBytes);
+    const contentType = response.headers.get('content-type') || '';
     return {
       status: 'verified', httpStatus: response.status, url: target.toString(), contentHash: createHash('sha256').update(body).digest('hex'),
-      retrievedBytes: body.byteLength, contentType: response.headers.get('content-type') || '', verifiedAt: new Date().toISOString(),
+      retrievedBytes: body.byteLength, contentType, verifiedAt: new Date().toISOString(),
+      excerpt: textExcerpt(body, contentType),
       ...(includeBody ? { body } : {}),
     };
   }
@@ -104,7 +120,7 @@ export async function verifyEvidenceSources(sources = [], options = {}) {
   return Promise.all(candidates.map(async (source) => {
     if (!source?.mapped) return source;
     try {
-      const result = await fetchSource(source.url, options);
+      const result = await fetchSource(source.url, { ...options, includeBody: options.includeBody === true });
       return { ...source, ...result, mapped: result.status === 'verified' && source.mapped === true, verification: result.status };
     } catch (error) {
       return { ...source, mapped: false, status: 'unreachable', verification: 'unreachable', verificationError: error.message.slice(0, 160), verifiedAt: new Date().toISOString() };
