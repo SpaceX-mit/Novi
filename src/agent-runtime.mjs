@@ -217,6 +217,20 @@ function safeModelText(value, apiKey) {
   return String(value || '').replaceAll(apiKey || '\u0000', '[redacted]').slice(0, 12_000);
 }
 
+function responseDiagnostics(response) {
+  const text = messageText(response);
+  const metadata = response?.response_metadata || {};
+  return {
+    responseLength: text.length,
+    reasoningLength: reasoningText(response).length,
+    jsonFenceCount: (text.match(/```(?:json)?/giu) || []).length,
+    openBraceCount: (text.match(/\{/gu) || []).length,
+    closeBraceCount: (text.match(/\}/gu) || []).length,
+    chunkCount: Number(metadata.chunk_count || 0),
+    stopReason: metadata.stop_reason || metadata.finish_reason || null,
+  };
+}
+
 async function notifyModel(onModel, event) {
   if (onModel && await onModel(event) === false) throw Object.assign(new Error('Generation was cancelled'), { code: 'AGENT_CANCELLED' });
 }
@@ -262,7 +276,7 @@ async function streamModelResponse(model, messages, onDelta) {
   const controller = new AbortController();
   const startedAt = Date.now();
   const maxDuration = configuredStageMaxDuration();
-  let output = ''; let reasoning = ''; let usage = { inputTokens: 0, outputTokens: 0 }; let firstChunk = true;
+  let output = ''; let reasoning = ''; let usage = { inputTokens: 0, outputTokens: 0 }; let firstChunk = true; let chunkCount = 0; let finishReason = null;
   const firstTokenDeadline = startedAt + configuredTimeout(); let lastMeaningfulAt = startedAt;
   let lastEmittedAt = 0; let lastEmittedLength = 0;
   const preview = () => `${reasoning ? `<think>${reasoning}</think>\n` : ''}${output}`;
@@ -282,7 +296,10 @@ async function streamModelResponse(model, messages, onDelta) {
       const wait = Math.min(Math.max(1, deadline - Date.now()), remaining);
       const next = await nextStreamChunk(iterator, wait, controller, firstChunk ? 'LLM did not return a first stream chunk in time' : 'LLM stream became idle', firstChunk ? 'LLM_FIRST_TOKEN_TIMEOUT' : 'LLM_STREAM_IDLE_TIMEOUT');
       if (next.done) break;
+      chunkCount += 1;
       const outputDelta = messageText(next.value); const reasoningDelta = reasoningText(next.value);
+      const reason = next.value?.response_metadata?.stop_reason || next.value?.response_metadata?.finish_reason || next.value?.additional_kwargs?.stop_reason || next.value?.additional_kwargs?.finish_reason;
+      if (reason) finishReason = String(reason);
       if (reasoningDelta) reasoning += reasoningDelta;
       if (outputDelta) output += outputDelta;
       const chunkUsage = usageFor(next.value);
@@ -295,7 +312,7 @@ async function streamModelResponse(model, messages, onDelta) {
     }
     if (!output && !reasoning) throw Object.assign(new Error('LLM returned an empty streamed response'), { code: 'LLM_RESPONSE_INVALID' });
     await emit(true);
-    return { content: preview(), usage_metadata: { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens } };
+    return { content: preview(), usage_metadata: { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens }, response_metadata: { chunk_count: chunkCount, stop_reason: finishReason, output_length: output.length, reasoning_length: reasoning.length } };
   } finally { controller.abort(); }
 }
 
@@ -452,12 +469,12 @@ async function generateDeepDiveSuite(state, model, config, onModel, budgets) {
         if (!Array.isArray(candidate.deepDiveDocuments) || candidate.deepDiveDocuments.length !== 1) throw new Error('LLM Deep Dive response must contain exactly one document');
         validateDeepDiveDocument(candidate.deepDiveDocuments[0], assignment);
         accepted = candidate.deepDiveDocuments[0]; usage = addUsage(usage, usageFor(response));
-        await notifyModel(onModel, { id: `${eventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: `Deep Dive ${index + 1}/${assignments.length} completed`, status: 'completed', stageId: 'writing', mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(messageText(response), config.apiKey), usage: usageFor(response), createdAt: new Date().toISOString() });
+        await notifyModel(onModel, { id: `${eventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: `Deep Dive ${index + 1}/${assignments.length} completed`, status: 'completed', stageId: 'writing', mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(messageText(response), config.apiKey), usage: usageFor(response), output: responseDiagnostics(response), createdAt: new Date().toISOString() });
       } catch (error) {
         if (error.code === 'AGENT_CANCELLED') throw error;
         lastError = error;
         await notifyModel(onModel, modelCompleted
-          ? { id: `${eventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: `Deep Dive ${index + 1}/${assignments.length} needs revision`, status: 'rejected', stageId: 'writing', mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(messageText(response), config.apiKey), warning: safeError(error, config.apiKey), usage: usageFor(response), createdAt: new Date().toISOString() }
+          ? { id: `${eventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: `Deep Dive ${index + 1}/${assignments.length} needs revision`, status: 'rejected', stageId: 'writing', mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(messageText(response), config.apiKey), warning: safeError(error, config.apiKey), usage: usageFor(response), output: responseDiagnostics(response), createdAt: new Date().toISOString() }
           : { id: `${eventId}:error`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: `Deep Dive ${index + 1}/${assignments.length} request failed`, status: 'failed', stageId: 'writing', mode: state.activeMode, provider: config.provider, model: config.model, error: safeError(error, config.apiKey), createdAt: new Date().toISOString() });
       }
     }
@@ -506,7 +523,7 @@ function stageNode(stage, model, config, onStage, onModel, budgets) {
         const quality = assessWikiQuality({ content }, { topic: state.project.topic, requireAgentOs: true, sources: state.sources || [] });
         if (!quality.pass) throw new Error(`Agent OS Wiki quality gate failed: ${quality.hardFailures.slice(0, 3).join('; ')}`);
       }
-      await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'LLM response', status: 'completed', stageId: stage.id, mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(messageText(response), config.apiKey), usage: usageFor(response), createdAt: new Date().toISOString() });
+      await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'LLM response', status: 'completed', stageId: stage.id, mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(messageText(response), config.apiKey), usage: usageFor(response), output: responseDiagnostics(response), createdAt: new Date().toISOString() });
       const result = { id: stage.id, name, mode: state.activeMode, status: 'completed', startedAt, completedAt: new Date().toISOString(), outputKeys: stage.id === 'writing' ? [...Object.keys(editable), 'deepDiveDocuments'] : Object.keys(editable), usage: stageUsage };
       const observable = stage.id === 'goal' ? observableGoal(content) : {};
       if (onStage && await onStage({ ...result, ...observable, progress: stage.progress }) === false) throw Object.assign(new Error('Generation was cancelled'), { code: 'AGENT_CANCELLED' });
@@ -516,7 +533,7 @@ function stageNode(stage, model, config, onStage, onModel, budgets) {
       return { content, stages: [result], completedStages, stageAttempts: attempts, planCursor };
     } catch (error) {
       if (error.code === 'AGENT_CANCELLED') throw error;
-      if (modelCompleted) await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'LLM response needs revision', status: 'rejected', stageId: stage.id, mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(messageText(response), config.apiKey), summary: safeError(error, config.apiKey), usage: usageFor(response), createdAt: new Date().toISOString() });
+      if (modelCompleted) await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'LLM response needs revision', status: 'rejected', stageId: stage.id, mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(messageText(response), config.apiKey), summary: safeError(error, config.apiKey), usage: usageFor(response), output: responseDiagnostics(response), createdAt: new Date().toISOString() });
       else await notifyModel(onModel, { id: `${modelEventId}:error`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'LLM request failed', status: 'failed', stageId: stage.id, mode: state.activeMode, provider: config.provider, model: config.model, error: safeError(error, config.apiKey), createdAt: new Date().toISOString() });
       const issue = safeError(error, config.apiKey);
       const result = { id: stage.id, name, mode: state.activeMode, status: 'fallback', startedAt, completedAt: new Date().toISOString(), outputKeys: Object.keys(editable), ...(modelCompleted ? { warning: issue } : { error: issue }), usage: modelCompleted ? usageFor(response) : { inputTokens: 0, outputTokens: 0 } };
