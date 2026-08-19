@@ -16,7 +16,11 @@ const specialistStageDefinitions = Object.freeze([
   // Keep each specialist response patch-sized. The baseline still carries the
   // remaining compatible fields; asking a model to echo the entire editable
   // artifact causes long JSON truncation before the actual research synthesis.
-  { id: 'knowledge', name: 'Knowledge Agent', progress: 66, fields: ['sections', 'wikiSections', 'knowledgeSystem'] },
+  // Keep Knowledge focused on the dependency/validation system. The legacy
+  // `sections` and `wikiSections` arrays are deterministic projections and
+  // are retained by the merge layer; asking the model to echo all three made
+  // long reasoning responses hit the output limit before valid JSON closed.
+  { id: 'knowledge', name: 'Knowledge Agent', progress: 66, fields: ['knowledgeSystem'] },
   { id: 'writing', name: 'Writing Agent', progress: 78, fields: ['summary', 'title', 'abstract', 'systemDocument'] },
   { id: 'review', name: 'Review Agent', progress: 88, fields: ['review'] },
 ]);
