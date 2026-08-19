@@ -986,7 +986,10 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
     const providerConfig = await resolvedProviderConfig(state, user.tenantId);
     if (!providerConfig) return send(res, 409, { error: 'No active LLM provider configured', code: 'LLM_PROVIDER_REQUIRED' });
     const storedIntake = session.activeResearchIntake || [...(session.messages || [])].reverse().find((message) => message.kind === 'intake' && message.runtime?.status === 'ready')?.runtime;
-    const confirmed = intakeConfirmation(prompt) || Boolean(project.artifacts?.length);
+    // A confirmation is meaningful only after this Session has a ready Intake
+    // plan. Never let a first-turn "确认生成" skip clarification and launch
+    // source discovery with an under-specified research question.
+    const confirmed = Boolean(project.artifacts?.length) || (storedIntake?.status === 'ready' && intakeConfirmation(prompt));
     let researchIntake = storedIntake;
     if (!confirmed) {
       const intake = await runResearchIntake(project, providerConfig, { prompt, history: session.messages, previous: session.activeResearchIntake, language });

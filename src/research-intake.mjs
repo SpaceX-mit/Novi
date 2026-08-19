@@ -26,9 +26,19 @@ function normalized(candidate, prompt, previous) {
   const question = String(candidate?.researchQuestion || candidate?.question || previous?.researchQuestion || prompt).trim().slice(0, 2_000);
   const domain = String(candidate?.domain || previous?.domain || '').trim().slice(0, 500);
   const ready = candidate?.status === 'ready' && Boolean(question && domain && scope.length >= 2 && deliverables.length >= 2 && facets.length >= 3);
+  const incompleteQuestions = list(candidate?.questions, 5, 700);
+  const incompleteOptions = options(candidate?.options);
   return {
     status: ready ? 'ready' : 'incomplete', researchQuestion: question, domain, scope, deliverables, constraints,
-    searchFacets: facets, questions: list(candidate?.questions, 5, 700), options: options(candidate?.options),
+    searchFacets: facets,
+    questions: incompleteQuestions.length ? incompleteQuestions : (ready ? [] : [
+      '你希望重点解释哪些机制、架构或实现细节？',
+      '最终需要哪些 Markdown 文档或可验证交付物？',
+    ]),
+    options: incompleteOptions.length ? incompleteOptions : (ready ? [] : [
+      { id: 'broad', label: '全面技术 Deep Dive', description: '覆盖机制、架构、实现、评估、风险与前沿。' },
+      { id: 'implementation', label: '实现与工程落地', description: '聚焦代码路径、系统设计、性能和故障恢复。' },
+    ]),
     brief: String(candidate?.brief || '').trim().slice(0, 12_000), rationale: String(candidate?.rationale || '').trim().slice(0, 1_000),
   };
 }
@@ -77,8 +87,12 @@ export async function runResearchIntake(project, config, { prompt, history = [],
   try {
     const response = await model.invoke([{ role: 'system', content: system }, { role: 'user', content: context }], { signal: AbortSignal.timeout(configuredTimeout()) });
     const parsed = parseObject(messageText(response));
-    const result = parsed ? normalized(parsed, prompt, previous) : null;
-    return result?.status === 'ready' ? result : fallback(prompt, previous);
+    const hasIntakeShape = parsed && ['status', 'researchQuestion', 'question', 'domain', 'scope', 'deliverables', 'searchFacets', 'facets', 'questions', 'options', 'brief'].some((key) => Object.hasOwn(parsed, key));
+    const result = hasIntakeShape ? normalized(parsed, prompt, previous) : null;
+    // Preserve the Intake Agent's incomplete decision. Replacing it with a
+    // generic fallback would silently skip the clarification conversation and
+    // could make an under-specified request look ready to execute.
+    return result || fallback(prompt, previous);
   } catch (error) {
     if (error?.code === 'LLM_PROVIDER_REQUIRED') throw error;
     return fallback(prompt, previous);

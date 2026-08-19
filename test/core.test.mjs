@@ -733,6 +733,12 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
   const before = await (await fetch(`${base}/api/billing`)).json(); assert.equal(before.usage.generations, 0);
   response = await fetch(`${base}/api/projects/${created.project.id}/knowledge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Agent notes', content: 'The Agent can retrieve workspace knowledge and answer through a configured model.' }) }); assert.equal(response.status, 201);
   response = await fetch(`${base}/api/llm/provider`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'custom', model: 'test-chat-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'fixture' }) }); assert.equal(response.status, 200);
+  // A confirmation on the first turn must not bypass the Intake Agent. It
+  // should only save an incomplete clarification turn and must not consume a
+  // generation/source quota or start a Job.
+  response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '确认生成', mode: 'workflow' }) });
+  assert.equal(response.status, 200); const premature = await response.json(); assert.equal(premature.ready, false); assert.equal(premature.requiresConfirmation, false); assert.equal(premature.intake.status, 'incomplete');
+  assert.equal((await (await fetch(`${base}/api/billing`)).json()).usage.generations, 0);
   response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '完善 Agent 能力 Wiki，并保留已有知识。', mode: 'workflow', language: 'en' }) });
   assert.equal(response.status, 200); const intake = await response.json(); assert.equal(intake.ready, true); assert.equal(intake.requiresConfirmation, true); assert.equal(intake.session.messages.at(-1).kind, 'intake');
   response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '确认生成', mode: 'workflow', language: 'en' }) });
