@@ -13,8 +13,11 @@ const goalStage = Object.freeze({ id: 'goal', name: 'Expert Goal Architect', pro
 const referenceStage = Object.freeze({ id: 'references', name: 'Reference Discovery', progress: 42, fields: [] });
 const specialistStageDefinitions = Object.freeze([
   { id: 'research', name: 'Research Agent', progress: 54, fields: ['summary', 'researchGaps', 'sota', 'opportunities'] },
-  { id: 'knowledge', name: 'Knowledge Agent', progress: 66, fields: ['sections', 'wikiSections', 'learningPath', 'caseStudies', 'practiceQuestions', 'graph', 'knowledgeSystem'] },
-  { id: 'writing', name: 'Writing Agent', progress: 78, fields: ['summary', 'title', 'abstract', 'sections', 'contributions', 'noveltyAnalysis', 'method', 'experiments', 'figures', 'systemDocument'] },
+  // Keep each specialist response patch-sized. The baseline still carries the
+  // remaining compatible fields; asking a model to echo the entire editable
+  // artifact causes long JSON truncation before the actual research synthesis.
+  { id: 'knowledge', name: 'Knowledge Agent', progress: 66, fields: ['sections', 'wikiSections', 'knowledgeSystem'] },
+  { id: 'writing', name: 'Writing Agent', progress: 78, fields: ['summary', 'title', 'abstract', 'systemDocument'] },
   { id: 'review', name: 'Review Agent', progress: 88, fields: ['review'] },
 ]);
 const finalizerStage = Object.freeze({ id: 'finalizer', name: 'LLM Wiki Finalizer', progress: 96, fields: ['llmWiki', 'wikiSections'] });
