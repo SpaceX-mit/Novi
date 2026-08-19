@@ -79,6 +79,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 
 - 2026-08-19：完善 Research Intake 会话边界：每个 Session 的 Intake 澄清最多 8 轮，超限时保持 `incomplete`、不检索、不创建 Job、不扣额度，并提示在新 Session 提交更具体目标；用户回复已展示的 option id/label 时，Intake Agent 会收到选择上下文，`selectedOption`、当前轮次和上限写入会话运行时。新增轮次上限与选项选择回归测试。验证：`npm run check`（55 modules）、`node --test test/core.test.mjs --test-name-pattern='Research Intake caps|Research Intake fallback'`、`npm test`（92 passed + 1 PostgreSQL 条件跳过）、`git diff --check`。真实 LLM 对选项语义的判断仍需人工验收。
 
+- 2026-08-19：Research Intake UI 将 Agent 返回的最多 5 个方向渲染为可点击按钮；点击会把 option id 作为下一轮用户输入，继续走同一 Intake Agent 判断，不会绕过确认或提前启动生成。验证：`npm run check`（55 modules）、`git diff --check`；浏览器人工验收仍待完成。
+
 - 2026-08-19：将流式模型分片空闲保护从默认 30 秒提高到 120 秒，上限提高到 300 秒，并同步 `.env.example` 与 README。长上下文/推理型 Provider 在两个有效 chunk 之间可能暂时没有文本，旧阈值会把合法响应误判为 fallback 或请求失败；首 token 与阶段总时长保护不变。验证：`npm run check`（54 modules）、`git diff --check`；完整 `npm test` 尚待本轮后续 Intake 边界修复完成后复跑。真实 Provider 仍需人工验收。
 - 2026-08-19：收紧 Research Intake 的故障 fallback：Provider 返回空/非法内容或请求失败时，不能因为用户提示包含 Wiki/知识库就静默标记 `ready`；现在只保留已有上下文并返回 `incomplete`、追问和选项，必须取得 Intake Agent 的明确 ready 决策后才能确认生成。新增直接模块回归和 HTTP 会话回归，确认无额度消耗、无 Job、无来源检索。验证：定向 `node --test test/core.test.mjs --test-name-pattern='Research Intake fallback|Agent conversation turns require'`（90 passed + 1 PostgreSQL 条件跳过）；完整 `npm test` 和 `npm run check` 将在提交前复跑。真实 LLM/来源人工验收仍未完成。
 - 2026-08-19：新增保守的 citation/evidence repair 层。它只读取已验证来源的 excerpt/title，在句子级进行最小词项重叠匹配，只能添加已有 `[S#]`，不能生成来源、URL 或新事实；无法匹配的句子保持未验证。Finalizer 的 Agent OS 质量门禁和最终 Artifact evidence 都经过该修复层，并记录 `runtime.evidenceRepair` 统计。新增回归覆盖支持/不支持句子、可信来源条件和不误引来源。验证：`npm test` 91 passed + 1 PostgreSQL 条件跳过；`npm run check`（55 modules）；`git diff --check`。这不是事实验证替代品，publication-ready 仍需真实来源正确性与领域专家抽检。
