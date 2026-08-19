@@ -75,6 +75,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 
 ## 更新记录
 
+- 2026-08-19：明确 Research Intake 的产品边界：外部 ChatGPT 或其他工具整理主题不属于 Novi，Novi 收到的最终提示词仍按未批准请求处理；第一步必须由 Intake Agent 判断深度研究所需的问题、范围、交付物、证据和边界是否完整。新增上下文约束，禁止把外部提示词当作已批准计划；不完整时继续多轮追问/提供选项，完整后仍需用户确认才启动检索和 Wiki 生成。验证：`npm run check`、Research Intake/Composer 定向测试、`npm test`、`git diff --check`。真实供应商对话和领域质量仍需外部门禁。
+
 - 2026-08-19：强化证据质量门禁：`publicationReady` 的 claim/citation coverage 现在只统计能与已验证来源 excerpt 产生足够词项重叠的 `[S#]`，无支持的 marker 不再被误计为证据覆盖；当 Agent OS 真实来源包存在时，未支持 marker 会触发硬失败。新增 `supportedCitationIds` 回归测试，覆盖支持、无关主张和 marker 独立成句场景。验证：`npm run check`（55 modules）、`npm test`（92 passed + 1 PostgreSQL 条件跳过）、`git diff --check`。真实来源正确性和领域专家抽检仍是外部门禁。
 
 - 2026-08-19：完善 Research Intake 会话边界：每个 Session 的 Intake 澄清最多 8 轮，超限时保持 `incomplete`、不检索、不创建 Job、不扣额度，并提示在新 Session 提交更具体目标；用户回复已展示的 option id/label 时，Intake Agent 会收到选择上下文，`selectedOption`、当前轮次和上限写入会话运行时。新增轮次上限与选项选择回归测试。验证：`npm run check`（55 modules）、`node --test test/core.test.mjs --test-name-pattern='Research Intake caps|Research Intake fallback'`、`npm test`（92 passed + 1 PostgreSQL 条件跳过）、`git diff --check`。真实 LLM 对选项语义的判断仍需人工验收。

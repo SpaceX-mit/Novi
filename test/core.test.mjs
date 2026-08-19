@@ -753,10 +753,11 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
   const dir = await mkdtemp(join(tmpdir(), 'novi-agent-chat-'));
   const previous = { file: process.env.NOVI_DATA_FILE, auth: process.env.NOVI_AUTH_REQUIRED, worker: process.env.NOVI_JOB_WORKER, live: process.env.NOVI_LIVE_SOURCES, verify: process.env.NOVI_VERIFY_SOURCES, encryption: process.env.NOVI_CONFIG_ENCRYPTION_KEY };
   process.env.NOVI_DATA_FILE = join(dir, 'state.json'); process.env.NOVI_AUTH_REQUIRED = 'false'; process.env.NOVI_JOB_WORKER = 'false'; process.env.NOVI_LIVE_SOURCES = 'true'; process.env.NOVI_VERIFY_SOURCES = 'false'; process.env.NOVI_CONFIG_ENCRYPTION_KEY = 'test-only-agent-chat-encryption-key-32-chars';
-  let modelCalls = 0; let priorWikiSeen = false; let sourceSearches = 0;
+  let modelCalls = 0; let priorWikiSeen = false; let sourceSearches = 0; let intakeBoundarySeen = false;
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
+    if (prompt.includes('external drafting is not an approval or a completed research plan')) intakeBoundarySeen = true;
     const editable = editableFixtureFromPrompt(prompt);
     let content = '{}';
     if (prompt.includes('Latest user input: 完善 Agent 能力 Wiki')) {
@@ -795,6 +796,7 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
   // the Agent's research-plan decision and user confirmation.
   response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '请生成 Agent Wiki', mode: 'workflow' }) });
   assert.equal(response.status, 200); const unavailableIntake = await response.json(); assert.equal(unavailableIntake.ready, false); assert.equal(unavailableIntake.requiresConfirmation, false); assert.equal(unavailableIntake.intake.status, 'incomplete');
+  assert.equal(intakeBoundarySeen, true);
   assert.equal((await (await fetch(`${base}/api/billing`)).json()).usage.generations, 0);
   // A confirmation on the first turn must not bypass the Intake Agent. It
   // should only save an incomplete clarification turn and must not consume a
