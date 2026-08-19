@@ -74,6 +74,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 4. 在已配置的 GitHub 远程仓库运行持续集成门禁并归档结果；随后接入真实供应商/目标基础设施并关闭正式发布门禁。
 
 ## 更新记录
+- 2026-08-19：重构 Workspace 展示层，参考 Linear/Notion/WorkBuddy 的单焦点导航：新增 Chat、Files、LLM Wiki、Document 四个互斥 Workspace Tab；Chat 内才显示 Agent Session + conversation，Files/Wiki/Document 使用单列最大宽度内容区，不再与会话三栏并排。切换 Tab 保留当前 Session、composer 草稿、执行模式、Wiki 语言、Artifact、文档选择及 Preview/Source 状态；文件/Markdown 链接会自动切换到 Document。移动端 Tab 横向滚动且保持无横向溢出。更新浏览器 smoke 覆盖四 Tab、互斥内容、状态保持和桌面/移动布局。验证：`npm test` 88 passed + 1 PostgreSQL 条件跳过；`npm run check`（51 modules）；`npm run browser-smoke` 在 1360×900 和 390×844 均通过；`git diff --check` 通过。
+
 
 - 2026-08-19：优化 Agent Chat UI 阅读体验，参考 WorkBuddy 类聊天编辑器的层级与留白：助手正文从 11px 调整为 15px/1.8 行高并取消厚重气泡，用户消息保持独立浅色气泡；扩大消息阅读宽度和段间距，Goal、运行事件、输入框、事件详情和移动端断点同步提升字号与可读性；保留流式事件默认展开、工具详情和响应式无横向溢出行为。此项仅修改 Web 样式，不改变 Agent、LLM、工具调用或消息数据契约。验证：`npm test` 88 passed + 1 PostgreSQL 条件跳过；`npm run check`（51 modules）；`npm run browser-smoke` 在 1360×900 和 390×844 均通过；`git diff --check` 通过。
 

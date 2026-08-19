@@ -2,7 +2,7 @@ import { marked } from '/vendor/marked.esm.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, toolSettings: null, mcpSettings: null, skillSettings: null, pluginSettings: null, customizeTab: 'tools', activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, contextPanel: 'wiki', activeDocumentId: null, documentViewMode: 'preview', monitoringJobId: null, composerDraft: '', composerMode: 'auto', composerLanguage: 'zh-CN' };
+const state = { projects: [], activeProject: null, activeTab: 'overview', activeArtifactId: null, compareVersions: false, role: 'viewer', providerSettings: null, toolSettings: null, mcpSettings: null, skillSettings: null, pluginSettings: null, customizeTab: 'tools', activeJob: null, sessions: [], activeSessionId: null, activeSession: null, sessionProjectId: null, workspaceKnowledge: null, workspacePanel: 'chat', contextPanel: 'wiki', activeDocumentId: null, documentViewMode: 'preview', monitoringJobId: null, composerDraft: '', composerMode: 'auto', composerLanguage: 'zh-CN' };
 let authRegister = false;
 const roleRank = Object.freeze({ viewer: 10, editor: 20, admin: 30, owner: 40 });
 const canRole = (required) => (roleRank[state.role] || 0) >= roleRank[required];
@@ -205,7 +205,7 @@ function showWorkspace(project) {
   $('#page-label').textContent = project.title;
   $$('.nav-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.view === project.type));
   if (state.sessionProjectId !== project.id) {
-    state.sessionProjectId = project.id; state.sessions = []; state.activeSessionId = null; state.activeSession = null; state.workspaceKnowledge = null; state.contextPanel = 'wiki'; state.activeDocumentId = null; state.composerDraft = ''; state.composerMode = 'auto'; state.composerLanguage = project.wikiLanguage || 'zh-CN';
+    state.sessionProjectId = project.id; state.sessions = []; state.activeSessionId = null; state.activeSession = null; state.workspaceKnowledge = null; state.workspacePanel = 'chat'; state.contextPanel = 'wiki'; state.activeDocumentId = null; state.composerDraft = ''; state.composerMode = 'auto'; state.composerLanguage = project.wikiLanguage || 'zh-CN';
     void loadAgentWorkspace(project.id);
   }
   renderWorkspace(project);
@@ -345,14 +345,14 @@ function renderDocumentViewer(artifact) {
   return `<article class="document-viewer"><span>${escapeHtml(document.sourceKind || 'text')} · ${document.chunkCount || chunks.length} chunks</span><h3>${escapeHtml(document.title)}</h3>${document.sourceUrl ? `<a href="${escapeHtml(safeExternalUrl(document.sourceUrl))}" target="_blank" rel="noopener noreferrer">Open source</a>` : ''}<div>${chunks.map((chunk) => `<p>${escapeHtml(chunk.text || '')}</p>`).join('') || '<p>No indexed passages.</p>'}</div></article>`;
 }
 
-function renderContextBody(project, artifact, artifactIndex, selected) {
+function renderContextBody(project, artifact, artifactIndex, selected, panel = state.contextPanel) {
   const knowledge = state.workspaceKnowledge || { documents: [] };
-  if (state.contextPanel === 'files') {
+  if (panel === 'files') {
     const generated = (artifact?.documents || []).map((document) => `<button data-generated-document-id="${escapeHtml(document.id)}"><span>${escapeHtml(document.name)}</span><small>${escapeHtml(document.role === 'deep-dive' ? 'Technical Deep Dive' : document.role === 'goal' ? 'Research Goal' : 'LLM Wiki summary')} · ${escapeHtml(document.language || artifact.language || 'en')}</small></button>`).join('');
     const imported = (knowledge.documents || []).map((document) => `<button data-document-id="${escapeHtml(document.id)}"><span>${escapeHtml(document.title)}</span><small>${escapeHtml(document.sourceKind || 'text')} · ${document.chunkCount || 0} chunks</small></button>`).join('');
     return generated || imported ? `<div class="context-file-list">${generated}${imported}</div>` : '<div class="context-empty"><b>No files yet</b><p>Generate a Wiki or import notes, web pages, PDFs, or a GitHub repository.</p></div>';
   }
-  if (state.contextPanel === 'document') return renderDocumentViewer(artifact);
+  if (panel === 'document') return renderDocumentViewer(artifact);
   if (!artifact) return '<div class="context-empty"><b>No artifact yet</b><p>Send a request in this Session to create the first knowledge asset.</p></div>';
   const tabs = tabsFor(project.type); const c = artifact.content;
   const toolCalls = artifact.workflow?.runtime?.toolCalls || [];
@@ -378,9 +378,17 @@ function renderWorkspace(project, selected = state.activeTab) {
   const editor = canRole('editor'); const administrator = canRole('admin');
   if (!availableTabs.some((tab) => tab.key === selected)) selected = availableTabs[0].key;
   state.activeTab = selected;
+  const workspacePanels = [['chat', 'Chat'], ['files', 'Files'], ['wiki', 'LLM Wiki'], ['document', 'Document']];
+  if (!workspacePanels.some(([key]) => key === state.workspacePanel)) state.workspacePanel = 'chat';
+  const activePanel = state.workspacePanel;
+  const contextPanel = activePanel === 'chat' ? 'wiki' : activePanel;
+  state.contextPanel = contextPanel;
+  const contextActions = `${artifact ? '<button class="secondary-button full" id="copy-summary">Copy summary</button>' : ''}${editor ? '<button class="secondary-button full" id="ingest-document">Import notes</button><button class="secondary-button full" id="import-url">Import web/PDF URL</button>' : ''}<button class="secondary-button full" id="knowledge-library">Browse &amp; search knowledge</button>${editor ? '<button class="secondary-button full" id="refresh-sources">Refresh sources</button>' : ''}<button class="secondary-button full" id="show-snapshots">View source history</button>${editor ? '<button class="secondary-button full" id="toggle-watch">Configure updates</button>' : ''}`;
+  const contextMarkup = `<section class="workspace-context-panel"><div class="context-body">${renderContextBody(project, artifact, artifactIndex, selected, contextPanel)}</div><div class="context-actions">${contextActions}</div></section>`;
   $('#workspace-root').innerHTML = `<button class="back-link" id="back-overview">← All workspaces</button>
     <div class="workspace-head"><div><span class="type-label ${meta.color}">${meta.label}</span><h1>${escapeHtml(project.title)}</h1><p>${escapeHtml(project.topic)}</p>${activeJob || workspaceBusy ? `<div class="agent-run-strip" id="agent-run-status" aria-live="polite"><span>ACTIVE MODE</span><b id="agent-run-mode">${escapeHtml(activeJob?.currentModeLabel || activeJob?.currentMode || 'Routing')}</b><i></i><strong id="agent-run-stage">${escapeHtml(activeJob?.currentStage || 'Preparing')}</strong><small id="agent-run-progress">${Number(activeJob?.progress || 0)}%</small></div>` : ''}</div><div class="workspace-actions">${editor ? `<button class="secondary-button" id="pin-workspace">${project.pinned ? '★ Pinned' : '☆ Pin'}</button>` : ''}${artifact ? `<button class="secondary-button" id="export-md">↓ Markdown</button>${project.type === 'paper' ? '<button class="secondary-button" id="export-ieee">↓ IEEE LaTeX</button><button class="secondary-button" id="export-acm">↓ ACM LaTeX</button>' : ''}` : ''}${administrator ? '<button class="secondary-button danger-button" id="delete-workspace">Delete</button>' : ''}${editor ? `<button class="primary-button" id="generate" ${workspaceBusy ? 'disabled' : ''}>${workspaceBusy ? 'Agent running…' : artifact ? '↻ Regenerate' : '✦ Generate asset'}</button>` : ''}</div></div>
-    <div class="session-workspace">${renderSessionRail(project)}${renderConversation(project)}<aside class="context-panel"><div class="context-tabs"><button data-context-panel="files" class="${state.contextPanel === 'files' ? 'active' : ''}">Files</button><button data-context-panel="wiki" class="${state.contextPanel === 'wiki' ? 'active' : ''}">LLM Wiki</button><button data-context-panel="document" class="${state.contextPanel === 'document' ? 'active' : ''}">Document</button></div><div class="context-body">${renderContextBody(project, artifact, artifactIndex, selected)}</div><div class="context-actions">${artifact ? '<button class="secondary-button full" id="copy-summary">Copy summary</button>' : ''}${editor ? '<button class="secondary-button full" id="ingest-document">Import notes</button><button class="secondary-button full" id="import-url">Import web/PDF URL</button>' : ''}<button class="secondary-button full" id="knowledge-library">Browse &amp; search knowledge</button>${editor ? '<button class="secondary-button full" id="refresh-sources">Refresh sources</button>' : ''}<button class="secondary-button full" id="show-snapshots">View source history</button>${editor ? '<button class="secondary-button full" id="toggle-watch">Configure updates</button>' : ''}</div></aside></div>`;
+    <nav class="workspace-panel-tabs" aria-label="Workspace view">${workspacePanels.map(([key, label]) => `<button data-workspace-panel="${key}" class="${activePanel === key ? 'active' : ''}" aria-selected="${activePanel === key}">${label}</button>`).join('')}</nav>
+    <div class="workspace-panel-content">${activePanel === 'chat' ? `<div class="chat-workspace">${renderSessionRail(project)}${renderConversation(project)}</div>` : contextMarkup}</div>`;
   if (c?.knowledgeContext?.length && ['wiki', 'report', 'draft'].includes(selected)) $('.artifact-content')?.insertAdjacentHTML('beforeend', renderWorkspaceKnowledgeContext(c.knowledgeContext));
   $('#back-overview').onclick = showOverview;
   $('#generate')?.addEventListener('click', () => generate(project.id)); $('#generate-empty')?.addEventListener('click', () => generate(project.id));
@@ -391,17 +399,17 @@ function renderWorkspace(project, selected = state.activeTab) {
   $('#new-session')?.addEventListener('click', () => createAgentSessionUi(project.id));
   $('#delete-session')?.addEventListener('click', () => deleteAgentSessionUi(project.id, state.activeSessionId));
   $$('[data-session-id]').forEach((button) => button.addEventListener('click', () => selectAgentSession(project.id, button.dataset.sessionId)));
-  $$('[data-context-panel]').forEach((button) => button.addEventListener('click', () => { state.contextPanel = button.dataset.contextPanel; renderWorkspace(project, state.activeTab); }));
-  $$('[data-document-id]').forEach((button) => button.addEventListener('click', () => { state.activeDocumentId = button.dataset.documentId; state.contextPanel = 'document'; state.documentViewMode = 'preview'; renderWorkspace(project, state.activeTab); }));
-  $$('[data-generated-document-id]').forEach((button) => button.addEventListener('click', () => { state.activeDocumentId = button.dataset.generatedDocumentId; state.contextPanel = 'document'; state.documentViewMode = 'preview'; renderWorkspace(project, state.activeTab); }));
+  $$('[data-workspace-panel]').forEach((button) => button.addEventListener('click', () => { state.workspacePanel = button.dataset.workspacePanel; state.contextPanel = state.workspacePanel === 'chat' ? 'wiki' : state.workspacePanel; renderWorkspace(project, state.activeTab); }));
+  $$('[data-document-id]').forEach((button) => button.addEventListener('click', () => { state.activeDocumentId = button.dataset.documentId; state.workspacePanel = 'document'; state.contextPanel = 'document'; state.documentViewMode = 'preview'; renderWorkspace(project, state.activeTab); }));
+  $$('[data-generated-document-id]').forEach((button) => button.addEventListener('click', () => { state.activeDocumentId = button.dataset.generatedDocumentId; state.workspacePanel = 'document'; state.contextPanel = 'document'; state.documentViewMode = 'preview'; renderWorkspace(project, state.activeTab); }));
   $$('[data-document-view-mode]').forEach((button) => button.addEventListener('click', () => { state.documentViewMode = button.dataset.documentViewMode; renderWorkspace(project, state.activeTab); }));
   $$('[data-markdown-document]').forEach((link) => link.addEventListener('click', (event) => {
     event.preventDefault();
     const document = (artifact?.documents || []).find((item) => item.name === link.dataset.markdownDocument);
     if (!document) return;
-    state.activeDocumentId = document.id; state.contextPanel = 'document'; state.documentViewMode = 'preview'; renderWorkspace(project, state.activeTab);
+    state.activeDocumentId = document.id; state.workspacePanel = 'document'; state.contextPanel = 'document'; state.documentViewMode = 'preview'; renderWorkspace(project, state.activeTab);
   }));
-  $$('[data-artifact-id]').forEach((button) => button.addEventListener('click', () => { state.activeArtifactId = button.dataset.artifactId; state.contextPanel = 'wiki'; state.compareVersions = false; renderWorkspace(project, state.activeTab); }));
+  $$('[data-artifact-id]').forEach((button) => button.addEventListener('click', () => { state.activeArtifactId = button.dataset.artifactId; state.workspacePanel = 'wiki'; state.contextPanel = 'wiki'; state.compareVersions = false; renderWorkspace(project, state.activeTab); }));
   $('#pin-workspace')?.addEventListener('click', () => pin(project.id)); $('#copy-summary')?.addEventListener('click', async () => { if (!navigator.clipboard) return showToast('Clipboard is unavailable'); await navigator.clipboard.writeText(c.summary); showToast('Summary copied'); });
   $('#delete-workspace')?.addEventListener('click', () => deleteWorkspace(project));
   $('#export-md')?.addEventListener('click', () => exportArtifact(project.id, 'markdown', artifact.id));
@@ -464,7 +472,7 @@ function renderEvidenceClaims(evidence) {
 }
 
 async function loadProjects() { state.projects = (await request('/api/projects')).projects; renderProjects(); }
-function resetAgentWorkspaceState() { state.sessions = []; state.activeSessionId = null; state.activeSession = null; state.sessionProjectId = null; state.workspaceKnowledge = null; state.activeDocumentId = null; state.monitoringJobId = null; state.composerDraft = ''; state.composerMode = 'auto'; state.composerLanguage = 'zh-CN'; }
+function resetAgentWorkspaceState() { state.sessions = []; state.activeSessionId = null; state.activeSession = null; state.sessionProjectId = null; state.workspaceKnowledge = null; state.workspacePanel = 'chat'; state.activeDocumentId = null; state.monitoringJobId = null; state.composerDraft = ''; state.composerMode = 'auto'; state.composerLanguage = 'zh-CN'; }
 async function loadBilling() {
   try {
     const org = await request('/api/org');
@@ -637,7 +645,7 @@ async function monitorGeneration(id, initialJob, sessionId, notifyStages = true)
     const result = await request(`/api/projects/${id}`);
     state.projects = state.projects.map((project) => project.id === id ? result.project : project);
     state.activeProject = result.project; state.activeJob = null;
-    state.activeArtifactId = result.project.artifacts?.[0]?.id || null; state.compareVersions = false; state.contextPanel = 'wiki'; state.activeTab = 'overview';
+    state.activeArtifactId = result.project.artifacts?.[0]?.id || null; state.compareVersions = false; state.workspacePanel = 'wiki'; state.contextPanel = 'wiki'; state.activeTab = 'overview';
     await loadAgentWorkspace(id, sessionId);
     showToast('Knowledge asset generated');
   } catch (error) {
