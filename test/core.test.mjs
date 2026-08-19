@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { JsonStore } from '../src/store.mjs';
 import { artifactToLatex, artifactToMarkdown, generateArtifact } from '../src/engine.mjs';
 import { assessWikiQuality } from '../src/wiki-quality.mjs';
-import { repairCitationMarkers } from '../src/citation-repair.mjs';
+import { repairCitationMarkers, supportedCitationIds } from '../src/citation-repair.mjs';
 import { LOCAL_MONTHLY_GENERATIONS, PLANS, consumeGeneration, consumeSourceQuery, limitsFor, localMonthlyGenerationLimit } from '../src/billing.mjs';
 import { refundGeneration, refundSourceQuery } from '../src/billing.mjs';
 import { completeArtifact } from '../src/model.mjs';
@@ -177,6 +177,8 @@ test('citation repair only adds markers supported by verified source excerpts', 
   assert.match(repaired.content.sections[0].body, /\[S2\]/u);
   assert.doesNotMatch(repaired.content.summary, /\[S2\]/u);
   assert.match(repaired.content.summary, /billing policy and should remain unverified\.$/u);
+  assert.deepEqual(supportedCitationIds(repaired.content.summary, sources), ['S1']);
+  assert.deepEqual(supportedCitationIds('An unsupported statement about unrelated finance [S1].', sources), []);
 });
 
 test('Agent OS Wiki quality audit rejects shallow or unverified publication and passes the enriched offline baseline structurally', () => {

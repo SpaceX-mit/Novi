@@ -50,6 +50,37 @@ function paragraphSupport(paragraph, indexedSources) {
   return values.slice(0, 2).map((item) => item.citationId);
 }
 
+function markerSupport(paragraph, marker, indexedSources) {
+  const clean = String(paragraph || '').replace(/\[S\d+\]/gu, '');
+  const paragraphTokens = tokens(clean);
+  const source = indexedSources.find((item) => item.citationId === marker);
+  if (!source || paragraphTokens.length < 5) return false;
+  const overlap = paragraphTokens.filter((token) => source.sourceTokens.has(token)).length;
+  const ratio = overlap / Math.max(1, Math.min(paragraphTokens.length, source.sourceTokens.size));
+  return overlap >= 2 && (overlap >= 3 || ratio >= 0.16);
+}
+
+export function supportedCitationIds(text, sources = []) {
+  const indexedSources = Array.isArray(sources) && sources.length && sources[0]?.sourceTokens
+    ? sources
+    : usableSources(sources);
+  if (!indexedSources.length) return [];
+  const markers = [...new Set([...String(text || '').matchAll(/\[S(\d+)\]/gu)].map((match) => `S${match[1]}`))];
+  const supported = new Set();
+  const sentences = String(text || '').split(/(?<=[.!?。！？])\s+/u);
+  for (let index = 0; index < sentences.length; index += 1) {
+    const sentence = sentences[index];
+    for (const marker of markers.filter((item) => sentence.includes(`[${item}]`))) {
+      const trimmed = sentence.trim();
+      const context = trimmed.startsWith(`[${marker}]`) && index > 0
+        ? `${sentences[index - 1]} ${trimmed.slice(marker.length + 2)}`
+        : sentence;
+      if (markerSupport(context, marker, indexedSources)) supported.add(marker);
+    }
+  }
+  return [...supported];
+}
+
 function repairText(value, indexedSources, stats) {
   const raw = String(value || '');
   if (raw.length < 80 || !indexedSources.length) return raw;

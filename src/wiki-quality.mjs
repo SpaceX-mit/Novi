@@ -4,6 +4,7 @@ const AGENT_OS_TERMS = [
   'approval', 'sandbox', 'prompt injection', 'evaluation', 'replay',
   'idempotency', '幂等', '记忆', '审批', '沙箱', '提示注入', '评估', '重放',
 ];
+import { supportedCitationIds } from './citation-repair.mjs';
 
 const AGENT_RUNTIME_OPTIONS = [
   'langgraph', 'openai agents', 'autogen', 'crewai', 'pydanticai',
@@ -90,10 +91,15 @@ export function assessWikiQuality(artifact, { topic = '', requireAgentOs = false
   const evidenceDisclaimer = textOf(content.evidence?.disclaimer);
   const evidenceSources = Array.isArray(sources) ? sources.filter((source) => source?.mapped === true && source.verification !== 'unreachable' && source.status !== 'unreachable') : content.evidence?.sources;
   const mappedSources = Array.isArray(evidenceSources) ? evidenceSources.length : 0;
-  const mappedClaims = Array.isArray(content.evidence?.claims) ? content.evidence.claims.filter((claim) => claim?.evidenceIds?.length).length : 0;
+  const claimSources = Array.isArray(evidenceSources) ? evidenceSources : [];
+  const mappedClaims = Array.isArray(content.evidence?.claims) ? content.evidence.claims.filter((claim) => supportedCitationIds(claim?.text, claimSources).length).length : 0;
   const totalClaims = Array.isArray(content.evidence?.claims) ? content.evidence.claims.length : 0;
-  const citationCount = (corpus.match(/\[s\d+\]/gu) || []).length;
-  const explicitSourceClaims = Array.isArray(content.evidence?.claims) ? content.evidence.claims.filter((claim) => Array.isArray(claim?.citationIds) && claim.citationIds.length).length : 0;
+  const supportedCitationCount = Array.isArray(content.evidence?.claims)
+    ? content.evidence.claims.reduce((sum, claim) => sum + supportedCitationIds(claim?.text, claimSources).length, 0)
+    : 0;
+  const citationCount = supportedCitationCount;
+  const explicitSourceClaims = Array.isArray(content.evidence?.claims) ? content.evidence.claims.filter((claim) => supportedCitationIds(claim?.text, claimSources).length).length : 0;
+  const rawCitationCount = (corpus.match(/\[s\d+\]/gu) || []).length;
   const mapSlugs = (wiki.documentMap || []).map((document) => document?.slug);
   const expectedSlugs = documents.map((document) => document?.slug);
   const coherenceFailures = [];
@@ -125,6 +131,7 @@ export function assessWikiQuality(artifact, { topic = '', requireAgentOs = false
     const requiredSignals = ['MCP', 'memory', 'approval', 'sandbox', 'evaluation', 'replay', 'idempotency'];
     for (const term of requiredSignals) if (!corpus.includes(normalized(term))) hardFailures.push(`missing required Agent OS concept: ${term}`);
     if (mappedSources >= 5 && citationCount < 8) hardFailures.push(`verified source packet is present but only ${citationCount} citation markers were emitted; at least 8 required`);
+    if (rawCitationCount > supportedCitationCount && mappedSources >= 5) hardFailures.push(`${rawCitationCount - supportedCitationCount} citation markers are not supported by their source excerpts`);
   }
   const values = Object.values(dimensions);
   const overall = Number((values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length)).toFixed(3));

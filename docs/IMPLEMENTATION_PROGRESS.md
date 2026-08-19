@@ -75,6 +75,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 
 ## 更新记录
 
+- 2026-08-19：强化证据质量门禁：`publicationReady` 的 claim/citation coverage 现在只统计能与已验证来源 excerpt 产生足够词项重叠的 `[S#]`，无支持的 marker 不再被误计为证据覆盖；当 Agent OS 真实来源包存在时，未支持 marker 会触发硬失败。新增 `supportedCitationIds` 回归测试，覆盖支持、无关主张和 marker 独立成句场景。验证：`npm run check`（55 modules）、`npm test`（92 passed + 1 PostgreSQL 条件跳过）、`git diff --check`。真实来源正确性和领域专家抽检仍是外部门禁。
+
 - 2026-08-19：将流式模型分片空闲保护从默认 30 秒提高到 120 秒，上限提高到 300 秒，并同步 `.env.example` 与 README。长上下文/推理型 Provider 在两个有效 chunk 之间可能暂时没有文本，旧阈值会把合法响应误判为 fallback 或请求失败；首 token 与阶段总时长保护不变。验证：`npm run check`（54 modules）、`git diff --check`；完整 `npm test` 尚待本轮后续 Intake 边界修复完成后复跑。真实 Provider 仍需人工验收。
 - 2026-08-19：收紧 Research Intake 的故障 fallback：Provider 返回空/非法内容或请求失败时，不能因为用户提示包含 Wiki/知识库就静默标记 `ready`；现在只保留已有上下文并返回 `incomplete`、追问和选项，必须取得 Intake Agent 的明确 ready 决策后才能确认生成。新增直接模块回归和 HTTP 会话回归，确认无额度消耗、无 Job、无来源检索。验证：定向 `node --test test/core.test.mjs --test-name-pattern='Research Intake fallback|Agent conversation turns require'`（90 passed + 1 PostgreSQL 条件跳过）；完整 `npm test` 和 `npm run check` 将在提交前复跑。真实 LLM/来源人工验收仍未完成。
 - 2026-08-19：新增保守的 citation/evidence repair 层。它只读取已验证来源的 excerpt/title，在句子级进行最小词项重叠匹配，只能添加已有 `[S#]`，不能生成来源、URL 或新事实；无法匹配的句子保持未验证。Finalizer 的 Agent OS 质量门禁和最终 Artifact evidence 都经过该修复层，并记录 `runtime.evidenceRepair` 统计。新增回归覆盖支持/不支持句子、可信来源条件和不误引来源。验证：`npm test` 91 passed + 1 PostgreSQL 条件跳过；`npm run check`（55 modules）；`git diff --check`。这不是事实验证替代品，publication-ready 仍需真实来源正确性与领域专家抽检。
