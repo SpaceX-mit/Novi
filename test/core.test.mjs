@@ -31,6 +31,7 @@ import { syncKnowledgeGraph } from '../src/graph-store.mjs';
 import { enqueueDocumentProjection, flushExternalProjectionJobs } from '../src/external-projection.mjs';
 import { normalizeProviderInput, resolvedProviderConfig, saveProviderConfig } from '../src/llm-providers.mjs';
 import { referenceQueryForGoal, runAgentWorkflow } from '../src/agent-runtime.mjs';
+import { runResearchIntake } from '../src/research-intake.mjs';
 import { DEFAULT_WIKI_LANGUAGE, normalizeWikiLanguage, WIKI_LANGUAGES } from '../src/wiki-language.mjs';
 import { agentModeCatalog, selectAgentMode } from '../src/agent-modes.mjs';
 import { appendSessionMessage, beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, sessionSummary, updateSessionRun, updateSessionRunEvent } from '../src/agent-sessions.mjs';
@@ -154,6 +155,13 @@ test('engine generates complete artifacts for all product paths', () => {
   assert.match(artifactToLatex(base, paper), /Workspace knowledge used/);
   assert.match(artifactToLatex(base, paper, 'ieee'), /^\\documentclass\[conference\]\{IEEEtran\}/);
   assert.match(artifactToLatex(base, paper, 'acm'), /^\\documentclass\[sigconf\]\{acmart\}/);
+});
+
+test('Research Intake fallback never approves a Wiki without an Agent decision', async () => {
+  const intake = await runResearchIntake({ title: 'Fallback', topic: 'Agent Wiki', type: 'knowledge' }, { provider: 'custom', family: 'openai', model: 'unavailable', baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'fixture' }, { prompt: '请生成 Agent Wiki' });
+  assert.equal(intake.status, 'incomplete');
+  assert.ok(intake.questions.length >= 1);
+  assert.equal(intake.options.length >= 1, true);
 });
 
 test('Agent OS Wiki quality audit rejects shallow or unverified publication and passes the enriched offline baseline structurally', () => {
@@ -722,7 +730,9 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
     const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
     const editable = editableFixtureFromPrompt(prompt);
     let content = '{}';
-    if (editable) {
+    if (prompt.includes('Latest user input: 完善 Agent 能力 Wiki')) {
+      content = JSON.stringify({ status: 'ready', researchQuestion: 'How should an Agent capability Wiki be designed?', domain: 'Agent systems', scope: ['runtime mechanisms', 'engineering constraints'], deliverables: ['deep dive documents', 'llm-wiki.md'], constraints: ['cite evidence'], searchFacets: ['mechanisms', 'architecture', 'evaluation'], methodology: ['decompose the system', 'compare evidence', 'review claims'], sourcePlan: ['official docs', 'papers', 'implementation reports'], stagePlan: [{ id: 'goal', name: 'Goal Architect', purpose: 'bound the question' }, { id: 'references', name: 'Reference Discovery', purpose: 'find sources' }, { id: 'research', name: 'Research', purpose: 'analyze mechanisms' }, { id: 'knowledge', name: 'Knowledge', purpose: 'organize concepts' }, { id: 'writing', name: 'Writing', purpose: 'write documents' }, { id: 'review', name: 'Review', purpose: 'audit claims' }, { id: 'finalizer', name: 'Finalizer', purpose: 'publish the Wiki' }], completionCriteria: ['trace claims to evidence', 'produce multiple documents', 'pass review'], brief: '完善 Agent 能力 Wiki，并保留已有知识。' });
+    } else if (editable) {
       const key = Object.keys(editable)[0]; modelCalls += 1;
       if (editable.expertGoal) content = JSON.stringify({ expertGoal: { ...editable.expertGoal, outcome: `Refined outcome for ${editable.expertGoal.question}` } });
       else if (editable.llmWiki) {
@@ -752,6 +762,11 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
   const before = await (await fetch(`${base}/api/billing`)).json(); assert.equal(before.usage.generations, 0);
   response = await fetch(`${base}/api/projects/${created.project.id}/knowledge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Agent notes', content: 'The Agent can retrieve workspace knowledge and answer through a configured model.' }) }); assert.equal(response.status, 201);
   response = await fetch(`${base}/api/llm/provider`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'custom', model: 'test-chat-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'fixture' }) }); assert.equal(response.status, 200);
+  // A malformed/empty Intake response must not let a Wiki-shaped prompt skip
+  // the Agent's research-plan decision and user confirmation.
+  response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '请生成 Agent Wiki', mode: 'workflow' }) });
+  assert.equal(response.status, 200); const unavailableIntake = await response.json(); assert.equal(unavailableIntake.ready, false); assert.equal(unavailableIntake.requiresConfirmation, false); assert.equal(unavailableIntake.intake.status, 'incomplete');
+  assert.equal((await (await fetch(`${base}/api/billing`)).json()).usage.generations, 0);
   // A confirmation on the first turn must not bypass the Intake Agent. It
   // should only save an incomplete clarification turn and must not consume a
   // generation/source quota or start a Job.

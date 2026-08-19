@@ -76,23 +76,11 @@ function normalized(candidate, prompt, previous) {
 }
 
 function fallback(prompt, previous) {
-  const explicitWikiRequest = /(?:wiki|知识库|知识体系)/iu.test(String(prompt || ''));
-  if (explicitWikiRequest) {
-    return {
-      status: 'ready',
-      researchQuestion: String(previous?.researchQuestion || prompt).trim().slice(0, 2_000),
-      domain: previous?.domain || 'User-defined technical topic',
-      scope: previous?.scope?.length >= 2 ? previous.scope : ['核心概念、机制与边界', '系统架构、实现路径与工程取舍', '评估、风险、失败模式与前沿方向'],
-      deliverables: previous?.deliverables?.length >= 2 ? previous.deliverables : ['00-goal.md 研究目标与范围', '五篇技术 Deep Dive Markdown 文档', 'llm-wiki.md 总结、导航与后续问题'],
-      constraints: previous?.constraints?.length ? previous.constraints : ['所有关键事实标注证据状态', '区分已验证来源与未验证推断'],
-      searchFacets: previous?.searchFacets?.length >= 3 ? previous.searchFacets : ['Research landscape and competing approaches', 'Foundations and mechanisms', 'System architecture and implementation', 'Evaluation and reproducibility', 'Risks and frontier directions'],
-      methodology: previous?.methodology?.length >= 3 ? previous.methodology : DEFAULT_METHODOLOGY,
-      sourcePlan: previous?.sourcePlan?.length >= 3 ? previous.sourcePlan : DEFAULT_SOURCE_PLAN,
-      stagePlan: previous?.stagePlan?.length >= 5 ? previous.stagePlan : DEFAULT_STAGE_PLAN,
-      completionCriteria: previous?.completionCriteria?.length >= 3 ? previous.completionCriteria : DEFAULT_COMPLETION_CRITERIA,
-      questions: [], options: [], brief: String(prompt || '').trim().slice(0, 12_000), rationale: 'The request explicitly asks to generate or improve a technical Wiki, so a bounded default research brief can be proposed immediately.',
-    };
-  }
+  // A provider/network failure is not an Agent decision. Never infer that a
+  // Wiki-shaped prompt is complete here: doing so would let a deterministic
+  // fallback bypass the first-turn clarification and confirmation boundary.
+  // Preserve any previously discussed fields as context, but keep the intake
+  // incomplete until the Intake Agent can evaluate the latest turn.
   const current = normalized({ status: 'incomplete', researchQuestion: previous?.researchQuestion || prompt, domain: previous?.domain, scope: previous?.scope, deliverables: previous?.deliverables, constraints: previous?.constraints, searchFacets: previous?.searchFacets, methodology: previous?.methodology, sourcePlan: previous?.sourcePlan, stagePlan: previous?.stagePlan, completionCriteria: previous?.completionCriteria }, prompt, previous);
   current.questions = ['你希望重点解释哪些机制、架构或实现细节？', '最终需要哪些 Markdown 文档或可验证交付物？'];
   current.options = [{ id: 'broad', label: '全面技术 Deep Dive', description: '覆盖机制、架构、实现、评估、风险与前沿。' }, { id: 'implementation', label: '实现与工程落地', description: '聚焦代码路径、系统设计、性能和故障恢复。' }];
