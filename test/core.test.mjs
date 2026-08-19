@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { JsonStore } from '../src/store.mjs';
 import { artifactToLatex, artifactToMarkdown, generateArtifact } from '../src/engine.mjs';
 import { assessWikiQuality } from '../src/wiki-quality.mjs';
+import { repairCitationMarkers } from '../src/citation-repair.mjs';
 import { LOCAL_MONTHLY_GENERATIONS, PLANS, consumeGeneration, consumeSourceQuery, limitsFor, localMonthlyGenerationLimit } from '../src/billing.mjs';
 import { refundGeneration, refundSourceQuery } from '../src/billing.mjs';
 import { completeArtifact } from '../src/model.mjs';
@@ -162,6 +163,20 @@ test('Research Intake fallback never approves a Wiki without an Agent decision',
   assert.equal(intake.status, 'incomplete');
   assert.ok(intake.questions.length >= 1);
   assert.equal(intake.options.length >= 1, true);
+});
+
+test('citation repair only adds markers supported by verified source excerpts', () => {
+  const draft = { summary: 'LangGraph uses state transitions and checkpoint persistence to coordinate durable execution across graph nodes. This paragraph discusses unrelated billing policy and should remain unverified.', sections: [{ body: 'MCP defines a protocol for connecting model applications to tools and resources through a client-server interface. The protocol boundary is distinct from an Agent orchestration runtime.' }] };
+  const sources = [
+    { name: 'LangGraph persistence docs', kind: 'Official Docs', url: 'https://docs.example/langgraph', mapped: true, verification: 'verified', contentHash: 'a'.repeat(64), excerpt: 'LangGraph state transitions and checkpoint persistence provide durable execution across graph nodes.' },
+    { name: 'MCP specification', kind: 'Standards', url: 'https://spec.example/mcp', mapped: true, verification: 'verified', contentHash: 'b'.repeat(64), excerpt: 'MCP is a protocol connecting model applications to tools and resources through a client-server interface.' },
+  ];
+  const repaired = repairCitationMarkers(draft, sources);
+  assert.ok(repaired.stats.markersAdded >= 2);
+  assert.match(repaired.content.summary, /\[S1\]/u);
+  assert.match(repaired.content.sections[0].body, /\[S2\]/u);
+  assert.doesNotMatch(repaired.content.summary, /\[S2\]/u);
+  assert.match(repaired.content.summary, /billing policy and should remain unverified\.$/u);
 });
 
 test('Agent OS Wiki quality audit rejects shallow or unverified publication and passes the enriched offline baseline structurally', () => {

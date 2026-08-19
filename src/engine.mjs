@@ -3,6 +3,7 @@ import { referenceQueriesForGoal, referenceQueryForGoal, runAgentWorkflow } from
 import { completeArtifact } from './model.mjs';
 import { normalizeWikiLanguage } from './wiki-language.mjs';
 import { assessWikiQuality } from './wiki-quality.mjs';
+import { repairCitationMarkers } from './citation-repair.mjs';
 
 const clean = (value) => String(value || '').trim().replace(/\s+/g, ' ');
 const titleCase = (value) => clean(value).replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -678,8 +679,10 @@ export async function generateArtifactAsync(project, options = {}) {
   const sources = artifact.content.sources || fallback.content.sources || [];
   const knowledgeContext = artifact.content.knowledgeContext || fallback.content.knowledgeContext || [];
   const coordinated = normalizeCollaborativeContent(project, artifact.content, options.prompt, language);
-  const content = { ...coordinated, language, sources, knowledgeContext, evidence: evidenceFor(coordinated, sources) };
-  const finalized = { ...artifact, language, content, workflow: workflowFor(project, content, artifact.createdAt, execution) };
+  const repaired = repairCitationMarkers(coordinated, sources);
+  const content = { ...repaired.content, language, sources, knowledgeContext, evidence: evidenceFor(repaired.content, sources) };
+  const executionWithEvidence = execution ? { ...execution, runtime: { ...execution.runtime, evidenceRepair: repaired.stats } } : execution;
+  const finalized = { ...artifact, language, content, workflow: workflowFor(project, content, artifact.createdAt, executionWithEvidence) };
   return withMarkdownDocument(project, finalized);
 }
 

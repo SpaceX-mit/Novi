@@ -7,6 +7,7 @@ import { pluginPrompt, pluginProvenance } from './plugin-runtime.mjs';
 import { normalizeWikiLanguage, wikiLanguageInstruction } from './wiki-language.mjs';
 import { MAX_STAGE_RUNS, MAX_TOOL_CALLS, agentBudgetConfig } from './agent-budgets.mjs';
 import { assessWikiQuality } from './wiki-quality.mjs';
+import { repairCitationMarkers } from './citation-repair.mjs';
 
 const goalStage = Object.freeze({ id: 'goal', name: 'Expert Goal Architect', progress: 30, fields: ['expertGoal', 'expertRoles'] });
 const referenceStage = Object.freeze({ id: 'references', name: 'Reference Discovery', progress: 42, fields: [] });
@@ -500,6 +501,8 @@ function stageNode(stage, model, config, onStage, onModel, budgets) {
         stageUsage = addUsage(stageUsage, deepDive.usage);
       }
       if (stage.id === 'finalizer' && isAgentOsTopic(state)) {
+        const repaired = repairCitationMarkers(content, state.sources || []);
+        content = repaired.content;
         const quality = assessWikiQuality({ content }, { topic: state.project.topic, requireAgentOs: true, sources: state.sources || [] });
         if (!quality.pass) throw new Error(`Agent OS Wiki quality gate failed: ${quality.hardFailures.slice(0, 3).join('; ')}`);
       }
