@@ -21,7 +21,11 @@ const specialistStageDefinitions = Object.freeze([
   // are retained by the merge layer; asking the model to echo all three made
   // long reasoning responses hit the output limit before valid JSON closed.
   { id: 'knowledge', name: 'Knowledge Agent', progress: 66, fields: ['knowledgeSystem'] },
-  { id: 'writing', name: 'Writing Agent', progress: 78, fields: ['summary', 'title', 'abstract', 'systemDocument'] },
+  // The Writing Specialist only owns the system document. Summary/title/
+  // abstract are already synthesized by the deterministic baseline and the
+  // Research stage; keeping them out of this response leaves the output
+  // budget for the five focused Deep Dive calls that follow.
+  { id: 'writing', name: 'Writing Agent', progress: 78, fields: ['systemDocument'] },
   { id: 'review', name: 'Review Agent', progress: 88, fields: ['review'] },
 ]);
 const finalizerStage = Object.freeze({ id: 'finalizer', name: 'LLM Wiki Finalizer', progress: 96, fields: ['llmWiki', 'wikiSections'] });
