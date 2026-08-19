@@ -75,6 +75,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 
 ## 更新记录
 
+- 2026-08-19：将流式模型分片空闲保护从默认 30 秒提高到 120 秒，上限提高到 300 秒，并同步 `.env.example` 与 README。长上下文/推理型 Provider 在两个有效 chunk 之间可能暂时没有文本，旧阈值会把合法响应误判为 fallback 或请求失败；首 token 与阶段总时长保护不变。验证：`npm run check`（54 modules）、`git diff --check`；完整 `npm test` 尚待本轮后续 Intake 边界修复完成后复跑。真实 Provider 仍需人工验收。
+
 - 2026-08-19：继续强化 Agent OS 证据闭环：Evidence verifier 现在保存受限纯文本 excerpt 与 content hash，验证后的来源摘录进入 Agent source packet；Agent OS Deep Dive Prompt 明确要求来源支持的事实使用 `[S#]`，真实来源包存在但引用标记不足 8 个时 Finalizer 拒绝发布。Deep Dive runtime 最小段落门禁提升为 420 字符。真实公开来源探测已验证 LangGraph、MCP specification、ReAct、SWE-bench、OpenAI Agents SDK、NIST AI RMF、OWASP LLM Top 10、AutoGen 等来源中的 7–8 个，但当前没有可用真实 LLM Provider，不能伪造真实模型生成结果；离线审计仍为 `overall=0.90`、`publicationReady=false`。验证：`npm test` 90 passed + 1 PostgreSQL 条件跳过，`npm run check`（54 modules），`npm run agent-os-wiki-quality-check`，`npm run browser-smoke`，定向 verified evidence excerpt 测试通过。真实 MiniMax/其他供应商生成、来源级引用正确性和领域专家抽检仍是外部门禁。
 
 - 2026-08-19：强化 Research Intake 首步边界：保留 Intake Agent 返回的 `incomplete` 状态、追问和最多五个选项，不再被通用 fallback 静默替换；首轮“确认生成”在没有 ready 研究方案时也只进入 Intake，不扣生成/来源额度、不创建 Job。修复离线 Agent OS 专题 enrichment 的文档映射，使五篇 Deep Dive 实际包含 runtime、ReAct、MCP、memory、审批、sandbox、评估、replay、幂等和威胁模型等技术内容。验证：`npm test` 88 passed + 1 PostgreSQL 条件跳过；`git diff --check` 通过。仍需真实 LLM/实时来源人工验收，离线 fallback 不视为权威研究。

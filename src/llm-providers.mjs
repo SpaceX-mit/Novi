@@ -33,8 +33,13 @@ function configuredTimeout() {
 }
 
 function configuredStreamIdleTimeout() {
-  const value = Number(process.env.NOVI_LLM_STREAM_IDLE_TIMEOUT_MS || 30_000);
-  return Number.isFinite(value) ? Math.min(Math.max(value, 5_000), 120_000) : 30_000;
+  // Long-context reasoning gateways can spend more than 30 seconds between
+  // meaningful chunks while still keeping the HTTP stream alive. A short
+  // default turns a valid response into a misleading fallback/error. Keep a
+  // bounded safety ceiling, but make the default tolerant of provider-side
+  // thinking and queueing; deployments can still choose a lower value.
+  const value = Number(process.env.NOVI_LLM_STREAM_IDLE_TIMEOUT_MS || 120_000);
+  return Number.isFinite(value) ? Math.min(Math.max(value, 5_000), 300_000) : 120_000;
 }
 
 function configuredStageMaxDuration() {
