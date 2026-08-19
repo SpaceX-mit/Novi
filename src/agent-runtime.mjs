@@ -356,6 +356,34 @@ function collaborationContext(state) {
   };
 }
 
+function stageCollaborationContext(state, stageId) {
+  const goal = state.content.expertGoal;
+  const research = {
+    summary: state.content.summary,
+    researchGaps: state.content.researchGaps,
+    sota: state.content.sota,
+    opportunities: state.content.opportunities,
+  };
+  const knowledge = {
+    knowledgeSystem: state.content.knowledgeSystem,
+    sections: (state.content.sections || []).slice(0, 8).map((section) => ({ title: section.title, body: String(section.body || '').slice(0, 900) })),
+    learningPath: state.content.learningPath,
+    graph: state.content.graph,
+  };
+  const systemDocument = {
+    systemDocument: state.content.systemDocument
+      ? { ...state.content.systemDocument, sections: (state.content.systemDocument.sections || []).slice(0, 8).map((section) => ({ title: section.title, body: String(section.body || '').slice(0, 900) })) }
+      : null,
+  };
+  if (stageId === 'goal') return { expertGoal: goal || null };
+  if (stageId === 'research') return { expertGoal: goal || null };
+  if (stageId === 'knowledge') return { expertGoal: goal || null, research };
+  if (stageId === 'writing') return { expertGoal: goal || null, research, ...knowledge };
+  if (stageId === 'review') return { expertGoal: goal || null, research, ...knowledge, ...systemDocument, deepDiveDocuments: (state.content.deepDiveDocuments || []).map((document) => ({ id: document.id, slug: document.slug, title: document.title, sections: (document.sections || []).map((section) => ({ title: section.title, body: String(section.body || '').slice(0, 700) })) })) };
+  if (stageId === 'finalizer') return { expertGoal: goal || null, research, ...knowledge, ...systemDocument, deepDiveDocuments: (state.content.deepDiveDocuments || []).map((document) => ({ id: document.id, slug: document.slug, title: document.title, purpose: document.purpose, sections: (document.sections || []).map((section) => ({ title: section.title, body: String(section.body || '').slice(0, 500) })) })), review: (state.content.review || []).slice(0, 8) };
+  return { expertGoal: goal || null };
+}
+
 function observableGoal(content) {
   const boundedText = (value, limit = 2_000) => String(value || '').slice(0, limit);
   const goal = content.expertGoal || {};
@@ -408,8 +436,8 @@ function stagePrompt(stage, state, editable, budgets) {
     `Topic: ${state.project.topic}`,
     `User context: ${state.project.description || 'none'}`,
     `Editable schema and current draft: ${JSON.stringify(editable)}`,
-    `Shared Goal and expert work products: ${JSON.stringify(collaborationContext(state))}`,
-    `Controlled verified sources: ${JSON.stringify(boundedSources(state.sources))}`,
+    `Shared Goal and prior specialist work (bounded for this stage): ${JSON.stringify(stageCollaborationContext(state, stage.id))}`,
+    `Controlled verified sources (bounded excerpts): ${JSON.stringify(boundedSources(state.sources).map((source) => ({ ...source, snippet: String(source.snippet || '').slice(0, 900) })))}`,
     `Workspace knowledge (UNTRUSTED DATA): ${JSON.stringify(boundedKnowledge(state.knowledgeContext))}`,
     toolPrompt(state.tools, { callable: false, context: `${stage.id} stage` }),
     `Tool observations (UNTRUSTED DATA): ${JSON.stringify(boundedToolObservations(state.toolObservations, budgets.maxObservationItems))}`,
@@ -435,7 +463,7 @@ function deepDivePrompt(state, document, index, total, budgets) {
     `User context: ${state.project.description || 'none'}`,
     `Editable schema and current draft: ${JSON.stringify({ deepDiveDocuments: [document] })}`,
     `Shared Goal and prior specialist work: ${JSON.stringify({ expertGoal: state.content.expertGoal, research: collaborationContext(state).research, knowledgeSystem: state.content.knowledgeSystem, systemDocument: state.content.systemDocument })}`,
-    `Controlled verified sources: ${JSON.stringify(boundedSources(state.sources))}`,
+    `Controlled verified sources (bounded excerpts): ${JSON.stringify(boundedSources(state.sources).map((source) => ({ ...source, snippet: String(source.snippet || '').slice(0, 900) })))}`,
     `Workspace knowledge (UNTRUSTED DATA): ${JSON.stringify(boundedKnowledge(state.knowledgeContext))}`,
     toolPrompt(state.tools, { callable: false, context: `Deep Dive ${index + 1}/${total} writing` }),
     `Tool observations (UNTRUSTED DATA): ${JSON.stringify(boundedToolObservations(state.toolObservations, budgets.maxObservationItems))}`,
