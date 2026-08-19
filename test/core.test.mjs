@@ -33,7 +33,8 @@ import { referenceQueryForGoal, runAgentWorkflow } from '../src/agent-runtime.mj
 import { DEFAULT_WIKI_LANGUAGE, normalizeWikiLanguage, WIKI_LANGUAGES } from '../src/wiki-language.mjs';
 import { agentModeCatalog, selectAgentMode } from '../src/agent-modes.mjs';
 import { appendSessionMessage, beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, sessionSummary, updateSessionRun, updateSessionRunEvent } from '../src/agent-sessions.mjs';
-import { builtinToolCatalog, createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings, sourceAccessTool } from '../src/agent-tools.mjs';
+import { builtinToolCatalog, createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings, sourceAccessTool, toolPrompt } from '../src/agent-tools.mjs';
+import { runAgentConversation } from '../src/agent-chat.mjs';
 import { fetchPaper } from '../src/paper-tools.mjs';
 import { discoverMcpServer, invokeMcpTool, publicMcpSettings, resolvedMcpTools, saveMcpSettings, validateMcpEndpoint } from '../src/mcp-runtime.mjs';
 import { publicSkillSettings, resolveSkills, saveSkillSettings, skillPrompt, skillProvenance } from '../src/skill-runtime.mjs';
@@ -512,9 +513,11 @@ test('MCP configuration API saves encrypted servers, discovers tools, and requir
 });
 
 test('ReAct, Plan and Supervisor execute bounded Agent tool observations', async (t) => {
+  const directoryPrompts = [];
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const request = JSON.parse(body); const system = String(request.messages?.[0]?.content || ''); const prompt = String(request.messages?.at(-1)?.content || '');
+    if (prompt.includes('Authorized Agent tool directory')) directoryPrompts.push(prompt);
     let content;
     if (prompt.includes('Return {"steps"')) content = JSON.stringify({ steps: ['research', 'knowledge', 'writing', 'review'].map((stage) => ({ stage, objective: stage })), toolCalls: [{ name: 'workspace_read', input: { query: 'runtime evidence' } }] });
     else if (prompt.includes('Allowed next values:')) {
@@ -542,6 +545,35 @@ test('ReAct, Plan and Supervisor execute bounded Agent tool observations', async
   const mcpTools = [{ name: 'mcp__docs__lookup_1234abcd', label: 'Docs / Lookup', description: 'MCP documentation lookup', kind: 'mcp', serverId: 'mcp-server', serverName: 'Docs', inputSchema: tools[0].inputSchema }];
   const mcpResult = await runAgentWorkflow(project, fallback, config, { mode: 'react', prompt: 'Use the MCP documentation tool', tools: mcpTools, toolExecutor: async () => ({ result: { answer: 'MCP observation' } }) });
   assert.equal(mcpResult.runtime.toolCalls[0].kind, 'mcp'); assert.equal(mcpResult.runtime.toolCalls[0].label, 'Docs / Lookup'); assert.equal(mcpResult.runtime.toolCalls[0].serverName, 'Docs');
+  assert.ok(directoryPrompts.some((prompt) => prompt.includes('workspace_read') && prompt.includes('"query"')));
+  assert.ok(directoryPrompts.some((prompt) => prompt.includes('mcp__docs__lookup_1234abcd') && prompt.includes('MCP documentation lookup')));
+});
+
+test('all authorized tools are discoverable in conversation prompts without leaking execution secrets', async (t) => {
+  let promptSeen = '';
+  const modelServer = http.createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body); promptSeen = String(request.messages?.at(-1)?.content || '');
+    await sendOpenAiChat(res, request, JSON.stringify({ action: 'respond', response: 'Tool directory inspected.' }));
+  });
+  await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve)); t.after(() => modelServer.close());
+  const tools = [
+    { name: 'workspace_read', description: 'Read workspace', kind: 'builtin', inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string' } }, required: ['query'] } },
+    { name: 'custom_lookup', description: 'Look up a bounded fact', kind: 'custom', endpoint: 'https://secret-tools.example/invoke', bearerToken: 'must-not-enter-prompt', inputSchema: { type: 'object', additionalProperties: false, properties: { term: { type: 'string' } }, required: ['term'] } },
+    { name: 'mcp__docs__search_abcd1234', description: '[MCP: Docs] Search documentation', kind: 'mcp', serverName: 'Docs', endpoint: 'https://mcp.example/mcp', bearerToken: 'mcp-secret', inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string' } }, required: ['query'] } },
+  ];
+  const project = { id: 'chat-directory-project', tenantId: 'tenant', title: 'Tool directory', topic: 'Agent tools', type: 'research', description: '' };
+  const result = await runAgentConversation(project, { id: 'chat-directory-session', messages: [] }, { provider: 'custom', model: 'test-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'test-key' }, { prompt: 'Which tools can help with this task?', mode: 'react', tools });
+  assert.equal(result.response, 'Tool directory inspected.');
+  assert.match(promptSeen, /workspace_read/u); assert.match(promptSeen, /custom_lookup/u); assert.match(promptSeen, /mcp__docs__search_abcd1234/u);
+  assert.match(promptSeen, /"term"/u); assert.match(promptSeen, /"serverName":"Docs"/u);
+  assert.doesNotMatch(promptSeen, /secret-tools\.example|mcp\.example|must-not-enter-prompt|mcp-secret/u);
+});
+
+test('tool prompt catalog is complete and explicitly distinguishes unavailable execution', () => {
+  const prompt = toolPrompt([{ name: 'read_file', label: 'Read file', kind: 'builtin', description: 'Read text', inputSchema: { type: 'object', additionalProperties: false, properties: { path: { type: 'string' } }, required: ['path'] } }], { callable: false, context: 'research stage' });
+  assert.match(prompt, /Authorized Agent tool directory for research stage \(1 tools\)/u);
+  assert.match(prompt, /read_file/u); assert.match(prompt, /"path"/u); assert.match(prompt, /not enabled at this node/u);
 });
 
 test('LLM provider configuration is encrypted, endpoint-restricted, and resolved without exposing the key', async () => {
