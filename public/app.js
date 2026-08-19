@@ -345,6 +345,24 @@ function renderDocumentViewer(artifact) {
   return `<article class="document-viewer"><span>${escapeHtml(document.sourceKind || 'text')} · ${document.chunkCount || chunks.length} chunks</span><h3>${escapeHtml(document.title)}</h3>${document.sourceUrl ? `<a href="${escapeHtml(safeExternalUrl(document.sourceUrl))}" target="_blank" rel="noopener noreferrer">Open source</a>` : ''}<div>${chunks.map((chunk) => `<p>${escapeHtml(chunk.text || '')}</p>`).join('') || '<p>No indexed passages.</p>'}</div></article>`;
 }
 
+// Keep the reading position stable while the live run grows. Follow the
+// response only when the reader was already near the end; an intentional
+// upward scroll is a clear signal that they are reviewing earlier content.
+function captureConversationScroll() {
+  const node = $('#conversation-messages');
+  if (!node) return null;
+  const distanceFromEnd = node.scrollHeight - node.scrollTop - node.clientHeight;
+  return { top: node.scrollTop, follow: distanceFromEnd <= 96 };
+}
+
+function restoreConversationScroll(snapshot) {
+  const node = $('#conversation-messages');
+  if (!node || !snapshot) return;
+  const restore = () => { node.scrollTop = snapshot.follow ? node.scrollHeight : snapshot.top; };
+  restore();
+  window.requestAnimationFrame(restore);
+}
+
 function renderContextBody(project, artifact, artifactIndex, selected, panel = state.contextPanel) {
   const knowledge = state.workspaceKnowledge || { documents: [] };
   if (panel === 'files') {
@@ -365,6 +383,7 @@ function renderContextBody(project, artifact, artifactIndex, selected, panel = s
 }
 
 function renderWorkspace(project, selected = state.activeTab) {
+  const conversationScroll = captureConversationScroll();
   const artifacts = project.artifacts || [];
   let artifactIndex = artifacts.findIndex((item) => item.id === state.activeArtifactId);
   if (artifactIndex < 0) artifactIndex = 0;
@@ -424,7 +443,7 @@ function renderWorkspace(project, selected = state.activeTab) {
   $('#show-snapshots')?.addEventListener('click', () => showSnapshots(project.id));
   $('#toggle-watch')?.addEventListener('click', () => configureWatch(project.id));
   $$('[data-artifact-tab]').forEach((button) => button.addEventListener('click', () => { state.activeTab = button.dataset.artifactTab; renderWorkspace(state.activeProject, state.activeTab); }));
-  const messages = $('#conversation-messages'); if (messages) messages.scrollTop = messages.scrollHeight;
+  restoreConversationScroll(conversationScroll);
 }
 
 function renderWorkspaceKnowledgeContext(items) {
@@ -568,6 +587,7 @@ function updateConversationRun(job) {
   if (progress) progress.textContent = `${Math.max(0, Math.min(100, Number(job.progress) || 0))}%`;
   if (state.activeSession?.activeRun?.jobId === job.id) Object.assign(state.activeSession.activeRun, { currentMode: job.currentMode, currentStage: job.currentStage, progress: job.progress, runEvents: job.runEvents || state.activeSession.activeRun.runEvents || [], ...(job.expertGoal ? { expertGoal: job.expertGoal, expertRoles: job.expertRoles || [] } : {}), ...(job.referenceDiscovery ? { referenceDiscovery: job.referenceDiscovery } : {}) });
   const messages = $('#conversation-messages');
+  const conversationScroll = captureConversationScroll();
   if (messages) {
     const current = messages.querySelector('#live-events');
     const html = runEventsSection(job.runEvents || state.activeSession?.activeRun?.runEvents || []);
@@ -590,6 +610,7 @@ function updateConversationRun(job) {
       if (events) events.before(goal); else messages.append(goal);
     }
   }
+  restoreConversationScroll(conversationScroll);
 }
 
 function streamJobEvents(jobId, onJob) {
