@@ -546,21 +546,31 @@ function configuredReferenceQueryCount() {
 }
 
 export function referenceQueriesForGoal(expertGoal = {}, project = {}) {
-  const base = referenceQueryForGoal(expertGoal, project);
+  // Keep the stable goal query for provenance, but build each facet from a
+  // compact core. Previously the full question/outcome/scope was truncated
+  // before the facet suffix, which silently removed the differentiating
+  // search intent from long research prompts.
+  const compact = (value, limit) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+  const core = [
+    compact(expertGoal.domain, 90),
+    compact(project.topic, 90),
+    compact(expertGoal.question, 120),
+  ].filter(Boolean).join(' ').replace(/\s+/g, ' ').slice(0, 220);
   const facets = [
-    ['landscape', 'survey taxonomy state of the art review'],
-    ['foundations', 'definitions concepts architecture components'],
-    ['implementation', 'reference implementation github code documentation'],
-    ['evaluation', 'benchmark dataset metrics reproducibility comparison'],
-    ['risks', 'limitations failure modes security governance operations'],
-    ['frontier', 'recent advances open problems research agenda'],
-    ['practice', 'tutorial deployment troubleshooting production case study'],
-    ['alternatives', 'alternatives tradeoffs comparative analysis'],
+    ['landscape', 'survey taxonomy state of the art review', 'Map competing approaches, maturity, and the research landscape.'],
+    ['foundations', 'definitions mechanisms architecture state transitions', 'Explain the underlying mechanisms, abstractions, and state transitions.'],
+    ['implementation', 'reference implementation github source code documentation', 'Find concrete source code, interfaces, and implementation evidence.'],
+    ['evaluation', 'benchmark metrics reproducibility comparison failure testing', 'Locate measurable evaluations, baselines, reproducibility, and failure tests.'],
+    ['risks', 'limitations failure modes security threat model governance operations', 'Find security boundaries, operational risks, failure modes, and governance evidence.'],
+    ['frontier', 'recent advances open problems research agenda', 'Identify recent advances, unresolved questions, and research frontiers.'],
+    ['practice', 'tutorial deployment troubleshooting production case study', 'Find deployment patterns, troubleshooting evidence, and production cases.'],
+    ['alternatives', 'alternatives tradeoffs comparative analysis', 'Compare alternatives, costs, guarantees, and design trade-offs.'],
   ];
-  return facets.slice(0, configuredReferenceQueryCount()).map(([facet, focus], index) => ({
+  return facets.slice(0, configuredReferenceQueryCount()).map(([facet, focus, rationale], index) => ({
     id: `reference-query-${index + 1}`,
     facet,
-    query: `${base.slice(0, Math.max(1, 299 - focus.length))} ${focus}`.replace(/\s+/g, ' ').slice(0, 300),
+    query: `${core} ${focus}`.replace(/\s+/g, ' ').slice(0, 300),
+    rationale,
   }));
 }
 
@@ -593,7 +603,10 @@ function referenceNode(retriever, onStage) {
   return async (state) => {
     const startedAt = new Date().toISOString();
     const queryPlans = referenceQueriesForGoal(state.content.expertGoal, state.project);
-    const query = queryPlans[0]?.query || referenceQueryForGoal(state.content.expertGoal, state.project);
+    // `query` remains the full, stable Goal query for provenance and backward
+    // compatibility; `queries[]` contains the bounded facet-specific search
+    // strings sent to providers.
+    const query = referenceQueryForGoal(state.content.expertGoal, state.project) || queryPlans[0]?.query;
     if (onStage && await onStage({ id: referenceStage.id, name: referenceStage.name, mode: state.activeMode, status: 'running', startedAt, query, queries: queryPlans, progress: referenceStage.progress - 8 }) === false) {
       throw Object.assign(new Error('Generation was cancelled'), { code: 'AGENT_CANCELLED' });
     }
@@ -604,7 +617,7 @@ function referenceNode(retriever, onStage) {
     if (retriever) {
       for (const [queryIndex, queryPlan] of queryPlans.entries()) {
         try {
-          const result = await retriever({ expertGoal: state.content.expertGoal, project: state.project, prompt: state.prompt, language: state.language, query: queryPlan.query, facet: queryPlan.facet, queryIndex, queryCount: queryPlans.length });
+          const result = await retriever({ expertGoal: state.content.expertGoal, project: state.project, prompt: state.prompt, language: state.language, query: queryPlan.query, facet: queryPlan.facet, rationale: queryPlan.rationale, queryIndex, queryCount: queryPlans.length });
           const discovered = (Array.isArray(result) ? result : result?.sources || []).map((source) => ({ ...source, discoveryFacet: source.discoveryFacet || queryPlan.facet, discoveryQueryId: source.discoveryQueryId || queryPlan.id }));
           sources = mergeUnique(sources, discovered, (item) => String(item.url || `${item.name}:${item.publishedAt || ''}`));
           queryResults.push({ ...queryPlan, status: result?.status || 'completed', sourceCount: discovered.length });

@@ -635,7 +635,7 @@ export async function generateArtifactAsync(project, options = {}) {
     const goalStage = { id: 'goal', name: 'Expert Goal Architect', mode: 'workflow', status: 'completed', startedAt, completedAt: new Date().toISOString(), outputKeys: ['expertGoal', 'expertRoles'], usage: { inputTokens: 0, outputTokens: 0 } };
     await options.onStage?.({ ...goalStage, expertGoal: fallback.content.expertGoal, expertRoles: fallback.content.expertRoles, progress: 30 });
     const queryPlans = referenceQueriesForGoal(fallback.content.expertGoal, project);
-    const query = queryPlans[0]?.query || referenceQueryForGoal(fallback.content.expertGoal, project);
+    const query = referenceQueryForGoal(fallback.content.expertGoal, project) || queryPlans[0]?.query;
     const referenceStartedAt = new Date().toISOString();
     await options.onStage?.({ id: 'references', name: 'Reference Discovery', mode: 'workflow', status: 'running', query, queries: queryPlans, progress: 34 });
     let discoveredSources = initialSources;

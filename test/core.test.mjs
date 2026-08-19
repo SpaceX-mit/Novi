@@ -297,7 +297,7 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
       { name: 'Technical guide', kind: 'Web', url: 'https://example.com/guide', mapped: true },
     ] };
   }, onStage: async (stage) => { if (stage.status !== 'running') observedStages.push(stage.id); return true; } });
-  assert.equal(referenceRequests.length, 5); assert.deepEqual(referenceRequests.map((request) => request.facet), ['landscape', 'foundations', 'implementation', 'evaluation', 'risks']); assert.equal(new Set(referenceRequests.map((request) => request.query)).size, 5); assert.match(referenceRequests[0].query, /Agent systems/);
+  assert.equal(referenceRequests.length, 5); assert.deepEqual(referenceRequests.map((request) => request.facet), ['landscape', 'foundations', 'implementation', 'evaluation', 'risks']); assert.equal(new Set(referenceRequests.map((request) => request.query)).size, 5); assert.match(referenceRequests[0].query, /Agent systems/); assert.match(referenceRequests.find((request) => request.facet === 'implementation').query, /github source code/); assert.match(referenceRequests.find((request) => request.facet === 'risks').query, /threat model/); assert.ok(referenceRequests.every((request) => request.rationale));
   assert.deepEqual(observedStages.slice(0, 2), ['goal', 'references']);
   assert.equal(referenced.stages.find((stage) => stage.id === 'references').status, 'completed');
   assert.deepEqual(referenced.runtime.references.sourceKinds.sort(), ['github', 'paper', 'web']);
