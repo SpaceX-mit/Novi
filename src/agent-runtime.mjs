@@ -6,6 +6,7 @@ import { skillPrompt, skillProvenance } from './skill-runtime.mjs';
 import { pluginPrompt, pluginProvenance } from './plugin-runtime.mjs';
 import { normalizeWikiLanguage, wikiLanguageInstruction } from './wiki-language.mjs';
 import { MAX_STAGE_RUNS, MAX_TOOL_CALLS, agentBudgetConfig } from './agent-budgets.mjs';
+import { assessWikiQuality } from './wiki-quality.mjs';
 
 const goalStage = Object.freeze({ id: 'goal', name: 'Expert Goal Architect', progress: 30, fields: ['expertGoal', 'expertRoles'] });
 const referenceStage = Object.freeze({ id: 'references', name: 'Reference Discovery', progress: 42, fields: [] });
@@ -187,6 +188,10 @@ function validateCollaborativeCandidate(stage, candidate) {
   if (stage.id === 'finalizer' && candidate.llmWiki && (!candidate.llmWiki.sections?.length || !candidate.llmWiki.documentMap?.length || !candidate.llmWiki.glossary?.length || !candidate.llmWiki.nextQuestions?.length)) throw new Error('LLM Wiki is incomplete');
   if (stage.id === 'finalizer' && candidate.llmWiki && (String(candidate.llmWiki.summary || '').trim().length < 120 || candidate.llmWiki.sections.length < 6 || candidate.llmWiki.documentMap.length < 5 || candidate.llmWiki.glossary.length < 4 || candidate.llmWiki.nextQuestions.length < 3 || candidate.llmWiki.sections.some((section) => String(section?.body || '').trim().length < 120))) throw new Error('LLM Wiki does not meet the minimum quality contract');
   if (stage.id === 'finalizer' && candidate.wikiSections && (candidate.wikiSections.length < 6 || candidate.wikiSections.some((section) => String(section?.body || '').trim().length < 20))) throw new Error('LLM Wiki sections do not meet the minimum quality contract');
+}
+
+function isAgentOsTopic(state) {
+  return /agent\s*os|agent operating system|agent runtime.*(?:stack|technology|技术栈)|自主.?agent.*(?:runtime|技术栈)/iu.test(`${state.project?.topic || ''} ${state.project?.description || ''} ${state.prompt || ''}`);
 }
 
 function reconcileStageContent(stage, content, candidate) {
@@ -485,6 +490,10 @@ function stageNode(stage, model, config, onStage, onModel, budgets) {
         const deepDive = await generateDeepDiveSuite({ ...state, content }, model, config, onModel, budgets);
         content = { ...content, deepDiveDocuments: deepDive.documents };
         stageUsage = addUsage(stageUsage, deepDive.usage);
+      }
+      if (stage.id === 'finalizer' && isAgentOsTopic(state)) {
+        const quality = assessWikiQuality({ content }, { topic: state.project.topic, requireAgentOs: true });
+        if (!quality.pass) throw new Error(`Agent OS Wiki quality gate failed: ${quality.hardFailures.slice(0, 3).join('; ')}`);
       }
       await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'LLM response', status: 'completed', stageId: stage.id, mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(messageText(response), config.apiKey), usage: usageFor(response), createdAt: new Date().toISOString() });
       const result = { id: stage.id, name, mode: state.activeMode, status: 'completed', startedAt, completedAt: new Date().toISOString(), outputKeys: stage.id === 'writing' ? [...Object.keys(editable), 'deepDiveDocuments'] : Object.keys(editable), usage: stageUsage };
@@ -822,10 +831,11 @@ export async function runAgentWorkflow(project, fallback, config, options = {}) 
   const language = normalizeWikiLanguage(options.language || project.wikiLanguage);
   const result = await app.invoke({ project, content: fallback.content, sources: options.sources || [], knowledgeContext: options.knowledgeContext || [], language, referenceDiscovery: null, prompt, requestedMode, initialMode: null, activeMode: null, route: null, plan: null, planCursor: 0, completedStages: [], stageAttempts: {}, evaluatedStageCount: 0, stages: [], modeHistory: [], controlEvents: [], tools: options.tools || [], skills: options.skills || [], plugins: options.plugins || [], pendingToolCalls: [], toolCallCount: 0, toolCalls: [], toolObservations: [] }, { configurable: { thread_id: threadId }, recursionLimit: budgets.recursionLimit });
   const usage = [...result.stages, ...result.controlEvents].reduce((total, stage) => ({ inputTokens: total.inputTokens + (stage.usage?.inputTokens || 0), outputTokens: total.outputTokens + (stage.usage?.outputTokens || 0) }), { inputTokens: 0, outputTokens: 0 });
+  const quality = assessWikiQuality({ content: result.content }, { topic: project.topic, requireAgentOs: isAgentOsTopic({ project, prompt }) });
   return {
     content: { ...result.content, sources: result.sources || result.content.sources || [], knowledgeContext: result.knowledgeContext || result.content.knowledgeContext || [] },
     stages: result.stages,
-    runtime: { name: 'langgraph', version: 9, checkpoint: 'memory', provider: config.provider, model: config.model, threadId, language, budgets, deepDiveGeneration: { strategy: 'focused-document-calls', documentCount: result.content.deepDiveDocuments?.length || 0, sectionsPerDocument: 6, minSectionCharacters: DEEP_DIVE_MIN_SECTION_CHARS }, references: result.referenceDiscovery, stageAttempts: result.stageAttempts || {}, requestedMode, initialMode: result.initialMode, mode: result.activeMode, modeHistory: result.modeHistory, plan: result.plan || [], controlEvents: result.controlEvents, toolCalls: result.toolCalls || [], skills: skillProvenance(result.skills || []), plugins: pluginProvenance(result.plugins || []), usage },
+    runtime: { name: 'langgraph', version: 10, checkpoint: 'memory', provider: config.provider, model: config.model, threadId, language, budgets, quality, deepDiveGeneration: { strategy: 'focused-document-calls', documentCount: result.content.deepDiveDocuments?.length || 0, sectionsPerDocument: 6, minSectionCharacters: DEEP_DIVE_MIN_SECTION_CHARS }, references: result.referenceDiscovery, stageAttempts: result.stageAttempts || {}, requestedMode, initialMode: result.initialMode, mode: result.activeMode, modeHistory: result.modeHistory, plan: result.plan || [], controlEvents: result.controlEvents, toolCalls: result.toolCalls || [], skills: skillProvenance(result.skills || []), plugins: pluginProvenance(result.plugins || []), usage },
   };
 }
 

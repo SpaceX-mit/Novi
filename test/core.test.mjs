@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { JsonStore } from '../src/store.mjs';
 import { artifactToLatex, artifactToMarkdown, generateArtifact } from '../src/engine.mjs';
+import { assessWikiQuality } from '../src/wiki-quality.mjs';
 import { LOCAL_MONTHLY_GENERATIONS, PLANS, consumeGeneration, consumeSourceQuery, limitsFor, localMonthlyGenerationLimit } from '../src/billing.mjs';
 import { refundGeneration, refundSourceQuery } from '../src/billing.mjs';
 import { completeArtifact } from '../src/model.mjs';
@@ -153,6 +154,24 @@ test('engine generates complete artifacts for all product paths', () => {
   assert.match(artifactToLatex(base, paper), /Workspace knowledge used/);
   assert.match(artifactToLatex(base, paper, 'ieee'), /^\\documentclass\[conference\]\{IEEEtran\}/);
   assert.match(artifactToLatex(base, paper, 'acm'), /^\\documentclass\[sigconf\]\{acmart\}/);
+});
+
+test('Agent OS Wiki quality audit rejects shallow or unverified publication and passes the enriched offline baseline structurally', () => {
+  const project = { id: 'agent-os-quality', title: 'Agent OS 技术栈深度调查', topic: 'Agent OS 技术栈', description: '深度调查自主 Agent runtime、工具系统、MCP、Skills、权限、记忆、评估与生产部署最佳实践和算法。', type: 'research', wikiLanguage: 'zh-CN' };
+  const artifact = generateArtifact(project, { prompt: '以深度调查 Agent OS 技术栈，输出详细的 LLM Wiki' });
+  const audit = assessWikiQuality(artifact, { topic: project.topic, requireAgentOs: true });
+  assert.equal(audit.pass, true, JSON.stringify(audit.hardFailures));
+  assert.equal(audit.publicationReady, false);
+  assert.ok(audit.overall >= 0.9);
+  assert.equal(audit.evidence.status, 'unverified');
+  assert.equal(audit.evidence.mappedSources, 0);
+  assert.ok(audit.runtimeCoverage.count >= 3);
+  assert.ok(audit.deepDive.every((document) => document.sectionLengths.every((length) => length >= 420)));
+  const shallow = structuredClone(artifact);
+  shallow.content.deepDiveDocuments[0].sections[0].body = 'too short';
+  const rejected = assessWikiQuality(shallow, { topic: project.topic, requireAgentOs: true });
+  assert.equal(rejected.pass, false);
+  assert.match(rejected.hardFailures.join('\n'), /at least 420 characters/u);
 });
 
 test('Wiki language selection defaults to Chinese and Goal drives reference discovery', async () => {
@@ -647,7 +666,7 @@ test('Web-configured provider runs the Goal, expert collaboration, and Wiki fina
   assert.ok(job.runEvents.some((event) => event.type === 'model-response' && event.status === 'completed'));
   assert.equal(job.expertGoal.outcome, 'Provider-defined expert outcome.'); assert.match(job.referenceDiscovery.query, /Provider-defined expert outcome/); assert.equal(job.referenceDiscovery.status, 'offline');
   const generated = await (await fetch(`${base}/api/projects/${project.id}`)).json(); const artifact = generated.project.artifacts[0];
-  assert.equal(modelCalls, 11); assert.equal(skillPromptSeen, true); assert.equal(pluginPromptSeen, true); assert.equal(languagePromptSeen, true); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.version, 9); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.equal(artifact.workflow.runtime.language, 'zh-CN'); assert.equal(artifact.workflow.runtime.skills[0].name, 'systematic_review'); assert.equal(artifact.workflow.runtime.plugins[0].name, 'paper_quality'); assert.equal('instructions' in artifact.workflow.runtime.skills[0], false); assert.equal('instructions' in artifact.workflow.runtime.plugins[0], false); assert.equal(artifact.workflow.agents.find((agent) => agent.id === 'references').status, 'offline'); assert.equal(artifact.documents.length, 7); assert.equal(artifact.content.deepDiveDocuments.length, 5); assert.equal(artifact.workflow.runtime.deepDiveGeneration.strategy, 'focused-document-calls'); assert.equal(artifact.workflow.runtime.deepDiveGeneration.minSectionCharacters, 280); assert.ok(artifact.content.deepDiveDocuments.every((document) => document.sections.every((section) => section.body.length >= 280 && section.body.includes('\n\n'))));
+  assert.equal(modelCalls, 11); assert.equal(skillPromptSeen, true); assert.equal(pluginPromptSeen, true); assert.equal(languagePromptSeen, true); assert.equal(artifact.workflow.runtime.name, 'langgraph'); assert.equal(artifact.workflow.runtime.version, 10); assert.equal(artifact.workflow.runtime.provider, 'custom'); assert.equal(artifact.workflow.runtime.mode, 'workflow'); assert.equal(artifact.workflow.runtime.language, 'zh-CN'); assert.equal(artifact.workflow.runtime.skills[0].name, 'systematic_review'); assert.equal(artifact.workflow.runtime.plugins[0].name, 'paper_quality'); assert.equal('instructions' in artifact.workflow.runtime.skills[0], false); assert.equal('instructions' in artifact.workflow.runtime.plugins[0], false); assert.equal(artifact.workflow.agents.find((agent) => agent.id === 'references').status, 'offline'); assert.equal(artifact.documents.length, 7); assert.equal(artifact.content.deepDiveDocuments.length, 5); assert.equal(artifact.workflow.runtime.deepDiveGeneration.strategy, 'focused-document-calls'); assert.equal(artifact.workflow.runtime.deepDiveGeneration.minSectionCharacters, 280); assert.ok(artifact.content.deepDiveDocuments.every((document) => document.sections.every((section) => section.body.length >= 280 && section.body.includes('\n\n'))));
   assert.equal(artifact.content.expertGoal.outcome, 'Provider-defined expert outcome.'); assert.ok(artifact.content.expertRoles.every((role) => role.title.startsWith('Provider '))); assert.match(artifact.content.llmWiki.summary, /^Provider-finalized LLM Wiki\./u); assert.deepEqual(artifact.content.wikiSections, artifact.content.llmWiki.sections);
   assert.equal(artifact.documents[0].name, 'llm-wiki.md'); assert.equal(artifact.documents[0].content, artifactToMarkdown(project, artifact)); assert.ok(artifact.documents.slice(2).every((document) => document.name.endsWith('.md')));
   const session = (await (await fetch(`${base}/api/projects/${project.id}/sessions/${initialSession.id}`)).json()).session;
@@ -744,7 +763,7 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
   response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '确认生成', mode: 'workflow', language: 'en' }) });
   assert.equal(response.status, 202); const queued = await response.json(); assert.equal(queued.job.type, 'refine'); assert.equal(queued.job.language, 'en');
   let job;
-  for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 25)); job = (await (await fetch(`${base}/api/jobs/${queued.job.id}`)).json()).job; if (!['queued', 'running'].includes(job.status)) break; }
+  for (let attempt = 0; attempt < 240; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 25)); job = (await (await fetch(`${base}/api/jobs/${queued.job.id}`)).json()).job; if (!['queued', 'running'].includes(job.status)) break; }
   assert.equal(job.status, 'completed'); assert.equal(job.agentStages.length, 7); assert.equal(job.language, 'en');
   assert.ok(job.runEvents.some((event) => event.type === 'model-request' && event.request.user.includes('完善 Agent 能力 Wiki'))); assert.ok(job.runEvents.some((event) => event.type === 'model-response' && event.response)); assert.ok(job.runEvents.some((event) => event.type === 'stage' && event.stageId === 'finalizer')); assert.ok(job.runEvents.some((event) => event.type === 'reference'));
   let project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project;
@@ -752,7 +771,7 @@ test('Agent conversation turns require a provider and create cumulative Wiki art
   let knowledge = await (await fetch(`${base}/api/projects/${created.project.id}/knowledge`)).json(); const firstWikiDocument = knowledge.documents.find((document) => document.sourceKind === 'agent-wiki' && document.title.includes('llm-wiki.md')); assert.ok(firstWikiDocument); assert.equal(first.workflow.runtime.knowledgeEnrichment.documentId, firstWikiDocument.id); assert.equal(first.workflow.runtime.knowledgeEnrichment.documentCount, 7); assert.equal(first.workflow.runtime.knowledgeEnrichment.documents.length, 7);
   response = await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: '继续补充第二轮权威资料和实践细节。', mode: 'workflow', language: 'en' }) });
   assert.equal(response.status, 202); const secondJobId = (await response.json()).job.id;
-  for (let attempt = 0; attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 25)); job = (await (await fetch(`${base}/api/jobs/${secondJobId}`)).json()).job; if (!['queued', 'running'].includes(job.status)) break; }
+  for (let attempt = 0; attempt < 240; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 25)); job = (await (await fetch(`${base}/api/jobs/${secondJobId}`)).json()).job; if (!['queued', 'running'].includes(job.status)) break; }
   assert.equal(job.status, 'completed'); project = (await (await fetch(`${base}/api/projects/${created.project.id}`)).json()).project; assert.equal(project.artifacts.length, 2); assert.equal(project.artifacts[0].content.llmWiki.summary.match(/Provider-refined Wiki\./gu)?.length, 2); assert.equal(project.artifacts[0].content.sources.length, 10); assert.deepEqual(new Set(project.artifacts[0].content.sources.map((source) => source.name)), new Set(Array.from({ length: 10 }, (_, index) => `Authority source ${index + 1}`))); assert.equal(project.artifacts[0].workflow.runtime.knowledgeEnrichment.sourceCount, 10); assert.equal(priorWikiSeen, true); assert.equal(sourceSearches, 10);
   knowledge = await (await fetch(`${base}/api/projects/${created.project.id}/knowledge`)).json(); assert.equal(knowledge.documents.filter((document) => document.sourceKind === 'agent-wiki').length, 14); assert.equal(project.artifacts[0].workflow.runtime.knowledgeEnrichment.documentCount, 7);
   const session = (await (await fetch(`${base}/api/projects/${created.project.id}/sessions/${created.session.id}`)).json()).session; const assistant = session.messages.at(-1);

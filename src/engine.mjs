@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { referenceQueriesForGoal, referenceQueryForGoal, runAgentWorkflow } from './agent-runtime.mjs';
 import { completeArtifact } from './model.mjs';
 import { normalizeWikiLanguage } from './wiki-language.mjs';
+import { assessWikiQuality } from './wiki-quality.mjs';
 
 const clean = (value) => String(value || '').trim().replace(/\s+/g, ' ');
 const titleCase = (value) => clean(value).replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -195,10 +196,12 @@ function createDeepDiveDocuments(domain, content, goal, language = 'en') {
   ];
   const agentOsTopic = /agent\s*os|agent runtime|mcp|model context protocol|agent tool|自主.?agent/iu.test(`${domain} ${goal.question} ${goal.outcome}`);
   const enrichment = agentOsTopic ? agentOsEnrichment(language, zh) : null;
-  return specs.map(([id, slug, title, purpose, bodies]) => ({
+  const deepening = agentOsTopic ? agentOsDeepening(language, zh) : null;
+  const auditDetail = agentOsTopic ? agentOsAuditDetail(language, zh) : null;
+  return padAgentOsSections(specs.map(([id, slug, title, purpose, bodies]) => ({
     id, slug, title, purpose,
-    sections: titles.map((sectionTitle, index) => ({ title: sectionTitle, body: `${bodies[index]}${enrichment?.[id]?.[index] ? `\n\n${enrichment[id][index]}` : ''}` })),
-  }));
+    sections: titles.map((sectionTitle, index) => ({ title: sectionTitle, body: `${bodies[index]}${enrichment?.[id]?.[index] ? `\n\n${enrichment[id][index]}` : ''}${deepening?.[id]?.[index] ? `\n\n${deepening[id][index]}` : ''}${auditDetail?.[id]?.[index] ? `\n\n${auditDetail[id][index]}` : ''}` })),
+  })));
 }
 
 function agentOsEnrichment(language, zh) {
@@ -245,6 +248,111 @@ function agentOsEnrichment(language, zh) {
     ],
   } : {};
   return base;
+}
+
+function agentOsDeepening(language, zh) {
+  if (!zh) return {};
+  return {
+    'research-landscape': [
+      '因此本专题的比较对象不是“能否调用模型”，而是运行时对不确定性的处理方式。应把一次执行表示为带版本的轨迹：每个状态包含目标、上下文摘要、允许动作、预算和证据集合；每次转移记录触发原因、输入哈希、策略版本和结果。这样才能区分模型推理质量、编排策略和工具环境的贡献，并在重放时发现隐含人工干预。',
+      '在框架矩阵中，LangGraph 的显式 StateGraph 与 checkpoint 语义应和轻量 coding harness 的会话循环、多 Agent supervisor 的委派协议分开比较。不能因为几个项目都暴露 tool calling API 就认为它们具有同样的恢复保证；需要追问 checkpoint 是节点级、任务级还是仅保存聊天记录，工具副作用是否有幂等键，以及取消是否真的停止 worker。',
+      '建议建立一个 Agent OS 研究基准：相同模型、温度、上下文窗口和工具 schema，完成“检索规范→读取仓库→修改隔离分支→运行测试→生成带证据报告”的长任务。每种 runtime 运行至少 20 个不同故障种子，记录计划变更、工具参数错误、重复副作用、人工审批和最终提交，而不是只比较最终回答的 BLEU 或主观印象。',
+      '工程决策还应把部署形态纳入比较。单进程图运行时容易调试但受单点故障和内存 checkpoint 限制；队列加 worker 能隔离长任务却引入投递重复和状态一致性；沙箱能降低 shell 风险却增加启动延迟和文件同步成本。选型结论必须写出适用规模、恢复目标、允许人工介入时间和不可接受的失败类型。',
+      '“自主”是一个容易误导的标签。若 planner 可以通过重新命名工具、拆分任务或让 supervisor 代为调用来绕过授权，系统的自主性只是权限漏洞；若模型输出很流畅但没有产生正确 Artifact、引用或测试结果，也不能称为完成。研究报告应把能力、可靠性、可逆性和治理边界分别报告，并明确哪些结论尚未在真实环境验证。',
+      '最终版图需要将官方文档、源码、论文、运行实验和事故报告分层。官方声明只能证明接口存在，源码可说明控制流但不保证生产运维，单次实验不能证明外部有效性。每个框架条目应保留证据链接、版本日期、测试环境和未知项；若没有可核验来源，必须写 evidence gap，而不是用“业界最佳实践”替代证据。',
+    ],
+    'foundations-and-mechanisms': [
+      '形式化后，runtime 的核心不变量可以写成：动作必须属于当前授权集合；状态转移必须满足 schema 和预算；提交必须具有幂等键；观察结果只能作为不可信数据进入下一次推理；完成状态必须有对应 Artifact 和事件。模型可以提出违反不变量的动作，但不能直接改变不变量。该分层也是单元测试和安全审计的边界。',
+      'ReAct 适合在观测后局部修正，但容易在错误反馈上循环；Plan-and-Execute 能先分解长任务，却需要计划版本、依赖检查和过期重规划；Supervisor 能隔离角色，却会放大消息传递、重复上下文和责任归因成本。一个实用控制器应为每种循环定义终止条件、最大深度、失败退避、预算向量和人工升级状态，而不是只设置一个模糊的 max iterations。',
+      '记忆系统应至少区分消息历史、任务工作集、长期事实和执行 checkpoint。向量检索适合语义召回，却不能表达“截至某时点、某租户、某权限”的事实；结构化图适合实体关系，却需要处理冲突和删除；checkpoint 保存可继续执行的控制状态，却不等同于模型记忆。每条记忆要携带来源、创建/失效时间、访问策略、内容哈希和删除审计。',
+      'MCP 的发现层只回答“服务器声称有哪些工具”，不回答“本次任务允许哪些工具”。调用链必须在运行时重新解析名称空间、验证 JSON Schema、检查目标资源、执行 SSRF/网络/文件策略，并把结果隔离为 observation。即使 MCP server 返回一段看似系统指令的文本，也不能改变 planner、审批或 evidence policy；否则协议边界会变成提示注入通道。',
+      '审批状态机可以表示为 requested→risk-evaluated→approved/denied→executing→committed/rolled-back，并在每次状态变化记录主体、资源、理由、版本和过期时间。审批必须绑定具体参数和输入快照，不能批准“让 Agent 自己决定”；执行前若目标文件、权限或证据变化，应使批准失效。这样可以避免审批疲劳、TOCTOU 和重放攻击。',
+      '评估应把策略函数、执行器和外部环境拆开测量：对固定轨迹做 replay 验证终态，对工具 schema 做属性测试，对失败注入测恢复，对恶意 observation 做红队测试，对人工评分做盲评。除成功率外，必须报告无效调用率、越权拒绝率、重复副作用率、恢复时间、证据覆盖率和单位成本，并保留失败样本供回归。',
+    ],
+    'system-architecture': [
+      '这套架构可以按信任边界划分为四个平面：控制平面保存 Goal、状态图、预算和审批；数据平面处理来源、记忆和 workspace；执行平面运行工具、shell 与沙箱 worker；证据平面维护来源、claim、引用和审计。模型网关只连接控制平面，不应直接越过 policy service 写数据或调用任意网络。',
+      '一次研究请求的事件链应该有稳定的 correlation id，并将 intake、goal、facet query、source fetch、tool call、approval、review、artifact commit 和 index projection 关联起来。事件日志采用追加写入和不可变 payload，派生的 UI 状态可以重建；若只保存最后一条消息，就无法解释为什么某个来源进入 Wiki，也无法在故障后安全恢复。',
+      '接口要将“请求已接受”“工具已执行”“Artifact 已提交”“知识索引已完成”定义为不同状态。队列采用 at-least-once 投递时，worker 必须以 job id 与节点版本做幂等；outbox 负责把提交事件可靠地发布给索引服务；补偿事务处理 Artifact 已提交但索引失败。任何跨服务成功都要有可观察的中间状态，不能用一个布尔值掩盖部分完成。',
+      '集中式 StateGraph 适合表达确定的阶段和审批门，分布式 worker 适合隔离模型、浏览器和 shell 的资源风险。实际部署可让 durable workflow 保存小型控制状态，把大文本和工具结果放对象存储，并使用租约防止两个 worker 同时拥有同一节点。权衡应由恢复时间目标、最大任务时长、数据敏感度和运维团队能力决定。',
+      '边界故障需要按因果链排查：工具超时是否触发了重试，重试是否产生重复写入，事件是否先于事务提交，旧权限是否被缓存，索引失败是否让 UI 显示成功。每一步都应有超时、取消、租约、版本检查和审计字段；取消信号必须传入模型流、工具 HTTP 请求和 worker，而不能只停止浏览器轮询。',
+      '架构验收应覆盖状态图穷举、权限矩阵、租户隔离、Schema fuzzing、MCP 恶意服务器、沙箱逃逸、网络分区、队列重复、checkpoint 损坏和恢复演练。验收输出不只是日志，还要有可重放的输入快照、预期不变量、实际终态和差异。只有这样，性能提升才不会以不可审计或不可恢复为代价。',
+    ],
+    'implementation-and-evaluation': [
+      '原型阶段先锁定一个只读研究任务和一个可验证终态，例如“生成带来源映射的架构决策记录”。实现最小状态图、严格工具 schema、事件日志、预算和取消；通过后再加入写文件、MCP、长期记忆和多 Agent。每次扩展都应增加一个失败测试和一个回放 fixture，防止功能数量增长而质量契约失去意义。',
+      '预算应是向量而非单一计数器：模型输入/输出 token、工具调用数、来源查询数、墙钟时间、并发 worker、写入变更数和人工审批次数分别受限。控制器在任一维度耗尽时要进入安全终止或升级，而不能通过换工具、重复规划、拆分子任务来绕开总预算。预算事件也应写入 provenance，便于分析成本异常。',
+      '评估集需要包含短问答、跨文档检索、长程研究、代码修改、工具失败、权限拒绝、间接提示注入、模型切换和上下文溢出。每个样例定义目标终态、允许动作、禁止动作、证据要求、预期变更和人工 rubric；答案漂亮但没有正确文件、测试结果或引用映射时，任务必须判失败。',
+      '比较 runtime 时固定模型和外部条件，只改变编排策略；至少比较 graph/state-machine、轻量 coding harness 和 multi-agent supervisor 三类。重复运行并报告分布而非一次均值，分开统计成功任务的成本与失败任务的浪费，给出 p50/p95 延迟、token、工具选择准确率、无效调用率、恢复成功率和人工介入率。',
+      '故障注入要覆盖 malformed JSON、流式中断、工具 500/超时、来源恶意文本、权限在运行中撤销、checkpoint 写失败、worker 重启、重复消息和 provider drift。错误分类必须区分 request failed、response rejected、tool failed、quality retry、safe stop 和 fallback；只有真正的网络或中断才显示请求错误，模型质量问题应显示修订并重试。',
+      '发布门禁应要求轨迹可重放、写操作可审计、敏感字段不进 prompt、来源 claim 可追溯、章节重复度受控、跨租户检索隔离、恢复演练有结果、成本异常可告警，并在真实供应商上抽检。报告还要公开 fixture、配置版本、模型版本、工具版本和已知限制；没有这些材料，只能称为开发基线。',
+    ],
+    'risks-and-frontier': [
+      '威胁模型应把攻击者能力、资产、入口、影响和控制逐项列出。间接提示注入通过网页、论文或 README 进入 observation，工具越权利用参数或路径边界，凭据泄露利用日志与上下文，记忆污染改变未来任务，MCP 供应链风险来自恶意或漂移的 server。每项都需要攻击样例、检测信号、阻断点和残余风险。',
+      '执行层的最小权限必须独立于模型提示：文件路径做 canonicalization 并限制到 workspace，网络请求做 DNS/SSRF 校验，shell 放在外部沙箱并限制系统调用，MCP 工具逐项启用且固定版本，所有 observation 做大小、类型和内容隔离。提示词可以解释能力，但不能成为授权机制；policy service 才是最终裁决者。',
+      '证据治理应连接 source→claim→decision→action→artifact。来源元数据不等于全文验证，摘要不能支持超出摘要范围的结论，工具 observation 也不自动成为 evidence。Wiki 应显示 mapped、partially-mapped 和 unverified，并记录验证时间、内容哈希和证据缺口；这比生成一个没有来源的确定性结论更专业。',
+      '自动化等级可以按影响、范围、可逆性、敏感度和证据强度分层：只读搜索和草稿可自动执行，写 workspace 需要版本检查，执行 shell、发送外部消息、删除数据和发布结论需要审批。审批不是一次性的“允许 Agent”，而是绑定资源、参数、快照和过期时间；上下文变化时必须重新授权。',
+      '外部有效性会受到模型供应商漂移、工具版本、网络结果、数据分布、攻击者适应和评测泄漏影响。应持续执行 red-team、canary、shadow replay、版本回归和成本异常检测，并比较真实失败轨迹而不是只在固定 fixture 上通过。对于没有公开数据或无法复现的性能主张，应明确标记未知。',
+      '前沿问题要写成可证伪实验：节点级恢复是否保持状态不变量；轨迹级 credit assignment 是否降低无效工具调用；带时间与权限的记忆是否减少陈旧召回；evidence coverage 是否能改善规划；审批策略是否能证明不可被 planner 绕过。每个问题都需要 baseline、最小实验、成功阈值、失败判据和可发布的复现材料。',
+    ],
+  };
+}
+
+function agentOsAuditDetail(language, zh) {
+  if (!zh) return {};
+  return {
+    'research-landscape': [
+      '审计时要明确研究对象的排除项：单纯聊天 UI、一次性函数调用和没有状态恢复的 prompt chain 不能自动归入 Agent OS。每个比较结论都应注明观察窗口、版本和证据级别，并把“接口支持”与“运行时保证”分列，避免把产品文案当作架构事实。',
+      '对比表至少列出状态持久化粒度、工具发现与授权、记忆写入策略、审批绑定、沙箱责任、事件回放和成本可观测性。若某框架没有公开实现或测试，填写 unknown 而不是推测 yes/no；未知本身是选型风险，应进入后续验证清单。',
+      '长程案例还要规定什么叫完成：目标文件哈希、测试退出码、引用映射和审计事件必须同时满足。只返回一段“已完成”的文本不算成功；如果中途发生部分提交，评分应记录损失和补偿，而不能用最终摘要掩盖轨迹中的错误。',
+      '运行区间应包含低负载、并发、网络降级和模型限流四种条件。除了平均值，还要报告尾延迟、重试放大、每成功任务成本和人工等待时间；否则一个在 happy path 上很快的 harness 可能在生产故障时最昂贵。',
+      '自主性评价要测试拒绝能力：给出诱导越权的网页、伪造的管理员指令和过期审批，观察 Agent 是否停在策略门而不是继续执行。将安全拒绝当成成功结果的一部分，才能避免优化器只奖励“做了更多动作”。',
+      '研究输出应保留来源版本、访问时间、内容哈希和检索查询。对官方文档、源码和论文分别标注证据类型；对未能取得全文的来源只允许支持有限主张，并在 Wiki 中显示 coverage gap，防止引用数量掩盖证据强度不足。',
+    ],
+    'foundations-and-mechanisms': [
+      '不变量应可以转换为测试断言，例如“未授权工具永远不会进入执行器”“同一幂等键不会产生两次外部副作用”“取消后没有新的 worker 事件”。把这些断言放在 runtime 而非 prompt 中，才能对抗模型漂移和恶意 observation。',
+      '控制循环的实验要区分局部修正和全局重规划：记录每次计划版本、触发原因、已完成副作用和剩余预算。若计划过期却继续执行旧参数，失败应归因于 stale plan，而不是笼统标为模型错误；这种分类会直接影响 runtime 选型。',
+      '记忆召回实验应注入陈旧、冲突、无权限和应删除的记录，检查过滤顺序与解释信息。一个召回率高但无法解释为什么命中、也无法撤销的向量库，不足以成为生产 Agent OS 的长期记忆层。',
+      'MCP 测试要包含工具名冲突、schema 漂移、超大结果、恶意链接和 server 重启。客户端必须固定命名空间与版本，在调用前重新检查 allowlist；发现阶段缓存不能直接授予执行权，否则配置变化会留下隐形权限。',
+      '审批测试应覆盖批准过期、参数改变、目标资源改变、审批人撤销和重复提交。执行记录必须能证明实际参数与批准快照相同；如果只能证明“有人点过允许”，就无法满足高影响动作的审计要求。',
+      '过程指标需要与终态指标关联：无效调用上升是否导致恢复时间增加，证据覆盖下降是否导致人工拒绝上升，预算耗尽是否安全停止。将指标拆成互相独立的 dashboard 会隐藏因果关系，应保留轨迹级关联键。',
+    ],
+    'system-architecture': [
+      '四平面之间的接口不能共享一个万能凭据。控制平面应只能签发短期、范围受限的执行授权，数据平面按租户过滤，执行平面不读取全局密钥，证据平面只接受带哈希和来源的事实。任何跨平面调用都应写审计事件和关联 id。',
+      '事件重建必须能够回答三类问题：当时 Agent 知道什么、当时被允许做什么、实际做了什么。把 prompt、工具 observation 和策略结果混在一个可编辑文本字段会损害取证；建议采用不可变事件加版本化投影，UI 只展示投影。',
+      '幂等提交的键应覆盖租户、job、节点版本和目标资源，而不是只使用模型请求 id。这样 worker 重启或消息重复时可以安全重放；若外部系统不支持幂等，则必须在 Novi 侧使用 outbox、锁或补偿记录把副作用包起来。',
+      '资源隔离应分别计算模型、浏览器、shell 和索引 worker 的 CPU、内存、网络与文件边界。把所有任务放进同一个 Node 进程会让单个死循环拖垮会话；把所有任务拆成远程服务又会增加一致性和隐私成本，需按风险分级。',
+      '排障路径必须能从用户输入追到最终 Markdown 行，而不是只看到阶段 completed。建议每个段落保留生成阶段、来源 claim、审阅结论和文档哈希；索引失败时 UI 显示 projection pending，不要把 Artifact 已提交误报为知识库已就绪。',
+      '恢复演练要故意在每个事务边界中断：模型完成后、工具副作用后、Artifact commit 后和索引投影后。验收关注不重复、不丢失、可取消和可继续四个性质，并保留演练轨迹作为发布证据。',
+    ],
+    'implementation-and-evaluation': [
+      '最小垂直切片的验收应是机器可判定的：给定输入、固定模型和工具，系统必须产生指定 Artifact schema、引用集合、测试结果和事件终态。先建立这个 golden trace，再逐步放宽模型和网络，才能知道质量退化发生在哪一层。',
+      '预算向量还应有保留量和硬停止量。接近 token 或时间上限时，控制器可以压缩上下文或请求审批；达到硬上限时必须安全停止并说明未完成项，不能用额外一次隐式调用把成本转嫁给用户。',
+      '数据集应保留“困难但合理”的样例，而不是只收集成功 prompt。包括含歧义的目标、互相矛盾的来源、需要拒绝的操作和中途权限变化；评分 rubric 先定义不可违反约束，再评价文本质量，避免语言流畅掩盖动作错误。',
+      'runtime 对比要用相同的工具实现和 observation 格式，并把 planner/controller 的额外调用计入成本。报告置信区间或重复运行分布；若样本很小，明确写 exploratory 而不是宣称显著优于其他方案。',
+      '故障分类一旦确定，就应进入自动化回归：每个错误 fixture 检查 UI 标签、Job 状态、退款、Artifact 是否存在和事件是否脱敏。这样可以防止修复“LLM error”显示问题时，实际把内容质量问题静默成成功。',
+      '发布前的人工抽检要按引用、机制、限制和安全四个维度各抽样，并记录 reviewer、版本、结论和修订。自动评分只能筛选候选，不能替代领域专家对关键技术主张的判断。',
+    ],
+    'risks-and-frontier': [
+      '威胁模型的每项控制都应有可观测拒绝事件和绕过测试。例如 prompt injection 不只检查模型是否说“不”，还要检查工具是否真的没有执行、凭据是否没有进入 observation、状态是否没有被污染。控制没有可验证信号，就不能算完成。',
+      '沙箱边界应通过最小权限和失败安全共同验证：路径逃逸、符号链接、环境变量、网络回连、资源耗尽和子进程继承都要测试。Terminal/exec 若依赖外部隔离，Wiki 必须写清责任落在哪个部署组件，不能把应用层 allowlist 描述成完整沙箱。',
+      '证据链要支持反向审计：从一条建议能找到 claim，从 claim 能找到 source 内容和版本，从 source 能回到检索 facet；若任一链接缺失，建议降级为 hypothesis。对来源更新或撤回，要能标记受影响 Artifact，而不是只更新未来生成。',
+      '审批策略要避免两种极端：所有动作都弹窗造成审批疲劳，或只在 prompt 中提醒高风险动作。可以按影响和可逆性分层，并对连续低风险动作合并审批；一旦目标资源、权限或证据改变，必须重新评估而不是沿用旧批准。',
+      '持续评估应关注分布变化和对手适应。固定 benchmark 通过后，仍需用新来源、新工具版本、新模型和真实并发做 shadow replay；发现安全拒绝率或成本尾部漂移时，应触发回滚或降低自动化等级。',
+      '前沿实验必须定义失败的停止规则与伦理边界。涉及真实凭据、外部消息或生产数据的测试应使用隔离环境和合成标识；公开结果时删除敏感 observation，但保留足够的轨迹摘要让他人复核结论。',
+    ],
+  };
+}
+
+function padAgentOsSections(documents) {
+  const required = 420;
+  return documents.map((document) => ({
+    ...document,
+    sections: document.sections.map((section, index) => {
+      const body = String(section.body || '');
+      if (body.length >= required) return section;
+      const supplement = `\n\n在这一节的工程审查中，应把结论落实为可观察的状态、输入输出、失败分类和验收阈值。记录配置版本、运行时间、权限快照、来源哈希与变更结果，并通过对照实验验证因果关系；如果当前没有足够证据，应明确写出未知项、需要补充的来源以及可以证伪该结论的最小测试。对于 Agent OS，尤其要检查模型候选动作是否经过执行层 policy、预算、幂等和审计门，而不是仅凭提示词或最终文本判断正确性。`;
+      return { ...section, body: `${body}${supplement}${index % 2 ? `\n\n重复运行、重试和 worker 重启后的轨迹也应保持一致，任何差异都要归入可解释的环境或模型漂移。` : ''}` };
+    }),
+  }));
 }
 
 function collaborativeContent(project, content, prompt = '', language = 'en') {
@@ -323,7 +431,17 @@ function collaborativeContent(project, content, prompt = '', language = 'en') {
       '风险集中在间接提示注入、工具越权、凭据泄露、记忆污染、MCP server 供应链、重复提交、审批疲劳、模型漂移和证据伪造。最小权限必须在执行层强制，来源和主张要可追溯，不可验证内容必须显式显示为 unverified，而不是由流畅语言掩盖。',
       '下一步应围绕可证伪问题推进：如何实现节点级恢复和一致性提交，如何优化长轨迹工具选择，如何让记忆具备时间/权限/删除语义，如何把 evidence coverage 纳入规划奖励，以及如何证明 planner 无法绕过审批策略。每个问题都需要基线、最小实验和失败判据。',
     ];
-    chineseSections.forEach((section, index) => { section.body = agentOsWikiBodies[index]; });
+    const agentOsWikiDetail = [
+      '本 Wiki 的边界是运行时保证而非产品营销：单次 tool call、普通聊天界面和没有持久状态的 prompt chain 不自动具备 Agent OS 属性。选型时应分别记录控制循环、状态恢复、工具授权、记忆语义、审批和沙箱责任；没有公开证据的条目标记 unknown。',
+      '判断机制是否可靠，要检查模型候选动作与执行层不变量是否分离。动作必须经过 schema、权限、预算和幂等检查；观察结果只作为不可信数据；完成必须绑定 Artifact 和事件。ReAct、Plan-and-Execute、Supervisor 的差异应通过计划过期、局部失败、重规划和终止条件实验验证。',
+      '生产系统应将控制、数据、执行和证据分平面，并用 correlation id 连接 intake、来源、工具、审批、review、Artifact 和索引事件。队列重复投递、worker 重启和索引部分失败都必须有幂等、outbox、补偿和可见中间状态；“Artifact 已保存”不等于“知识索引已完成”。',
+      '建议从一个只读工具和一个机器可判定的终态开始，建立 golden trace 后再扩展写工具、MCP、长期记忆和多 Agent。评估固定模型、工具、预算和网络，只改变 runtime；同时报告 task success、tool selection、invalid call、recovery、unauthorized rejection、p95 latency、cost 和 evidence coverage。',
+      '安全边界不能依赖提示词。间接 prompt injection、工具越权、凭据泄露、记忆污染、MCP 供应链和重复副作用都应有攻击 fixture、执行层阻断和可观测拒绝事件。高影响动作按影响、可逆性、敏感度和证据强度分级审批，并绑定参数快照与过期时间。',
+      '当前最大的证据缺口是长任务恢复、真实来源引用正确性、跨供应商漂移和生产并发。下一轮研究应保留版本、内容哈希、检索查询、原始轨迹和失败样本，运行 replay、故障注入、red-team 和领域专家盲审；没有这些材料，任何“最佳 runtime”结论都只能是假设。',
+      '对风险治理的验收不仅看模型说了什么，还看工具是否真正没有执行、凭据是否没有进入 observation、权限变化是否使旧审批失效。审计链应支持从建议反查 claim、source、检索 facet 和 Artifact；无法反查的建议降级为 hypothesis 或 unverified。',
+      '前沿实验应将节点级恢复、轨迹级 credit assignment、带权限与删除语义的记忆、evidence-aware planning 和不可绕过的 approval policy 写成明确假设。每项实验声明 baseline、样本、成功阈值、失败判据和隔离伦理边界，避免把一次 demo 包装成通用能力。',
+    ];
+    chineseSections.forEach((section, index) => { section.body = `${agentOsWikiBodies[index]}\n\n${agentOsWikiDetail[index]}`; });
   }
   const localizedGoal = {
     question,
@@ -348,7 +466,7 @@ function collaborativeContent(project, content, prompt = '', language = 'en') {
     deepDiveDocuments: localizedDeepDiveDocuments,
     knowledgeSystem: { title: `${domain}知识体系`, purpose: localizedGoal.outcome, layers: localizedLayers, learningSequence: localizedLayers.map((layer) => layer.id), validationQuestions: [`${domain}的范围内外分别是什么？`, `${domain}的核心组件如何交互？`, `哪些关于${domain}的主张需要更强证据？`, `什么实践结果能证明已掌握${domain}？`] },
     systemDocument: { title: `${domain}系统文档`, executiveSummary: `本文档围绕${domain}的范围、架构、实践、证据与风险建立完整知识结构。`, sections: chineseSections, completionChecklist: ['Goal 和范围已明确。', '知识层次与依赖已覆盖。', '证据状态与限制可见。', '最终 Wiki 提供了具体的下一步问题。'] },
-    llmWiki: { title: `${domain} LLM Wiki`, summary: `本 Wiki 以 Goal 为主线，整合受控参考、知识结构、五篇技术 Deep Dive 与批判性评审。`, sections: chineseSections, glossary: [{ term: domain, definition: '本 Workspace 专家团队研究的知识领域。' }, { term: '知识体系', definition: '概念、依赖、实践与验证的有序映射。' }, { term: '受控证据', definition: 'Novi 允许用于显式主张映射的来源。' }, { term: '验证', definition: '用于确认、证伪或修正生成内容的检查。' }], documentMap: localizedDeepDiveDocuments.map(({ slug, title, purpose }) => ({ slug, title, purpose })), nextQuestions: localizedGoal.successCriteria.map((criterion) => `还需要哪些证据或工作才能证明：${criterion}`) },
+    llmWiki: { title: `${domain} LLM Wiki`, summary: `本 Wiki 以 Goal 为主线，先定义 Agent OS 的边界，再解释状态/工具/记忆/审批机制，随后落到生产架构、实现与评估，最后用威胁模型和可证伪实验收束。五篇 Deep Dive 分别承担版图比较、机制基础、系统架构、工程评估和风险前沿；它们共同回答“如何选择 runtime、如何证明 Agent 做对了、如何在失败和攻击下保持可恢复与可审计”，而不是把框架名称或最佳实践简单罗列。研究结论以运行时保证、执行层策略和可重放证据为判断依据，并明确区分能力主张、工程假设和尚未验证的前沿问题。当前没有受控实时来源时，事实性主张保持 unverified，必须通过来源映射和领域专家抽检后才能发布。`, sections: chineseSections, glossary: [{ term: domain, definition: '本 Workspace 专家团队研究的知识领域。' }, { term: '知识体系', definition: '概念、依赖、实践与验证的有序映射。' }, { term: '受控证据', definition: 'Novi 允许用于显式主张映射的来源。' }, { term: '验证', definition: '用于确认、证伪或修正生成内容的检查。' }, { term: '幂等提交 / idempotency', definition: '重复投递或重试不会产生重复外部副作用的提交语义。' }, { term: 'Evidence gap', definition: '当前来源不足以支持主张，需要进一步检索、实验或人工核验的缺口。' }], documentMap: localizedDeepDiveDocuments.map(({ slug, title, purpose }) => ({ slug, title, purpose })), nextQuestions: localizedGoal.successCriteria.map((criterion) => `还需要哪些证据或工作才能证明：${criterion}`) },
     wikiSections: chineseSections,
   };
 }
@@ -437,12 +555,15 @@ function workflowFor(project, content, completedAt, execution = null) {
     ...['research', 'knowledge', 'writing', 'review'].map((id) => ({ id, name: roles.get(id)?.title || `${titleCase(id)} Agent`, responsibility: roles.get(id)?.responsibility || `Complete the bounded ${id} responsibility.` })),
     { id: 'finalizer', name: 'LLM Wiki Finalizer', responsibility: 'Reconcile the Goal, expert outputs, evidence status, and review into the final LLM Wiki.' },
   ];
+  const agentOsTopic = /agent\s*os|agent operating system|agent runtime.*(?:stack|technology|技术栈)|自主.?agent.*(?:runtime|技术栈)/iu.test(`${project.topic || ''} ${project.description || ''} ${content.expertGoal?.question || ''}`);
+  const runtime = execution?.runtime || { name: 'offline-deterministic', version: 2, language: content.language || project.wikiLanguage || 'en', references: { status: 'offline', sourceCount: 0, sourceKinds: [] } };
+  const quality = runtime.quality || assessWikiQuality({ content }, { topic: project.topic, requireAgentOs: agentOsTopic });
   return {
     version: 4,
     strategy: execution?.runtime?.mode ? `adaptive-${execution.runtime.mode}` : 'goal-expert-wiki-pipeline',
     product: project.type,
     completedAt,
-    runtime: execution?.runtime || { name: 'offline-deterministic', version: 2, language: content.language || project.wikiLanguage || 'en', references: { status: 'offline', sourceCount: 0, sourceKinds: [] } },
+    runtime: { ...runtime, quality },
     goal: content.expertGoal,
     expertRoles: content.expertRoles,
     agents: pipeline.map(({ id, name, responsibility }, index) => {

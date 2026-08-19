@@ -33,6 +33,7 @@
     "sbom-check": "node scripts/sbom-check.mjs",
     "infrastructure-integration-check": "node scripts/infrastructure-integration-check.mjs",
     "live-source-integration-check": "node scripts/live-source-integration-check.mjs"
+    ,"agent-os-wiki-quality-check": "node scripts/agent-os-wiki-quality-check.mjs"
   },
   "engines": {
     "node": ">=22.12.0"
