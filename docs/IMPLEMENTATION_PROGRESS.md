@@ -81,6 +81,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 
 - 2026-08-19：真实运行确认 Knowledge 已完成，但 Writing Specialist 在同时生成体系文档、summary/title/abstract 时于 8192 output tokens 截断，尚未进入五篇 Deep Dive 聚焦调用。将 Writing 契约收窄为只生成 `systemDocument`，保留前序 summary/title/abstract 并把预算留给独立 Deep Dive；这不是降低文档目标，五篇 Deep Dive 仍逐篇执行完整六节质量门禁。验证：待定向测试和真实运行确认。
 
+- 2026-08-19：后续真实运行发现 Knowledge 模型即使只有 `knowledgeSystem` 仍把知识层扩写成长文，并在 16384 output tokens 截断。新增 Knowledge 专用紧凑 shape contract：固定 8 层、保留 layer id/dependency、限制 objective/topic 长度、固定 4 个验证问题并禁止附加 prose/Markdown/citation；深度内容继续由五篇独立 Deep Dive 承担。Writing 同时明确禁止回显非当前字段。验证：待自动化和真实 Provider 复测。
+
 - 2026-08-19：明确 Research Intake 的产品边界：外部 ChatGPT 或其他工具整理主题不属于 Novi，Novi 收到的最终提示词仍按未批准请求处理；第一步必须由 Intake Agent 判断深度研究所需的问题、范围、交付物、证据和边界是否完整。新增上下文约束，禁止把外部提示词当作已批准计划；不完整时继续多轮追问/提供选项，完整后仍需用户确认才启动检索和 Wiki 生成。验证：`npm run check`、Research Intake/Composer 定向测试、`npm test`、`git diff --check`。真实供应商对话和领域质量仍需外部门禁。
 
 - 2026-08-19：强化证据质量门禁：`publicationReady` 的 claim/citation coverage 现在只统计能与已验证来源 excerpt 产生足够词项重叠的 `[S#]`，无支持的 marker 不再被误计为证据覆盖；当 Agent OS 真实来源包存在时，未支持 marker 会触发硬失败。新增 `supportedCitationIds` 回归测试，覆盖支持、无关主张和 marker 独立成句场景。验证：`npm run check`（55 modules）、`npm test`（92 passed + 1 PostgreSQL 条件跳过）、`git diff --check`。真实来源正确性和领域专家抽检仍是外部门禁。
