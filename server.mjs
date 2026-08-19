@@ -998,7 +998,7 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
         const current = findAgentSession(next, sessionId, projectId, user.tenantId);
         if (!current || current.status === 'running') return null;
         appendSessionMessage(current, { role: 'user', content: prompt, kind: 'intake', status: 'completed' });
-        appendSessionMessage(current, { role: 'assistant', content: response, kind: 'intake', status: 'completed', runtime: { name: 'research-intake', version: 2, status: intake.status, researchQuestion: intake.researchQuestion, domain: intake.domain, scope: intake.scope, deliverables: intake.deliverables, constraints: intake.constraints, searchFacets: intake.searchFacets, methodology: intake.methodology, sourcePlan: intake.sourcePlan, stagePlan: intake.stagePlan, completionCriteria: intake.completionCriteria, questions: intake.questions, options: intake.options } });
+        appendSessionMessage(current, { role: 'assistant', content: response, kind: 'intake', status: 'completed', runtime: { name: 'research-intake', version: 3, status: intake.status, turn: intake.turn, maxTurns: intake.maxTurns, selectedOption: intake.selectedOption || null, researchQuestion: intake.researchQuestion, domain: intake.domain, scope: intake.scope, deliverables: intake.deliverables, constraints: intake.constraints, searchFacets: intake.searchFacets, methodology: intake.methodology, sourcePlan: intake.sourcePlan, stagePlan: intake.stagePlan, completionCriteria: intake.completionCriteria, questions: intake.questions, options: intake.options } });
         current.activeResearchIntake = intake; current.updatedAt = new Date().toISOString();
         return publicAgentSession(current);
       });

@@ -165,6 +165,18 @@ test('Research Intake fallback never approves a Wiki without an Agent decision',
   assert.equal(intake.options.length >= 1, true);
 });
 
+test('Research Intake caps clarification turns and records a selected option', async () => {
+  const config = { provider: 'custom', family: 'openai', model: 'unavailable', baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'fixture' };
+  const history = Array.from({ length: 8 }, (_, index) => ({ role: 'user', kind: 'intake', content: `clarification ${index + 1}` }));
+  const capped = await runResearchIntake({ title: 'Capped', topic: 'Agent runtime', type: 'research' }, config, { prompt: '继续', history, previous: { status: 'incomplete', options: [{ id: 'broad', label: '全面技术 Deep Dive', description: 'all' }] } });
+  assert.equal(capped.status, 'incomplete');
+  assert.equal(capped.turn, 8);
+  assert.equal(capped.maxTurns, 8);
+  assert.match(capped.questions[0], /最大轮数/u);
+  const selected = await runResearchIntake({ title: 'Choice', topic: 'Agent runtime', type: 'research' }, config, { prompt: 'broad', previous: { status: 'incomplete', options: [{ id: 'broad', label: '全面技术 Deep Dive', description: 'all' }] } });
+  assert.deepEqual(selected.selectedOption, { id: 'broad', label: '全面技术 Deep Dive' });
+});
+
 test('citation repair only adds markers supported by verified source excerpts', () => {
   const draft = { summary: 'LangGraph uses state transitions and checkpoint persistence to coordinate durable execution across graph nodes. This paragraph discusses unrelated billing policy and should remain unverified.', sections: [{ body: 'MCP defines a protocol for connecting model applications to tools and resources through a client-server interface. The protocol boundary is distinct from an Agent orchestration runtime.' }] };
   const sources = [
