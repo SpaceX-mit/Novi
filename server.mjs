@@ -24,12 +24,13 @@ import { enqueueDocumentDeletion, enqueueDocumentProjection, externalProjectionP
 import { providerCatalog, publicProviderConfig, resolvedProviderConfig, saveProviderConfig, testProviderConnection } from './src/llm-providers.mjs';
 import { browserAgentConfigured, mcpSourceConfigured, renderWithBrowserAgent, validateSourceAdapterConfiguration } from './src/source-adapters.mjs';
 import { agentModeCatalog, publicMode, selectAgentMode, validateRequestedMode } from './src/agent-modes.mjs';
-import { beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun, updateSessionRunEvent, updateSessionToolCall, upsertRunEvent } from './src/agent-sessions.mjs';
+import { appendSessionMessage, beginSessionRun, completeSessionRun, createAgentSession, ensureAgentSession, failSessionRun, findAgentSession, publicAgentSession, sessionSummary, updateSessionRun, updateSessionRunEvent, updateSessionToolCall, upsertRunEvent } from './src/agent-sessions.mjs';
 import { createToolExecutor, publicToolSettings, resolvedTools, saveToolSettings, sourceAccessTool } from './src/agent-tools.mjs';
 import { discoverMcpServer, publicMcpSettings, resolvedMcpTools, saveMcpSettings } from './src/mcp-runtime.mjs';
 import { publicSkillSettings, resolveSkills, saveSkillSettings, skillProvenance } from './src/skill-runtime.mjs';
 import { bindPluginTools, pluginProvenance, publicPluginSettings, resolvePlugins, savePluginSettings } from './src/plugin-runtime.mjs';
 import { normalizeWikiLanguage } from './src/wiki-language.mjs';
+import { intakeConfirmation, intakeMessage, runResearchIntake } from './src/research-intake.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const publicDir = join(root, 'public');
@@ -984,6 +985,23 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
     catch (error) { return send(res, error.status || 422, { error: error.message, code: error.code || 'WIKI_LANGUAGE_INVALID' }); }
     const providerConfig = await resolvedProviderConfig(state, user.tenantId);
     if (!providerConfig) return send(res, 409, { error: 'No active LLM provider configured', code: 'LLM_PROVIDER_REQUIRED' });
+    const storedIntake = session.activeResearchIntake || [...(session.messages || [])].reverse().find((message) => message.kind === 'intake' && message.runtime?.status === 'ready')?.runtime;
+    const confirmed = intakeConfirmation(prompt) || Boolean(project.artifacts?.length);
+    let researchIntake = storedIntake;
+    if (!confirmed) {
+      const intake = await runResearchIntake(project, providerConfig, { prompt, history: session.messages, previous: session.activeResearchIntake, language });
+      const response = intakeMessage(intake, { language });
+      const saved = await store.update((next) => {
+        const current = findAgentSession(next, sessionId, projectId, user.tenantId);
+        if (!current || current.status === 'running') return null;
+        appendSessionMessage(current, { role: 'user', content: prompt, kind: 'intake', status: 'completed' });
+        appendSessionMessage(current, { role: 'assistant', content: response, kind: 'intake', status: 'completed', runtime: { name: 'research-intake', version: 1, status: intake.status, researchQuestion: intake.researchQuestion, domain: intake.domain, scope: intake.scope, deliverables: intake.deliverables, constraints: intake.constraints, searchFacets: intake.searchFacets, questions: intake.questions, options: intake.options } });
+        current.activeResearchIntake = intake; current.updatedAt = new Date().toISOString();
+        return publicAgentSession(current);
+      });
+      if (!saved) return send(res, 409, { error: 'Agent session is already running', code: 'AGENT_SESSION_ACTIVE' });
+      return send(res, 200, { session: saved, intake, ready: intake.status === 'ready', requiresConfirmation: intake.status === 'ready' });
+    }
     const selectedMode = selectAgentMode(prompt, { requestedMode });
     const quota = await store.update((next) => consumeGeneration(next, user));
     if (!quota.allowed) return send(res, 402, { error: 'Monthly generation limit reached', code: 'GENERATION_QUOTA_EXCEEDED', plan: quota.plan, usage: quota.usage, limits: quota.limits });
@@ -1005,7 +1023,8 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
         if (!currentProject || !currentSession) return null;
         if (currentProject.status === 'generating' || currentSession.status === 'running') return { conflict: true };
         const createdAt = new Date().toISOString();
-        const created = { id: randomUUID(), type: 'refine', projectId, sessionId, userId: user.id, tenantId: user.tenantId, prompt, requestedMode, language, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, previousStatus: currentProject.status, status: 'queued', progress: 0, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
+        const effectivePrompt = currentProject.artifacts?.length ? prompt : (researchIntake?.brief || researchIntake?.researchQuestion || prompt);
+        const created = { id: randomUUID(), type: 'refine', projectId, sessionId, userId: user.id, tenantId: user.tenantId, prompt: effectivePrompt, intake: researchIntake || null, requestedMode, language, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, previousStatus: currentProject.status, status: 'queued', progress: 0, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
         const message = beginSessionRun(currentSession, { jobId: created.id, prompt, requestedMode, currentMode: selectedMode.mode });
         updateSessionRun(currentSession, { language });
         currentProject.status = 'generating'; currentProject.updatedAt = createdAt;

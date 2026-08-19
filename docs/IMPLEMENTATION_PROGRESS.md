@@ -74,6 +74,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 4. 在已配置的 GitHub 远程仓库运行持续集成门禁并归档结果；随后接入真实供应商/目标基础设施并关闭正式发布门禁。
 
 ## 更新记录
+
+- 2026-08-19：新增 Research Intake 作为每轮 Deep Dive 的第一步。Composer 提交主题后，Agent 先用独立 intake 模型判断研究问题、领域、范围、交付物、约束和至少 3 个检索 facet 是否完整；信息不足时只保存 intake 对话、提出针对性追问并给出最多 5 个研究方向选项，不扣生成额度、不启动来源搜索或 Wiki 写作；信息完整时先展示可执行研究方案，用户回复“确认生成”后才进入原有 Goal → Reference Discovery → Research → Knowledge → Writing → Review → Finalizer 流程。确认后的后续轮次继续支持累计 Wiki refinement。intake 状态、方案和追问保存在 Session runtime。验证：`npm test` 88 passed + 1 PostgreSQL 条件跳过；`npm run check`（52 modules）；`npm run browser-smoke` 在 1360×900 和 390×844 均通过；`git diff --check` 通过。
 - 2026-08-19：修复 Agent Session 流式 Model Response 造成阅读位置跳动的问题。Workspace 重绘和实时 Job 事件更新现在记录 conversation scroll 状态：用户仍在底部 96px 内时跟随新内容，用户主动向上滚动后保持原位置；同时保留流式事件详情的展开/收起状态。验证：`npm test` 88 passed + 1 PostgreSQL 条件跳过；`npm run check`（51 modules）；`npm run browser-smoke` 在 1360×900 和 390×844 均通过；`git diff --check` 通过。
 
 - 2026-08-19：重构 Workspace 展示层，参考 Linear/Notion/WorkBuddy 的单焦点导航：新增 Chat、Files、LLM Wiki、Document 四个互斥 Workspace Tab；Chat 内才显示 Agent Session + conversation，Files/Wiki/Document 使用单列最大宽度内容区，不再与会话三栏并排。切换 Tab 保留当前 Session、composer 草稿、执行模式、Wiki 语言、Artifact、文档选择及 Preview/Source 状态；文件/Markdown 链接会自动切换到 Document。移动端 Tab 横向滚动且保持无横向溢出。更新浏览器 smoke 覆盖四 Tab、互斥内容、状态保持和桌面/移动布局。验证：`npm test` 88 passed + 1 PostgreSQL 条件跳过；`npm run check`（51 modules）；`npm run browser-smoke` 在 1360×900 和 390×844 均通过；`git diff --check` 通过。

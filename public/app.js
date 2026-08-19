@@ -697,6 +697,14 @@ async function sendAgentMessage(id, input = {}) {
     const mode = input.mode || $('#agent-mode')?.value || 'auto';
     const language = input.language || $('#wiki-language')?.value || state.composerLanguage || state.activeProject?.wikiLanguage || 'zh-CN';
     const queued = await request(`/api/projects/${id}/sessions/${state.activeSessionId}/messages`, { method: 'POST', body: JSON.stringify({ prompt, mode, language }) });
+    if (!queued.job) {
+      state.activeJob = null;
+      state.activeSession = queued.session || state.activeSession;
+      state.sessions = state.sessions.map((item) => item.id === state.activeSession?.id ? { ...item, ...state.activeSession } : item);
+      renderWorkspace(state.activeProject, state.activeTab);
+      showToast(queued.ready ? 'Research plan ready · confirm to start' : 'Novi needs more research details');
+      return;
+    }
     const job = queued.job;
     state.activeJob = job; state.composerDraft = '';
     renderWorkspace(state.activeProject, state.activeTab); await loadAgentWorkspace(id, state.activeSessionId);
