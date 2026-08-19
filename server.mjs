@@ -998,7 +998,7 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
         const current = findAgentSession(next, sessionId, projectId, user.tenantId);
         if (!current || current.status === 'running') return null;
         appendSessionMessage(current, { role: 'user', content: prompt, kind: 'intake', status: 'completed' });
-        appendSessionMessage(current, { role: 'assistant', content: response, kind: 'intake', status: 'completed', runtime: { name: 'research-intake', version: 1, status: intake.status, researchQuestion: intake.researchQuestion, domain: intake.domain, scope: intake.scope, deliverables: intake.deliverables, constraints: intake.constraints, searchFacets: intake.searchFacets, questions: intake.questions, options: intake.options } });
+        appendSessionMessage(current, { role: 'assistant', content: response, kind: 'intake', status: 'completed', runtime: { name: 'research-intake', version: 2, status: intake.status, researchQuestion: intake.researchQuestion, domain: intake.domain, scope: intake.scope, deliverables: intake.deliverables, constraints: intake.constraints, searchFacets: intake.searchFacets, methodology: intake.methodology, sourcePlan: intake.sourcePlan, stagePlan: intake.stagePlan, completionCriteria: intake.completionCriteria, questions: intake.questions, options: intake.options } });
         current.activeResearchIntake = intake; current.updatedAt = new Date().toISOString();
         return publicAgentSession(current);
       });
@@ -1089,6 +1089,26 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
       code: requestedSessionId ? 'AGENT_SESSION_NOT_FOUND' : 'PROJECT_NOT_FOUND',
     });
     if (selectedSession.status === 'running') return send(res, 409, { error: 'Agent session is already running', code: 'AGENT_SESSION_ACTIVE' });
+    const requireIntake = generationInput.requireIntake === true;
+    const storedIntake = selectedSession.activeResearchIntake || [...(selectedSession.messages || [])].reverse().find((message) => message.kind === 'intake' && message.runtime?.status === 'ready')?.runtime;
+    const intakeConfirmed = Boolean(current.artifacts?.length)
+      || (storedIntake?.status === 'ready' && (intakeConfirmation(prompt) || prompt === current.topic || prompt === current.description));
+    if (requireIntake && !intakeConfirmed) {
+      const providerConfig = await resolvedProviderConfig(await store.read(), user.tenantId);
+      if (!providerConfig) return send(res, 409, { error: 'No active LLM provider configured', code: 'LLM_PROVIDER_REQUIRED' });
+      const intake = await runResearchIntake(current, providerConfig, { prompt, history: selectedSession.messages, previous: selectedSession.activeResearchIntake, language });
+      const response = intakeMessage(intake, { language });
+      const saved = await store.update((next) => {
+        const session = findAgentSession(next, selectedSession.id, id, user.tenantId);
+        if (!session || session.status === 'running') return null;
+        appendSessionMessage(session, { role: 'user', content: prompt, kind: 'intake', status: 'completed' });
+        appendSessionMessage(session, { role: 'assistant', content: response, kind: 'intake', status: 'completed', runtime: { name: 'research-intake', version: 2, ...intake } });
+        session.activeResearchIntake = intake; session.updatedAt = new Date().toISOString();
+        return publicAgentSession(session);
+      });
+      if (!saved) return send(res, 409, { error: 'Agent session is already running', code: 'AGENT_SESSION_ACTIVE' });
+      return send(res, 200, { session: saved, intake, ready: intake.status === 'ready', requiresConfirmation: intake.status === 'ready' });
+    }
     const quota = await store.update((state) => consumeGeneration(state, user));
     if (!quota.allowed) return send(res, 402, { error: 'Monthly generation limit reached', code: 'GENERATION_QUOTA_EXCEEDED', plan: quota.plan, usage: quota.usage, limits: quota.limits });
     const generationPeriod = quota.usage.period;
@@ -1111,7 +1131,7 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
           if (!item) return null;
           if (item.status === 'generating') return { conflict: true };
           const createdAt = new Date().toISOString();
-          const created = { id: randomUUID(), type: 'generate', projectId: id, sessionId: selectedSession.id, userId: user.id, tenantId: user.tenantId, prompt, requestedMode, language, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, modeHistory: [{ from: null, to: selectedMode.mode, reason: selectedMode.reason, at: createdAt }], status: 'queued', progress: 0, previousStatus: item.status, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
+          const created = { id: randomUUID(), type: 'generate', projectId: id, sessionId: selectedSession.id, userId: user.id, tenantId: user.tenantId, prompt, intake: storedIntake || null, requestedMode, language, currentMode: selectedMode.mode, currentModeLabel: publicMode(selectedMode.mode).name, modeReason: selectedMode.reason, modeHistory: [{ from: null, to: selectedMode.mode, reason: selectedMode.reason, at: createdAt }], status: 'queued', progress: 0, previousStatus: item.status, generationCharged: true, sourceCharged, generationPeriod, sourcePeriod, createdAt, updatedAt: createdAt };
           const session = findAgentSession(state, selectedSession.id, id, user.tenantId);
           if (!session) return { sessionMissing: true };
           if (session.status === 'running') return { conflict: true };
@@ -1215,7 +1235,7 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
           throw error;
         }
       } : null;
-      artifact = await generateArtifactAsync(marked, { sources: [], knowledgeContext, providerConfig, prompt, language, mode: requestedMode, referenceRetriever, onStage, onMode, onModel, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
+      artifact = await generateArtifactAsync(marked, { sources: [], knowledgeContext, providerConfig, prompt, researchIntake: selectedSession.activeResearchIntake || null, language, mode: requestedMode, referenceRetriever, onStage, onMode, onModel, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:sync:${marked.id}:${Date.now()}` });
     } catch (error) {
       await store.update((state) => {
         refundGeneration(state, user, generationPeriod); if (sourceCharged) refundSourceQuery(state, user, sourcePeriod);
@@ -1454,7 +1474,7 @@ async function runGeneration(store, auth, jobId, project, user, previousStatus =
       }
     } : null;
     const refining = claimed.type === 'refine';
-    const artifact = await generateArtifactAsync(project, { sources: [], knowledgeContext, providerConfig, prompt: runPrompt, language: claimed.language, mode: claimed.requestedMode || 'auto', refineFromLatest: refining, referenceRetriever, onStage, onMode, onModel, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:${jobId}` });
+    const artifact = await generateArtifactAsync(project, { sources: [], knowledgeContext, providerConfig, prompt: runPrompt, researchIntake: claimed.intake || null, language: claimed.language, mode: claimed.requestedMode || 'auto', refineFromLatest: refining, referenceRetriever, onStage, onMode, onModel, tools, skills, plugins, toolExecutor, onTool, threadId: `${user.tenantId}:${jobId}` });
     const result = await store.update((state) => {
       const item = state.projects.find((entry) => entry.id === project.id && owned(entry, user));
       const job = (state.jobs || []).find((entry) => entry.id === jobId && entry.status === 'running');

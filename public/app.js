@@ -721,7 +721,15 @@ async function generate(id, input = {}) {
     const prompt = String(input.prompt || $('#agent-prompt')?.value || '').trim() || [sourceProject?.topic, sourceProject?.description].filter(Boolean).join('\n');
     const mode = input.mode || $('#agent-mode')?.value || 'auto';
     const language = input.language || $('#wiki-language')?.value || state.composerLanguage || sourceProject?.wikiLanguage || 'zh-CN';
-    const queued = await request(`/api/projects/${id}/generate?async=true`, { method: 'POST', body: JSON.stringify({ prompt, mode, language, sessionId: state.activeSessionId }) });
+    const queued = await request(`/api/projects/${id}/generate?async=true`, { method: 'POST', body: JSON.stringify({ prompt, mode, language, sessionId: state.activeSessionId, requireIntake: true }) });
+    if (!queued.job) {
+      state.activeJob = null;
+      state.activeSession = queued.session || state.activeSession;
+      state.sessions = state.sessions.map((item) => item.id === state.activeSession?.id ? { ...item, ...state.activeSession } : item);
+      renderWorkspace(state.activeProject, state.activeTab);
+      showToast(queued.ready ? 'Research plan ready · confirm to start' : 'Novi needs more research details');
+      return;
+    }
     const job = queued.job;
     state.activeJob = job; state.activeSessionId = queued.sessionId || state.activeSessionId; state.composerDraft = '';
     state.projects = state.projects.map((project) => project.id === id ? { ...project, status: 'generating' } : project);
