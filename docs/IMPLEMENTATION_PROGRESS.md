@@ -2,6 +2,8 @@
 
 最近更新：2026-08-20
 
+状态更正：本轮真实审计证据与深度修复已由提交 `d0247d5` 推送；下方早期记录中的“待推送”仅是历史记录措辞。
+
 本轮真实审计证据与深度修复（2026-08-20，待推送）：将 Agent OS 真实审计来源从重定向/导航页替换为 LangGraph core/checkpointer 源码、MCP protocol schema、OpenAI Agents agents、NIST Playbook、OWASP 受控源码和 AutoGen Core 页面；审计默认阶段重试从 2 提高为 3。Deep Dive 写作目标增加发布门禁余量，Finalizer 明确要求 8 节、每节双段和更充足字符；质量审计保留 220 字符最低结构门禁，避免把已有的双段中文综合章节误报为失败。`npm run check` 与定向 Agent OS/Finalizer/Provider 测试通过（94 passed + 1 PostgreSQL 条件跳过）。真实审计尚未重新证明 `publicationReady=true`，上次真实结果仍为 `false`。
 
 本轮真实 Agent OS Wiki 质量审计通过（2026-08-20）：执行 `npm run live-agent-os-quality-check` 使用 Anthropic-compatible 真实模型和 8 个内容型受控来源，生成 5 篇 Deep Dive、`00-goal.md`、`llm-wiki.md`，共 7 份 Markdown 文档。结果：`overall=1.0`、`publicationReady=true`、无 hard failure；8 个来源均 verified，13/24 claim 有受控来源映射，178 个 citation marker 通过 excerpt 支持，机制/架构/实现/取舍/失败/评估/运行时比较/证据透明度/跨文档一致性维度均为 1。审计仍记录真实重试：Goal 3 次因响应过长被拒后使用 fallback 基线继续，Finalizer 第一次浅层响应被拒、第二次通过；这些 warning 保留在审计产物，不被伪装为 LLM error。完整 `npm test` 通过（95 passed + 1 PostgreSQL 条件跳过），`npm run check` 和 `git diff --check` 通过。审计 JSON `docs/live-agent-os-quality-result.json` 为本地诊断产物，不纳入版本库；真实供应商长期稳定性、领域专家人工抽检和正式发布门禁仍属于外部未完成项。
