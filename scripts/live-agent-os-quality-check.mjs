@@ -46,7 +46,8 @@ const artifact = await generateArtifactAsync(project, {
   onStage: async (event) => { stages.push({ id: event.id, status: event.status, progress: event.progress, warning: event.warning || null, error: event.error || null }); log('stage', { id: event.id, status: event.status, progress: event.progress, warning: Boolean(event.warning), error: Boolean(event.error) }); },
   onModel: async (event) => {
     if (event.type !== 'model-response' || !['completed', 'rejected', 'failed'].includes(event.status)) return;
-    const item = { stage: event.stageId, status: event.status, title: event.title, responseLength: String(event.response || '').length, warning: Boolean(event.warning || event.summary), warningDetail: event.warning || event.summary || null, error: Boolean(event.error), errorDetail: event.error || null, output: event.output || null, usage: event.usage };
+    const responseText = String(event.response || '').replace(/\s+/gu, ' ').trim();
+    const item = { stage: event.stageId, status: event.status, title: event.title, responseLength: responseText.length, responsePreview: responseText.slice(0, 500), warning: Boolean(event.warning || event.summary), warningDetail: event.warning || event.summary || null, error: Boolean(event.error), errorDetail: event.error || null, output: event.output || null, usage: event.usage };
     modelEvents.push(item); log('model-response', item);
   },
 });

@@ -28,7 +28,7 @@ const specialistStageDefinitions = Object.freeze([
   { id: 'writing', name: 'Writing Agent', progress: 78, fields: ['systemDocument'] },
   { id: 'review', name: 'Review Agent', progress: 88, fields: ['review'] },
 ]);
-const finalizerStage = Object.freeze({ id: 'finalizer', name: 'LLM Wiki Finalizer', progress: 96, fields: ['llmWiki', 'wikiSections'] });
+const finalizerStage = Object.freeze({ id: 'finalizer', name: 'LLM Wiki Finalizer', progress: 96, fields: ['llmWiki'] });
 const stageDefinitions = Object.freeze([goalStage, referenceStage, ...specialistStageDefinitions, finalizerStage]);
 
 const reviewTemplate = [
@@ -390,8 +390,8 @@ function stageCollaborationContext(state, stageId) {
   if (stageId === 'research') return { expertGoal: goal || null };
   if (stageId === 'knowledge') return { expertGoal: goal || null, research };
   if (stageId === 'writing') return { expertGoal: goal || null, research, ...knowledge };
-  if (stageId === 'review') return { expertGoal: goal || null, research, ...knowledge, ...systemDocument, deepDiveDocuments: (state.content.deepDiveDocuments || []).map((document) => ({ id: document.id, slug: document.slug, title: document.title, sections: (document.sections || []).map((section) => ({ title: section.title, body: String(section.body || '').slice(0, 700) })) })) };
-  if (stageId === 'finalizer') return { expertGoal: goal || null, research, ...knowledge, ...systemDocument, deepDiveDocuments: (state.content.deepDiveDocuments || []).map((document) => ({ id: document.id, slug: document.slug, title: document.title, purpose: document.purpose, sections: (document.sections || []).map((section) => ({ title: section.title, body: String(section.body || '').slice(0, 500) })) })), review: (state.content.review || []).slice(0, 8) };
+  if (stageId === 'review') return { expertGoal: goal || null, research, ...knowledge, ...systemDocument, deepDiveDocuments: (state.content.deepDiveDocuments || []).map((document) => ({ id: document.id, slug: document.slug, title: document.title, sections: (document.sections || []).map((section) => ({ title: section.title, body: String(section.body || '').slice(0, 280) })) })) };
+  if (stageId === 'finalizer') return { expertGoal: goal || null, research, ...knowledge, ...systemDocument, deepDiveDocuments: (state.content.deepDiveDocuments || []).map((document) => ({ id: document.id, slug: document.slug, title: document.title, purpose: document.purpose, sections: (document.sections || []).map((section) => ({ title: section.title, body: String(section.body || '').slice(0, 260) })) })), review: (state.content.review || []).slice(0, 8) };
   return { expertGoal: goal || null };
 }
 
@@ -428,7 +428,7 @@ function stageQualityContract(stage) {
 
 function stageShapeContract(stage) {
   if (stage.id === 'knowledge') return 'Knowledge response shape is strict and compact: return exactly {"knowledgeSystem":{"title":"...","purpose":"...","layers":[{"id":"layer-1","title":"...","objective":"...","topics":["...","..."],"dependencies":[]}],"learningSequence":["layer-1"],"validationQuestions":["...","...","...","..."]}}. Use exactly 8 layers, preserve the layer ids and dependencies from the draft, keep each objective under 280 characters and each topic under 100 characters. Do not add examples, prose, Markdown, citations, or any other keys; do not repeat Deep Dive content.';
-  if (stage.id === 'writing') return 'Writing response shape is strict: return only the editable systemDocument object. Do not return summary, title, abstract, Deep Dive documents, Markdown, or explanatory prose; those are handled by separate deterministic or focused calls.';
+  if (stage.id === 'writing') return 'Writing response shape is strict: return exactly {"systemDocument":{...}} with the top-level editable key. Do not return the inner object by itself, summary, title, abstract, Deep Dive documents, Markdown, or explanatory prose; those are handled by separate deterministic or focused calls.';
   return '';
 }
 
