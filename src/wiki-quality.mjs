@@ -51,6 +51,10 @@ function sectionFor(document, index) {
   return textOf(document?.sections?.[index]?.body);
 }
 
+function documentSectionsText(document) {
+  return (document?.sections || []).flatMap((section) => [section?.title, section?.body]).map(normalized).join(' ');
+}
+
 function assessDeepDive(document, { minSectionChars = 420, minParagraphs = 2 } = {}) {
   const sections = Array.isArray(document?.sections) ? document.sections : [];
   const sectionLengths = sections.map((section) => textOf(section?.body).length);
@@ -61,13 +65,20 @@ function assessDeepDive(document, { minSectionChars = 420, minParagraphs = 2 } =
   if (paragraphCounts.some((count) => count < minParagraphs)) structuralFailures.push(`each section must contain at least ${minParagraphs} coherent paragraphs`);
   if (sections.some((section) => /^\s*#{1,6}\s/u.test(textOf(section?.body)))) structuralFailures.push('section bodies must not contain nested Markdown headings');
   const allText = normalized(documentText(document));
+  // Models may choose a different but still coherent section ordering. Score
+  // the technical dimensions against the complete document instead of
+  // assuming that every provider places architecture at index 2 and
+  // implementation at index 3. The Deep Dive contract still requires six
+  // sections and the required signals; this avoids penalising a strong essay
+  // merely because its headings are arranged differently.
+  const sectionText = documentSectionsText(document);
   const sectionSignals = {
-    mechanism: includesAny(normalized(sectionFor(document, 1)), REQUIRED_SECTION_SIGNALS.mechanism),
-    architecture: includesAny(normalized(sectionFor(document, 2)), REQUIRED_SECTION_SIGNALS.architecture),
-    implementation: includesAny(normalized(sectionFor(document, 3)), REQUIRED_SECTION_SIGNALS.implementation),
-    tradeoffs: includesAny(normalized(sectionFor(document, 3)), REQUIRED_SECTION_SIGNALS.tradeoffs) || includesAny(normalized(sectionFor(document, 4)), REQUIRED_SECTION_SIGNALS.tradeoffs),
-    failures: includesAny(normalized(sectionFor(document, 4)), REQUIRED_SECTION_SIGNALS.failures),
-    validation: includesAny(normalized(sectionFor(document, 5)), REQUIRED_SECTION_SIGNALS.validation),
+    mechanism: includesAny(sectionText, REQUIRED_SECTION_SIGNALS.mechanism),
+    architecture: includesAny(sectionText, REQUIRED_SECTION_SIGNALS.architecture),
+    implementation: includesAny(sectionText, REQUIRED_SECTION_SIGNALS.implementation),
+    tradeoffs: includesAny(sectionText, REQUIRED_SECTION_SIGNALS.tradeoffs),
+    failures: includesAny(sectionText, REQUIRED_SECTION_SIGNALS.failures),
+    validation: includesAny(sectionText, REQUIRED_SECTION_SIGNALS.validation),
   };
   return {
     id: document?.id,

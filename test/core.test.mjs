@@ -212,6 +212,12 @@ test('Agent OS Wiki quality audit rejects shallow or unverified publication and 
   assert.equal(audit.evidence.mappedSources, 0);
   assert.ok(audit.runtimeCoverage.count >= 3);
   assert.ok(audit.deepDive.every((document) => document.sectionLengths.every((length) => length >= 420)));
+  const reordered = structuredClone(artifact);
+  reordered.content.deepDiveDocuments[0].sections.reverse();
+  const reorderedAudit = assessWikiQuality(reordered, { topic: project.topic, requireAgentOs: true });
+  assert.equal(reorderedAudit.deepDive[0].sectionSignals.mechanism, true);
+  assert.equal(reorderedAudit.deepDive[0].sectionSignals.architecture, true);
+  assert.equal(reorderedAudit.deepDive[0].sectionSignals.validation, true);
   const shallow = structuredClone(artifact);
   shallow.content.deepDiveDocuments[0].sections[0].body = 'too short';
   const rejected = assessWikiQuality(shallow, { topic: project.topic, requireAgentOs: true });
