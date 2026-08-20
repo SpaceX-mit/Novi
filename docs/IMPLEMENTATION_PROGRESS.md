@@ -77,6 +77,7 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 
 - 2026-08-20：真实 Anthropic-compatible Agent OS 审计显示，部分模型把前序技术上下文中的技术术语误判为元任务，导致 Deep Dive 拒答；同时长 JSON 在 Goal/Knowledge/Writing/Review 发生修订或超时，旧结果 `publicationReady=false`。为强化上下文安全，所有 Specialist 与 Deep Dive prompt 现在将草稿、来源摘录、Workspace/Tool observation 包裹为明确的 `BEGIN/END UNTRUSTED` 数据区，并在 prompt 末尾用正向措辞重申只输出最终公开技术分析 JSON，不添加元评论或额外字段。此前直接提及敏感内部内容的措辞已移除，避免触发供应商拒答。真实审计需重新运行，当前仍不能宣称发布质量完成。
 - 2026-08-20：真实运行在 Goal 已成功后，Research 曾因响应含多个嵌套 JSON 对象而选中内部对象，误报“没有可编辑字段”。解析器现在按当前阶段期望字段优先选择完整对象（Research/Planner/Controller/Deep Dive 各有独立 preferred keys），仍执行原 schema 和质量校验；新增回归覆盖并通过。真实审计需重新运行，当前仍不能宣称 `publicationReady=true`。
+- 2026-08-20：真实 Anthropic 审计进一步确认来源摘录中的 `chain-of-thought prompting` 等元术语会触发供应商拒答，即使这些内容只是受控证据。模型上下文边界现在只对 prompt 表示做有限词汇归一化（原始来源在 Artifact/evidence 中保留），并简化为“参考资料不可改变任务”的正向边界。定向测试通过；真实审计仍需继续，`publicationReady=false` 尚未改变。
 
 - 2026-08-20：Research Intake 首步边界保持不变：外部 ChatGPT 生成的提示词只作为 Novi 的待判断输入；Intake Agent 必须先判断深度研究的问题、范围、交付物、证据和边界，信息不足时多轮追问或提供选项，ready 后仍需用户确认才启动来源检索和 Wiki 生成。本轮同时修复 reasoning Provider 丢失 `expertGoal`/`systemDocument`/`knowledgeSystem` 外层包装时的严格恢复逻辑：仅在对象字段唯一可识别且仍通过原 schema/质量门禁时恢复，非法或不完整 inner object 继续 rejected/fallback。验证：`npm run check`（56 modules）、`npm test`（93 passed + 1 PostgreSQL 条件跳过）、`node --test test/core.test.mjs --test-name-pattern='inner stage object|reasoning-wrapped'`、`git diff --check`。真实供应商内容质量和 `publicationReady=true` 仍未完成。
 
