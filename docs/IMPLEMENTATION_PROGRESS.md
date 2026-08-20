@@ -2,6 +2,8 @@
 
 最近更新：2026-08-20
 
+本轮 Agent OS 质量修复（2026-08-20）：真实 Anthropic-compatible 审计暴露中文 Wiki 术语与英文受控 excerpt 的引用支持判定偏低，导致 Finalizer 的 4–7 个合法引用被拒。`src/citation-repair.mjs` 增加受控中英 Agent OS 术语映射（状态图/checkpoint、工具/protocol、记忆/memory、审批/approval、沙箱/sandbox、评估/evaluation 等），仍保持原有重叠阈值；所有带 `[S#]` 的文本字段现在都会经过支持校验。新增中英引用回归，`node --test test/core.test.mjs --test-name-pattern='citation repair|Agent OS Wiki quality'` 通过（94 passed + 1 PostgreSQL 条件跳过），`npm run check` 通过（56 modules）。修复已推送为 `41960b0`。真实审计需重新运行，`publicationReady` 尚未证明。
+
 本轮修复（2026-08-20）：统一 `Generate now` 与 Session Composer 的 Research Intake 确认边界。首次生成在 Intake Agent 给出 ready 研究方案后，只接受明确的“确认生成/confirm/start”指令；重复 workspace topic/description 不再被当作同意，不会提前创建 Job、调用来源或扣生成额度。新增 HTTP 回归覆盖该路径；`node --test test/core.test.mjs --test-name-pattern='Research Intake|Agent conversation turns require'` 通过（93 passed + 1 PostgreSQL 条件跳过）。
 
 本轮核对（2026-08-20）：Research Intake 首步边界已按当前产品要求复核。`npm run check` 通过（56 modules）；`node --test test/core.test.mjs --test-name-pattern='Research Intake|Agent conversation turns require'` 通过（93 passed + 1 PostgreSQL 条件跳过）。验证确认：外部 ChatGPT 整理的提示词只作为 Novi 输入；首轮由 Intake Agent 决定研究是否完整，信息不足时继续追问/给方向选项，ready 后仍需用户确认，未确认前不检索、不创建 Job、不扣生成或来源额度。真实供应商内容质量与 `publicationReady=true` 仍未完成。
