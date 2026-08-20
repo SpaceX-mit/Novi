@@ -87,18 +87,25 @@ function repairText(value, indexedSources, stats) {
   const paragraphs = raw.split(/(\n\s*\n)/u);
   let changed = false;
   for (let index = 0; index < paragraphs.length; index += 2) {
-    const paragraph = paragraphs[index];
-    if (!paragraph || /\[S\d+\]/u.test(paragraph)) continue;
+    let paragraph = paragraphs[index];
+    if (!paragraph) continue;
     // Repair at sentence granularity so a source-supported first sentence
     // does not accidentally certify an unrelated claim in the same paragraph.
     const sentences = paragraph.split(/(?<=[.!?。！？])\s+/u);
-    const repairedSentences = sentences.map((sentence) => {
-      const citations = paragraphSupport(sentence, indexedSources);
-      if (!citations.length) return sentence;
+    const repairedSentences = sentences.map((sentence, sentenceIndex) => {
+      const previous = sentenceIndex > 0 ? sentences[sentenceIndex - 1] : '';
+      const context = sentence.trim().startsWith('[S') ? `${previous} ${sentence}` : sentence;
+      const cleaned = sentence.replace(/\[S(\d+)\]/gu, (marker, number) => {
+        if (markerSupport(context, `S${number}`, indexedSources)) return marker;
+        changed = true; stats.markersRemoved += 1; return '';
+      }).replace(/\s{2,}/gu, ' ').trim();
+      if (/\[S\d+\]/u.test(cleaned)) return cleaned;
+      const citations = paragraphSupport(cleaned, indexedSources);
+      if (!citations.length) return cleaned;
       changed = true;
       stats.markersAdded += citations.length;
       for (const id of citations) stats.byCitation[id] = (stats.byCitation[id] || 0) + 1;
-      return `${sentence.trimEnd()} ${citations.map((id) => `[${id}]`).join(' ')}`;
+      return `${cleaned} ${citations.map((id) => `[${id}]`).join(' ')}`;
     });
     paragraphs[index] = repairedSentences.join(' ');
   }
@@ -114,7 +121,7 @@ function walk(value, key, indexedSources, stats, seen) {
 }
 
 export function repairCitationMarkers(content, sources = []) {
-  const stats = { method: 'verified-excerpt-term-overlap', markersAdded: 0, byCitation: {} };
+  const stats = { method: 'verified-excerpt-term-overlap', markersAdded: 0, markersRemoved: 0, byCitation: {} };
   const indexedSources = usableSources(sources);
   if (!indexedSources.length) return { content, stats: { ...stats, eligibleSources: 0 } };
   const repaired = walk(content, '', indexedSources, stats, new Set());

@@ -6,6 +6,8 @@
 
 本轮质量推进（2026-08-20）：真实 Anthropic-compatible 审计再次完成 7 个受控来源验证、Goal/Research/Knowledge/Review 和 5 篇 Deep Dive 生成。新增 Finalizer 紧凑 synthesis patch 契约（保留已验证 documentMap/glossary/nextQuestions，避免整篇 Wiki 超出输出上限），并新增有限的 JSON 字符串未转义引号修复；`npm run check` 与定向/完整测试通过。真实结果仍为 `publicationReady=false`：Deep Dive 仍有个别重试，Finalizer 因 synthesis 章节深度与概念覆盖失败，且 citation marker 与 source excerpt 支持率不足。该审计产物不纳入提交，后续必须继续提高引用级证据和 Finalizer 深度，不能以 fallback 文档作为完成证明。
 
+本轮引用与 Finalizer 质量修复（2026-08-20）：Finalizer prompt 现在固定 8 个按主题排列的综合章节（运行时、控制循环、工具/MCP、memory、approval/权限/沙箱、实现取舍、evaluation/replay、证据限制），每节 260–360 字符；模型只返回 summary + sections patch，既有导航字段由 Novi 合并保留。Citation repair 现在会移除无法由 verified excerpt 支持的 `[S#]`，再按句子级受控词项重叠补充标记，统计 `markersRemoved`，不会把不支持主张伪装成有证据。验证：`npm run check`、相关 LangGraph/Finalizer/citation 测试和完整 `npm test`（93 passed + 1 PostgreSQL 条件跳过）通过。真实审计需重新确认，`publicationReady` 尚未证明。
+
 ## 当前结论
 
 Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品路径已经实现并具有本地自动化验证证据。Web 支持主流 LLM Provider、自适应 LangGraph 模式、Goal 驱动的参考发现与领域专家协作、最终 LLM Wiki、默认中文/可选多语言生成、Workspace Markdown 预览、持久 Agent Session、内置/自定义/MCP 工具、组织 Skills 和声明式 Plugins。正式收费商用发布尚未完成，剩余工作主要是持久 Agent checkpoint、目标环境和正式发布门禁。
