@@ -8,6 +8,8 @@
 
 本轮引用与 Finalizer 质量修复（2026-08-20）：Finalizer prompt 现在固定 8 个按主题排列的综合章节（运行时、控制循环、工具/MCP、memory、approval/权限/沙箱、实现取舍、evaluation/replay、证据限制），每节 260–360 字符；模型只返回 summary + sections patch，既有导航字段由 Novi 合并保留。Citation repair 现在会移除无法由 verified excerpt 支持的 `[S#]`，再按句子级受控词项重叠补充标记，统计 `markersRemoved`，不会把不支持主张伪装成有证据。验证：`npm run check`、相关 LangGraph/Finalizer/citation 测试和完整 `npm test`（93 passed + 1 PostgreSQL 条件跳过）通过。真实审计需重新确认，`publicationReady` 尚未证明。
 
+本轮质量计算修复（2026-08-20）：质量门禁现在把中英文同义概念统一计入（memory/记忆、approval/审批、sandbox/沙箱、evaluation/评估等），并在完整 Wiki/Deep Dive/summary 文本上统计“有来源支持的 citation marker”，不再只统计截断的 24 条 claim 摘要。该修复只减少误报，不放宽来源 excerpt 支持、覆盖率或专家审计要求；待重新真实审计确认。
+
 ## 当前结论
 
 Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品路径已经实现并具有本地自动化验证证据。Web 支持主流 LLM Provider、自适应 LangGraph 模式、Goal 驱动的参考发现与领域专家协作、最终 LLM Wiki、默认中文/可选多语言生成、Workspace Markdown 预览、持久 Agent Session、内置/自定义/MCP 工具、组织 Skills 和声明式 Plugins。正式收费商用发布尚未完成，剩余工作主要是持久 Agent checkpoint、目标环境和正式发布门禁。

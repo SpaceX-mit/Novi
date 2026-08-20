@@ -20,6 +20,16 @@ const REQUIRED_SECTION_SIGNALS = Object.freeze({
   validation: ['validation', '验证', 'evidence', '证据', 'replay', '重放', 'falsif', '可证伪'],
 });
 
+const REQUIRED_AGENT_OS_SIGNALS = Object.freeze({
+  MCP: ['mcp'],
+  memory: ['memory', '记忆', '记忆系统', '持久化记忆'],
+  approval: ['approval', '审批', '人工介入', 'human-in-the-loop'],
+  sandbox: ['sandbox', '沙箱', '隔离执行'],
+  evaluation: ['evaluation', '评估', '评测', '评价'],
+  replay: ['replay', '重放', '可重放'],
+  idempotency: ['idempotency', '幂等', '幂等性'],
+});
+
 const textOf = (value) => String(value || '').trim();
 const normalized = (value) => textOf(value).toLocaleLowerCase().replace(/\s+/gu, ' ');
 const includesAny = (text, terms) => terms.some((term) => text.includes(term));
@@ -94,9 +104,18 @@ export function assessWikiQuality(artifact, { topic = '', requireAgentOs = false
   const claimSources = Array.isArray(evidenceSources) ? evidenceSources : [];
   const mappedClaims = Array.isArray(content.evidence?.claims) ? content.evidence.claims.filter((claim) => supportedCitationIds(claim?.text, claimSources).length).length : 0;
   const totalClaims = Array.isArray(content.evidence?.claims) ? content.evidence.claims.length : 0;
-  const supportedCitationCount = Array.isArray(content.evidence?.claims)
-    ? content.evidence.claims.reduce((sum, claim) => sum + supportedCitationIds(claim?.text, claimSources).length, 0)
-    : 0;
+  const claimTextsForCitations = Array.isArray(content.evidence?.claims) ? content.evidence.claims.map((claim) => claim?.text) : [];
+  const documentTextsForCitations = [
+    content.summary, wiki.summary,
+    ...documents.map(documentText),
+    ...(wiki.sections || []).flatMap((section) => [section?.title, section?.body]),
+  ].filter(Boolean);
+  const citationTexts = [...claimTextsForCitations, ...documentTextsForCitations];
+  const supportedCitationCount = citationTexts.reduce((sum, text) => {
+    const markers = String(text || '').match(/\[S\d+\]/giu) || [];
+    const supported = new Set(supportedCitationIds(text, claimSources));
+    return sum + markers.filter((marker) => supported.has(marker.slice(1, -1).toUpperCase())).length;
+  }, 0);
   const citationCount = supportedCitationCount;
   const explicitSourceClaims = Array.isArray(content.evidence?.claims) ? content.evidence.claims.filter((claim) => supportedCitationIds(claim?.text, claimSources).length).length : 0;
   const rawCitationCount = (corpus.match(/\[s\d+\]/gu) || []).length;
@@ -128,8 +147,7 @@ export function assessWikiQuality(artifact, { topic = '', requireAgentOs = false
   if (requireAgentOs) {
     if (termHits.length < 12) hardFailures.push(`Agent OS terminology coverage is ${termHits.length}/${requiredAgentOsTerms}; at least 12 required`);
     if (runtimeHits.length < 3) hardFailures.push(`runtime comparison names only ${runtimeHits.length}; at least 3 required`);
-    const requiredSignals = ['MCP', 'memory', 'approval', 'sandbox', 'evaluation', 'replay', 'idempotency'];
-    for (const term of requiredSignals) if (!corpus.includes(normalized(term))) hardFailures.push(`missing required Agent OS concept: ${term}`);
+    for (const [term, aliases] of Object.entries(REQUIRED_AGENT_OS_SIGNALS)) if (!includesAny(corpus, aliases.map(normalized))) hardFailures.push(`missing required Agent OS concept: ${term}`);
     if (mappedSources >= 5 && citationCount < 8) hardFailures.push(`verified source packet is present but only ${citationCount} citation markers were emitted; at least 8 required`);
     if (rawCitationCount > supportedCitationCount && mappedSources >= 5) hardFailures.push(`${rawCitationCount - supportedCitationCount} citation markers are not supported by their source excerpts`);
   }
