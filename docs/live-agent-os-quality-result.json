@@ -1,0 +1,535 @@
+{
+  "generatedAt": "2026-08-20T07:27:25.826Z",
+  "model": "claude-sonnet-4-5-20250929",
+  "sourceCount": 8,
+  "documentCount": 7,
+  "deepDiveCount": 5,
+  "stages": [
+    {
+      "id": "goal",
+      "status": "running",
+      "progress": 20,
+      "warning": null,
+      "error": null
+    },
+    {
+      "id": "goal",
+      "status": "fallback",
+      "progress": 30,
+      "warning": "LLM field expertGoal failed schema validation",
+      "error": null
+    },
+    {
+      "id": "goal",
+      "status": "running",
+      "progress": 20,
+      "warning": null,
+      "error": null
+    },
+    {
+      "id": "goal",
+      "status": "fallback",
+      "progress": 30,
+      "warning": "LLM field expertGoal failed schema validation",
+      "error": null
+    },
+    {
+      "id": "goal",
+      "status": "running",
+      "progress": 20,
+      "warning": null,
+      "error": null
+    },
+    {
+      "id": "goal",
+      "status": "fallback",
+      "progress": 30,
+      "warning": "LLM field expertGoal failed schema validation",
+      "error": null
+    },
+    {
+      "id": "references",
+      "status": "running",
+      "progress": 34,
+      "warning": null,
+      "error": null
+    },
+    {
+      "id": "references",
+      "status": "completed",
+      "progress": 42,
+      "warning": null,
+      "error": null
+    },
+    {
+      "id": "writing",
+      "status": "running",
+      "progress": 68,
+      "warning": null,
+      "error": null
+    },
+    {
+      "id": "writing",
+      "status": "completed",
+      "progress": 78,
+      "warning": null,
+      "error": null
+    },
+    {
+      "id": "review",
+      "status": "running",
+      "progress": 78,
+      "warning": null,
+      "error": null
+    },
+    {
+      "id": "review",
+      "status": "completed",
+      "progress": 88,
+      "warning": null,
+      "error": null
+    },
+    {
+      "id": "finalizer",
+      "status": "running",
+      "progress": 86,
+      "warning": null,
+      "error": null
+    },
+    {
+      "id": "finalizer",
+      "status": "fallback",
+      "progress": 96,
+      "warning": "LLM Wiki synthesis patch does not meet the minimum quality contract",
+      "error": null
+    },
+    {
+      "id": "finalizer",
+      "status": "running",
+      "progress": 86,
+      "warning": null,
+      "error": null
+    },
+    {
+      "id": "finalizer",
+      "status": "completed",
+      "progress": 96,
+      "warning": null,
+      "error": null
+    }
+  ],
+  "modelEvents": [
+    {
+      "stage": "goal",
+      "status": "rejected",
+      "title": "LLM response needs revision",
+      "responseLength": 6092,
+      "responsePreview": "```json { \"expertGoal\": { \"question\": \"以深度调查 Agent OS 技术栈，输出详细的 LLM Wiki。先定义可证伪目标，再比较 LangGraph、ReAct、Plan-and-Execute、Supervisor、MCP、工具系统、记忆、审批、沙箱和评估；使用真实来源，输出五篇独立技术 Deep Dive、00-goal.md 和 llm-wiki.md。不要罗列，必须解释机制、架构、实现取舍、失败模式、验证方法和证据缺口。\", \"domain\": \"Agent OS 技术栈\", \"outcome\": \"围绕 Agent OS 技术栈产出有证据意识、可教学、可评审的完整 LLM Wiki，覆盖运行时机制、工具系统、记忆模型、权限与沙箱、评估体系，每项主张标注证据状态或证据缺口，避免营销描述，聚焦可证伪的技术断言。\", \"scope\": [ \"定义 Agent OS 技术栈的边界：区分图/状态机运行时（LangGraph）、轻量级编码 harness（ReAct loop）、多 Agent 协调器（Supervisor/Plan-and-Ex",
+      "warning": true,
+      "warningDetail": "LLM field expertGoal failed schema validation",
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 6684,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 6,
+        "closeBraceCount": 6,
+        "chunkCount": 898,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 8192
+      }
+    },
+    {
+      "stage": "goal",
+      "status": "rejected",
+      "title": "LLM response needs revision",
+      "responseLength": 6672,
+      "responsePreview": "```json { \"expertGoal\": { \"question\": \"以深度调查 Agent OS 技术栈，输出详细的 LLM Wiki。先定义可证伪目标，再比较 LangGraph、ReAct、Plan-and-Execute、Supervisor、MCP、工具系统、记忆、审批、沙箱和评估；使用真实来源，输出五篇独立技术 Deep Dive、00-goal.md 和 llm-wiki.md。不要罗列，必须解释机制、架构、实现取舍、失败模式、验证方法和证据缺口。\", \"domain\": \"Agent OS 技术栈\", \"outcome\": \"围绕 Agent OS 技术栈产出有证据意识、可教学、可评审的完整 LLM Wiki。该 Wiki 须能区分图/状态机运行时（LangGraph）、轻量编码 harness（ReAct、Plan-and-Execute）与多 Agent 监督器（Supervisor 模式）三类架构，并对每类架构给出至少一个具体机制描述与一个失败边界分析。所有涉及命名项目或协议的事实主张须标注受控来源编号；无来源支撑的陈述须标记为 unverified、hy",
+      "warning": true,
+      "warningDetail": "LLM field expertGoal failed schema validation",
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 7590,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 17,
+        "closeBraceCount": 17,
+        "chunkCount": 804,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 8192
+      }
+    },
+    {
+      "stage": "goal",
+      "status": "rejected",
+      "title": "LLM response needs revision",
+      "responseLength": 6831,
+      "responsePreview": "```json { \"expertGoal\": { \"question\": \"以深度调查 Agent OS 技术栈，输出详细的 LLM Wiki。先定义可证伪目标，再比较 LangGraph、ReAct、Plan-and-Execute、Supervisor、MCP、工具系统、记忆、审批、沙箱和评估；使用真实来源，输出五篇独立技术 Deep Dive、00-goal.md 和 llm-wiki.md。不要罗列，必须解释机制、架构、实现取舍、失败模式、验证方法和证据缺口。\", \"domain\": \"Agent OS 技术栈\", \"outcome\": \"围绕 Agent OS 技术栈产出有证据意识、可教学、可评审的完整 LLM Wiki，覆盖运行时机制、工具系统、记忆架构、权限控制、沙箱隔离与评估方法，每项主张均标注证据状态或证据缺口，使读者能区分已验证结论与开放问题。\", \"scope\": [ \"定义 Agent OS 技术栈的边界与核心词汇：区分图/状态机运行时（LangGraph）、轻量编码执行框架（ReAct、Plan-and-Execute）、多 Agent 督导架构（Super",
+      "warning": true,
+      "warningDetail": "LLM field expertGoal failed schema validation",
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 7403,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 6,
+        "closeBraceCount": 6,
+        "chunkCount": 389,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 8192
+      }
+    },
+    {
+      "stage": "supervisor-controller",
+      "status": "completed",
+      "title": "Controller response",
+      "responseLength": 10925,
+      "responsePreview": "```json {\"next\":\"writing\",\"mode\":\"supervisor\",\"reason\":\"Goal stage has completed 3 attempts and sources are available. No tools are attached, so I will produce all deliverables as direct written output: 00-goal.md, llm-wiki.md, and five Deep Dive documents covering LangGraph, ReAct/Plan-and-Execute, Supervisor patterns, MCP/Tool systems, and Memory/Approval/Sandbox/Evaluation. Writing stage proceeds now using the 8 sources already gathered, with evidence-state annotations, falsifiable claims, fa",
+      "warning": false,
+      "warningDetail": null,
+      "error": false,
+      "errorDetail": null,
+      "output": null,
+      "usage": {
+        "inputTokens": 1864,
+        "outputTokens": 1
+      }
+    },
+    {
+      "stage": "writing",
+      "status": "completed",
+      "title": "Deep Dive 1/5 completed",
+      "responseLength": 3854,
+      "responsePreview": "```json { \"deepDiveDocuments\": [ { \"id\": \"research-landscape\", \"slug\": \"01-research-landscape\", \"title\": \"Agent OS 技术栈研究版图与技术争议\", \"purpose\": \"解释研究问题、方案家族、证据强弱和仍未解决的技术争议。\", \"sections\": [ { \"title\": \"技术问题与范围\", \"body\": \"Agent OS 技术栈的核心问题是如何让模型驱动的系统在输出不确定、工具失败和环境变化中持续完成目标，同时保持预算、权限、证据和可审计性。本研究的分析单元是运行时保证，而非产品营销标签：必须固定状态如何恢复、工具是否可组合、权限是否在模型之外执行，以及失败后能否重放和审计。LangGraph 提供 stateful graph 和 checkpoint 机制 [S1][S2]，与简单 prompt chain 的区别在于持久化状态和节点级恢复能力；ReAct 通过 thought-action-observation 循环交织推理与行动 [S4]，但局部失败",
+      "warning": false,
+      "warningDetail": null,
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 4118,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 8,
+        "closeBraceCount": 8,
+        "chunkCount": 1467,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 3207
+      }
+    },
+    {
+      "stage": "writing",
+      "status": "rejected",
+      "title": "Deep Dive 2/5 needs revision",
+      "responseLength": 3490,
+      "responsePreview": "```json { \"deepDiveDocuments\": [ { \"id\": \"foundations-and-mechanisms\", \"slug\": \"02-foundations-and-mechanisms\", \"title\": \"Agent OS 技术栈基础机制与依赖关系\", \"purpose\": \"从核心机制解释系统为何工作，以及依赖关系如何约束可行实现。\", \"sections\": [ { \"title\": \"技术问题与范围\", \"body\": \"Agent OS 的基本闭环可形式化为观测 o_t、策略 π、动作 a_t、环境结果 e_t 和状态 s_{t+1}。模型只负责提出候选动作，真正的状态转移、工具 schema 校验、权限判定、预算扣减和提交语义必须由确定性 runtime 执行。LangGraph 通过 StateGraph 和 checkpoint 机制 [S1][S2] 将状态持久化与节点逻辑分离，使重启后能从 checkpoint 恢复而不是重新执行全部节点。这样才能把\"模型想做什么\"和\"系统允许做什么\"分成两个可测试的函数。\\n\\nRuntime ",
+      "warning": true,
+      "warningDetail": "LLM response must be a JSON object",
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 3754,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 9,
+        "closeBraceCount": 9,
+        "chunkCount": 1247,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 2786
+      }
+    },
+    {
+      "stage": "writing",
+      "status": "completed",
+      "title": "Deep Dive 2/5 completed",
+      "responseLength": 3436,
+      "responsePreview": "```json { \"deepDiveDocuments\": [ { \"id\": \"foundations-and-mechanisms\", \"slug\": \"02-foundations-and-mechanisms\", \"title\": \"Agent OS 技术栈基础机制与依赖关系\", \"purpose\": \"从核心机制解释系统为何工作，以及依赖关系如何约束可行实现。\", \"sections\": [ { \"title\": \"技术问题与范围\", \"body\": \"识别支撑目标\"围绕 Agent OS 技术栈产出有证据意识、可教学、可评审的完整 LLM Wiki\"的最小可解释机制，使每个概念对应可观察状态、转换或约束。Agent 的基本闭环可形式化为：观测 o_t、策略 π、动作 a_t、环境结果 e_t 和状态 s_{t+1}。模型只负责提出候选动作，真正的状态转移、工具 schema 校验、权限判定、预算扣减和提交语义必须由确定性 runtime 执行。这样才能把\"模型想做什么\"和\"系统允许做什么\"分成两个可测试的函数。\\n\\n形式化后，runtime 的核心不变量可写成：动作必须",
+      "warning": false,
+      "warningDetail": null,
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 3700,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 9,
+        "closeBraceCount": 9,
+        "chunkCount": 1436,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 3050
+      }
+    },
+    {
+      "stage": "writing",
+      "status": "rejected",
+      "title": "Deep Dive 3/5 needs revision",
+      "responseLength": 5898,
+      "responsePreview": "```json { \"deepDiveDocuments\": [ { \"id\": \"system-architecture\", \"slug\": \"03-system-architecture\", \"title\": \"Agent OS 技术栈系统架构、数据流与边界\", \"purpose\": \"把机制落到组件、接口、数据流、信任边界和生命周期。\", \"sections\": [ { \"title\": \"架构边界与责任划分\", \"body\": \"生产 Agent OS 必须区分控制平面、数据平面、执行平面和证据平面四层信任边界。控制平面保存 Goal、StateGraph [S1] 定义、预算和审批状态，不直接执行工具或存储用户数据；数据平面管理 workspace、记忆和 checkpoint [S2]，按租户隔离；执行平面运行工具、MCP server [S3] 和沙箱 worker，不持有全局凭据；证据平面维护来源、claim、引用和审计事件，只接受带哈希的事实记录。\\n\\n跨平面接口必须使用短期、范围受限的授权令牌，而非共享的万能凭据。控制平面签发执行授权时应绑定租户、任务、工具列表和",
+      "warning": true,
+      "warningDetail": "LLM Deep Dive section is too shallow or structurally invalid",
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 6406,
+        "reasoningLength": 0,
+        "jsonFenceCount": 3,
+        "openBraceCount": 16,
+        "closeBraceCount": 13,
+        "chunkCount": 2140,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 2644
+      }
+    },
+    {
+      "stage": "writing",
+      "status": "completed",
+      "title": "Deep Dive 3/5 completed",
+      "responseLength": 3718,
+      "responsePreview": "```json { \"deepDiveDocuments\": [ { \"id\": \"system-architecture\", \"slug\": \"03-system-architecture\", \"title\": \"Agent OS 技术栈系统架构、数据流与边界\", \"purpose\": \"把机制落到组件、接口、数据流、信任边界和生命周期。\", \"sections\": [ { \"title\": \"技术问题与范围\", \"body\": \"从输入、输出、参与者、数据所有权、权限决策和外部依赖共同定义系统边界,而不只依赖部署图。生产 Agent OS 至少需要模型网关、编排图、上下文/记忆服务、工具注册表、策略与审批服务、执行沙箱、任务队列、持久化 checkpoint、事件日志和评估管道。每一层都应有清晰输入输出与失败语义:模型超时不能直接等同于业务失败,工具部分成功不能直接提交 Artifact,checkpoint 写入失败也不能假设状态已经持久化。\\n\\n这套架构可以按信任边界划分为四个平面:控制平面保存 Goal、状态图、预算和审批;数据平面处理来源、记忆和 workspace;执行",
+      "warning": false,
+      "warningDetail": null,
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 3982,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 8,
+        "closeBraceCount": 8,
+        "chunkCount": 1409,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 2980
+      }
+    },
+    {
+      "stage": "writing",
+      "status": "completed",
+      "title": "Deep Dive 4/5 completed",
+      "responseLength": 3745,
+      "responsePreview": "```json { \"deepDiveDocuments\": [ { \"id\": \"implementation-and-evaluation\", \"slug\": \"04-implementation-and-evaluation\", \"title\": \"Agent OS 技术栈工程实现与评估方法\", \"purpose\": \"给出从原型到生产形态的实现路径、实验设计和可观测指标。\", \"sections\": [ { \"title\": \"技术问题与范围\", \"body\": \"实现 Agent OS 技术栈的核心问题是如何在模型输出不确定、工具失败和环境变化中保持目标追踪、状态恢复和可审计性。技术范围包括控制循环（ReAct [S4]、Plan-and-Execute、Supervisor）、状态持久化（LangGraph checkpoint [S2]）、工具授权（MCP 协议 [S3]）、预算控制、审批流程和事件溯源。成功标准必须机器可判定：给定固定输入、模型版本和工具集，系统产生指定 Artifact schema、引用集合、测试结果和事件终态，而不仅是流畅的文本回答。\\n\\n最小可",
+      "warning": false,
+      "warningDetail": null,
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 4009,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 8,
+        "closeBraceCount": 8,
+        "chunkCount": 1320,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 2942
+      }
+    },
+    {
+      "stage": "writing",
+      "status": "completed",
+      "title": "Deep Dive 5/5 completed",
+      "responseLength": 3892,
+      "responsePreview": "```json { \"deepDiveDocuments\": [ { \"id\": \"risks-and-frontier\", \"slug\": \"05-risks-and-frontier\", \"title\": \"Agent OS 技术栈风险、治理与前沿问题\", \"purpose\": \"分析安全、治理、外部有效性和下一阶段可证伪的研究问题。\", \"sections\": [ { \"title\": \"威胁模型与攻击面\", \"body\": \"威胁模型必须覆盖模型输出、用户输入、工具参数、MCP server、记忆存储、审批状态和发布管道。OWASP LLM Top 10 列出 LLM01:Prompt Injection、LLM02:Insecure Output Handling、LLM06:Sensitive Information Disclosure 和 LLM08:Supply Chain Vulnerabilities [S7]，每项需要定义攻击前提、受影响资产、影响范围、检测信号和缓解控制。间接提示注入通过网页、PDF 或 API 响应进入 observation，工具越权利用路",
+      "warning": false,
+      "warningDetail": null,
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 4156,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 8,
+        "closeBraceCount": 8,
+        "chunkCount": 1294,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 3228
+      }
+    },
+    {
+      "stage": "writing",
+      "status": "completed",
+      "title": "LLM response",
+      "responseLength": 4019,
+      "responsePreview": "```json { \"systemDocument\": { \"title\": \"Agent OS 技术栈系统文档\", \"executiveSummary\": \"Agent OS 技术栈是将 LLM 推理接入状态管理、工具执行、权限控制、记忆系统、审批流程、沙箱隔离和评估框架的运行时能力集合。它通过分层架构将模型输出与执行不变量分离，确保动作经过 schema、权限、预算和幂等检查，观察结果作为不可信数据处理，完成绑定 Artifact 和事件溯源。核心挑战是在模型输出不确定、工具失败和环境变化中维持目标追踪、状态恢复和可审计性。本文档建立从定义、架构、实践到风险治理的完整知识结构，明确标注证据状态与验证缺口，为生产部署提供可操作的技术决策框架。\", \"sections\": [ { \"title\": \"Agent OS 技术栈的定义与边界\", \"body\": \"Agent OS 技术栈不是单一聊天机器人或 SDK，而是将 LLM 推理接入持久状态、工具调用、权限验证、记忆管理、审批控制、沙箱执行和评估反馈的运行时能力组合。边界通过控制循环、状态恢复、工具授权和人工介入语义定义。LangG",
+      "warning": false,
+      "warningDetail": null,
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 4301,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 10,
+        "closeBraceCount": 10,
+        "chunkCount": 1170,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 2943
+      }
+    },
+    {
+      "stage": "supervisor-controller",
+      "status": "completed",
+      "title": "Controller response",
+      "responseLength": 299,
+      "responsePreview": "```json { \"next\": \"review\", \"mode\": \"supervisor\", \"reason\": \"写作阶段已完成一次尝试，现在需要批判性评审员检查：(1) 文档是否直接回答了用户关于 Agent OS 技术栈的深度调查需求；(2) 是否真正解释了机制、架构、实现取舍、失败模式、验证方法和证据缺口，而非简单罗列；(3) 五篇 Deep Dive、00-goal.md 和 llm-wiki.md 是否完整且连贯；(4) 证据来源是否明确且可验证；(5) 是否存在未支持的主张或逻辑缺口。评审后可决定是否需要补充研究、重构知识架构或修订文档，或确认达到交付标准。\" } ```",
+      "warning": false,
+      "warningDetail": null,
+      "error": false,
+      "errorDetail": null,
+      "output": null,
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 254
+      }
+    },
+    {
+      "stage": "review",
+      "status": "completed",
+      "title": "LLM response",
+      "responseLength": 3787,
+      "responsePreview": "```json { \"review\": [ { \"area\": \"Evidence\", \"verdict\": \"Pass with conditions\", \"note\": \"所有关于 LangGraph、MCP、ReAct、OpenAI Agents SDK、AutoGen、OWASP LLM Top 10 和 NIST AI RMF 的主要主张均已绑定受控来源 [S1-S8]。证据映射质量高：LangGraph 的 stateful graph 和 checkpoint 机制有源码和文档支持 [S1][S2]，MCP 协议接口有标准 schema [S3]，ReAct 循环有论文引用 [S4]，安全风险有 OWASP 分类 [S7]，治理框架有 NIST 标准 [S6]。条件：(1) LangGraph 跨版本 checkpoint 迁移、长轨迹压缩和分布式一致性的生产证据明确标记为不足，符合要求；(2) MCP server 供应链验证和沙箱隔离责任已说明在客户端但缺乏标准化实现，已标记证据缺口；(3) 多 Agent 并发、长任务恢复、跨供应商漂移的实证数据已明确列为最大证据缺",
+      "warning": false,
+      "warningDetail": null,
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 3999,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 9,
+        "closeBraceCount": 9,
+        "chunkCount": 1130,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 2948
+      }
+    },
+    {
+      "stage": "supervisor-controller",
+      "status": "completed",
+      "title": "Controller response",
+      "responseLength": 535,
+      "responsePreview": "```json { \"next\": \"finish\", \"mode\": \"supervisor\", \"reason\": \"Writing and review stages completed with 8 sources analyzed. The deliverables (5 technical deep dives, 00-goal.md, and llm-wiki.md) explaining mechanisms, architectures, trade-offs, failure modes, verification methods, and evidence gaps for Agent OS tech stack (LangGraph, ReAct, Plan-and-Execute, Supervisor, MCP, tool systems, memory, approval, sandbox, evaluation) should now exist in the workspace. Finishing to present the completed k",
+      "warning": false,
+      "warningDetail": null,
+      "error": false,
+      "errorDetail": null,
+      "output": null,
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 144
+      }
+    },
+    {
+      "stage": "finalizer",
+      "status": "rejected",
+      "title": "LLM response needs revision",
+      "responseLength": 5531,
+      "responsePreview": "```json { \"llmWiki\": { \"title\": \"Agent OS 技术栈 LLM Wiki\", \"summary\": \"Agent OS 技术栈将 LLM 推理接入状态管理、工具执行、权限控制、记忆系统、审批流程、沙箱隔离和评估框架，通过分层架构在模型输出不确定、工具失败和环境变化中维持目标追踪、状态恢复和可审计性。核心边界通过控制循环类型（ReAct、Plan-and-Execute、Supervisor）、状态持久化机制（LangGraph checkpoint）、工具授权协议（MCP）、记忆语义、审批责任和沙箱边界定义。本 Wiki 从运行时保证而非产品营销出发，系统解释机制、架构、实现取舍、失败模式和验证方法，明确标注证据状态与缺口，为生产部署提供可操作的技术决策框架。最大证据缺口集中在长任务恢复、来源引用正确性、跨供应商漂移和生产并发；所有未验证主张标记为假设或 unknown，需通过 replay、故障注入、red-team 和领域专家盲审验证。\", \"sections\": [ { \"title\": \"运行时架构比较：图状态机、编码助手与多 Agent 监",
+      "warning": true,
+      "warningDetail": "LLM Wiki synthesis patch does not meet the minimum quality contract",
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 5763,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 10,
+        "closeBraceCount": 10,
+        "chunkCount": 1959,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 4497
+      }
+    },
+    {
+      "stage": "finalizer",
+      "status": "completed",
+      "title": "LLM response",
+      "responseLength": 5729,
+      "responsePreview": "```json { \"llmWiki\": { \"title\": \"Agent OS 技术栈深度解析：运行时保证、工具系统与生产治理\", \"summary\": \"Agent OS 技术栈是将 LLM 推理接入状态管理、工具执行、权限控制、记忆系统、审批流程、沙箱隔离和评估框架的运行时能力集合。核心挑战是在模型输出不确定、工具失败和环境变化中维持目标追踪、状态恢复和可审计性。本 Wiki 以可证伪目标为主线，区分 stateful graph（LangGraph [S1][S2]）、ReAct 循环 [S4]、Plan-and-Execute 和 Supervisor 模式（OpenAI Agents [S5]、AutoGen [S8]）的运行时保证差异，解释 MCP 协议 [S3] 的工具授权与沙箱责任分离，分析记忆语义、审批状态机和 checkpoint 恢复机制 [S2]，明确间接提示注入 [S7]、工具越权、记忆污染和 MCP 供应链风险的执行层控制点，并标注长任务恢复、跨供应商漂移和分布式一致性的证据缺口。研究结论以节点级恢复、幂等提交、权限分离和可重放审计为判断依据，避免将演示",
+      "warning": false,
+      "warningDetail": null,
+      "error": false,
+      "errorDetail": null,
+      "output": {
+        "responseLength": 5973,
+        "reasoningLength": 0,
+        "jsonFenceCount": 2,
+        "openBraceCount": 10,
+        "closeBraceCount": 10,
+        "chunkCount": 1917,
+        "stopReason": "end_turn"
+      },
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 4496
+      }
+    }
+  ],
+  "quality": {
+    "pass": true,
+    "publicationReady": true,
+    "overall": 1,
+    "hardFailures": [],
+    "evidence": {
+      "status": "source-mapped",
+      "mappedSources": 8,
+      "mappedClaims": 13,
+      "totalClaims": 24,
+      "explicitSourceClaims": 13,
+      "citationCount": 178,
+      "coverage": 1,
+      "disclaimer": "Source mapping is not fact verification. Claims without an explicit [S#] citation remain unverified; review all claims before publication."
+    },
+    "dimensions": {
+      "technicalSpecificity": 1,
+      "mechanismDepth": 1,
+      "architectureCoverage": 1,
+      "implementationConcreteness": 1,
+      "tradeoffCoverage": 1,
+      "failureModeCoverage": 1,
+      "evaluationRigor": 1,
+      "runtimeComparison": 1,
+      "evidenceTransparency": 1,
+      "crossDocumentCoherence": 1
+    }
+  }
+}
