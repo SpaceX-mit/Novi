@@ -2,6 +2,8 @@
 
 最近更新：2026-08-20
 
+本轮 Finalizer 深度门禁修复（2026-08-20）：LLM Wiki Finalizer 现在要求 summary 至少 320 字符、8 个综合章节、每节至少 260 字符且至少两段；提示词同时要求每节先解释机制/边界，再给出实现取舍、失败模式或验证方式。定向测试通过（94 passed + 1 PostgreSQL 条件跳过），`npm run check` 通过（56 modules）。这只提高浅层 Wiki 的拒绝和重试质量，真实供应商审计仍需确认 `publicationReady=true`；本地审计 JSON 仍不纳入提交。
+
 本轮 Agent OS 质量修复（2026-08-20）：真实 Anthropic-compatible 审计暴露中文 Wiki 术语与英文受控 excerpt 的引用支持判定偏低，导致 Finalizer 的 4–7 个合法引用被拒。`src/citation-repair.mjs` 增加受控中英 Agent OS 术语映射（状态图/checkpoint、工具/protocol、记忆/memory、审批/approval、沙箱/sandbox、评估/evaluation 等），仍保持原有重叠阈值；所有带 `[S#]` 的文本字段现在都会经过支持校验。新增中英引用回归，`node --test test/core.test.mjs --test-name-pattern='citation repair|Agent OS Wiki quality'` 通过（94 passed + 1 PostgreSQL 条件跳过），`npm run check` 通过（56 modules）。修复已推送为 `41960b0`。真实审计需重新运行，`publicationReady` 尚未证明。
 
 本轮修复（2026-08-20）：统一 `Generate now` 与 Session Composer 的 Research Intake 确认边界。首次生成在 Intake Agent 给出 ready 研究方案后，只接受明确的“确认生成/confirm/start”指令；重复 workspace topic/description 不再被当作同意，不会提前创建 Job、调用来源或扣生成额度。新增 HTTP 回归覆盖该路径；`node --test test/core.test.mjs --test-name-pattern='Research Intake|Agent conversation turns require'` 通过（93 passed + 1 PostgreSQL 条件跳过）。
