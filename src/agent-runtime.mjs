@@ -428,7 +428,7 @@ function stageQualityContract(stage) {
 
 function stageShapeContract(stage) {
   if (stage.id === 'knowledge') return 'Knowledge response shape is strict and compact: return exactly {"knowledgeSystem":{"title":"...","purpose":"...","layers":[{"id":"layer-1","title":"...","objective":"...","topics":["...","..."],"dependencies":[]}],"learningSequence":["layer-1"],"validationQuestions":["...","...","...","..."]}}. Use exactly 8 layers, preserve the layer ids and dependencies from the draft, keep each objective under 280 characters and each topic under 100 characters. Do not add examples, prose, Markdown, citations, or any other keys; do not repeat Deep Dive content.';
-  if (stage.id === 'writing') return 'Writing response shape is strict: return exactly {"systemDocument":{...}} with the top-level editable key. Do not return the inner object by itself, summary, title, abstract, Deep Dive documents, Markdown, or explanatory prose; those are handled by separate deterministic or focused calls.';
+  if (stage.id === 'writing') return 'Writing response shape is strict and compact: return exactly {"systemDocument":{"title":"...","executiveSummary":"...","sections":[{"title":"...","body":"..."}],"completionChecklist":["..."]}} with the top-level editable key. Use exactly 5 sections, keep each section body under 450 characters, executiveSummary under 600 characters, and each checklist item under 140 characters. Do not return the inner object by itself, summary, title, abstract, Deep Dive documents, Markdown, or explanatory prose; long technical arguments are handled by separate focused Deep Dive calls.';
   return '';
 }
 

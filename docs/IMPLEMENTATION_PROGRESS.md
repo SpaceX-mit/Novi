@@ -77,6 +77,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 
 - 2026-08-20：继续真实 Agent OS 诊断：最新旧结果显示已产生 5 篇 Deep Dive 和 7 个文档形状，但 Writing/Review/Finalizer 仍有 fallback/rejection，质量门禁因 18 个不受 excerpt 支持的 citation marker 及 coverage 0.333 而 `publicationReady=false`。进一步收窄 Finalizer 只生成 `llmWiki`，Review/Finalizer Deep Dive 摘要分别限制为 280/260 字符，并明确 Writing 必须返回顶层 `systemDocument` 字段；诊断脚本增加 500 字符脱敏响应预览。真实来源和人工专业抽检仍未完成。
 
+- 2026-08-20：最新真实运行已稳定完成 Goal、Research、Knowledge；Writing 在 `systemDocument` 长响应于 8192 tokens 截断。新增 Writing 专用紧凑契约：固定 5 节、每节 body 不超过 450 字符、summary 不超过 600 字符、4 条短 checklist；五篇 Deep Dive 仍由后续逐篇调用生成完整技术叙事。待重新运行确认进入独立 Deep Dive 调用。
+
 - 2026-08-19：真实 Agent OS 质量诊断继续暴露 reasoning Provider 的长首 token 问题：Goal 首次响应被修订后成功，Research 成功，但 Knowledge 多次在流首 token窗口内请求失败；这不是离线质量通过证据。将流式首 token默认保护从 90 秒提高到 180 秒、上限 300 秒，仍保留单阶段 10 分钟总时长和 120 秒分片空闲上限；真实诊断脚本现在保存脱敏 warning/error 摘要、response diagnostics 和 stop reason，便于区分网络/超时与 schema 拒绝。验证：`npm run check`、定向 LangGraph/Provider 测试、`git diff --check`；真实完整 Agent OS 生成仍需重新运行并达到 `publicationReady=true`。
 
 - 2026-08-19：针对真实 Knowledge 响应在 `max_tokens=8192` 截断的问题，缩小 Knowledge Specialist 契约为只生成 `knowledgeSystem`；`sections/wikiSections` 作为确定性保留字段，不再要求模型回显重复大数组。验证：`npm run check`、定向 LangGraph/Provider 测试（92 passed + 1 PostgreSQL 条件跳过）、`git diff --check`；真实完整 Agent OS 运行仍需确认 Knowledge、Writing、Review、Finalizer 全部完成。
