@@ -193,6 +193,14 @@ test('citation repair only adds markers supported by verified source excerpts', 
   assert.deepEqual(supportedCitationIds('An unsupported statement about unrelated finance [S1].', sources), []);
 });
 
+test('citation repair bridges Chinese Agent OS claims to English verified excerpts', () => {
+  const sources = [{ name: 'LangGraph persistence', kind: 'Official Docs', url: 'https://docs.example/langgraph', mapped: true, verification: 'verified', contentHash: 'c'.repeat(64), excerpt: 'LangGraph state graph checkpoint persistence enables durable execution and recovery.' }];
+  const draft = { summary: '状态图的检查点持久化支持可恢复的运行时执行。[S1]' };
+  const repaired = repairCitationMarkers(draft, sources);
+  assert.deepEqual(supportedCitationIds(repaired.content.summary, sources), ['S1']);
+  assert.equal(repaired.stats.markersRemoved, 0);
+});
+
 test('Agent OS Wiki quality audit rejects shallow or unverified publication and passes the enriched offline baseline structurally', () => {
   const project = { id: 'agent-os-quality', title: 'Agent OS 技术栈深度调查', topic: 'Agent OS 技术栈', description: '深度调查自主 Agent runtime、工具系统、MCP、Skills、权限、记忆、评估与生产部署最佳实践和算法。', type: 'research', wikiLanguage: 'zh-CN' };
   const artifact = generateArtifact(project, { prompt: '以深度调查 Agent OS 技术栈，输出详细的 LLM Wiki' });

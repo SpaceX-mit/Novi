@@ -17,8 +17,28 @@ const STOP_WORDS = new Set([
   '通过', '这个', '这些', '需要', '进行', '系统', '内容', '研究',
 ]);
 
+// The Wiki defaults to Chinese while controlled evidence is usually written
+// in English. Normalizing the small set of Agent-OS terms below lets the
+// citation gate compare a Chinese claim such as “状态图的检查点恢复” with
+// an English excerpt such as “state graph checkpoint persistence” without
+// treating a single product name as sufficient evidence. This is a lexical
+// bridge only; the existing overlap thresholds remain in force.
+const BILINGUAL_ALIASES = Object.freeze([
+  ['状态图', 'state graph'], ['状态机', 'state machine'], ['状态转移', 'state transition'],
+  ['检查点', 'checkpoint'], ['持久化', 'persistence'], ['运行时', 'runtime'],
+  ['推理', 'reasoning'], ['行动', 'action'], ['观察', 'observation'],
+  ['工具调用', 'tool calling'], ['工具', 'tool'], ['资源', 'resource'],
+  ['协议', 'protocol'], ['客户端', 'client'], ['服务器', 'server'],
+  ['多智能体', 'multi-agent'], ['监督器', 'supervisor'], ['记忆', 'memory'],
+  ['检索', 'retrieval'], ['审批', 'approval'], ['权限', 'permission'],
+  ['沙箱', 'sandbox'], ['隔离', 'isolation'], ['提示注入', 'prompt injection'],
+  ['威胁模型', 'threat model'], ['风险', 'risk'], ['评估', 'evaluation'],
+  ['重放', 'replay'], ['幂等', 'idempotency'], ['失败恢复', 'failure recovery'],
+]);
+
 function tokens(value) {
-  return [...new Set(String(value || '').toLocaleLowerCase().match(/[a-z][a-z0-9_-]{2,}|\d{2,}|[\u4e00-\u9fff]{2,}/gu) || [])]
+  const expanded = BILINGUAL_ALIASES.reduce((text, [term, alias]) => text.replaceAll(term, ` ${term} ${alias} `), String(value || '').toLocaleLowerCase());
+  return [...new Set(expanded.match(/[a-z][a-z0-9_-]{2,}|\d{2,}|[\u4e00-\u9fff]{2,}/gu) || [])]
     .filter((item) => !STOP_WORDS.has(item));
 }
 
@@ -113,7 +133,14 @@ function repairText(value, indexedSources, stats) {
 }
 
 function walk(value, key, indexedSources, stats, seen) {
-  if (typeof value === 'string') return TEXT_KEYS.has(key) ? repairText(value, indexedSources, stats) : value;
+  if (typeof value === 'string') {
+    // Citation markers can appear in arrays such as nextQuestions, scope,
+    // topics, or glossary terms even though those field names are not part of
+    // the prose allowlist. If a marker is present, validate it everywhere;
+    // otherwise an unsupported marker could survive in the artifact and make
+    // the publication gate disagree with the repair pass.
+    return (TEXT_KEYS.has(key) || /\[S\d+\]/u.test(value)) ? repairText(value, indexedSources, stats) : value;
+  }
   if (!value || typeof value !== 'object' || seen.has(value)) return value;
   seen.add(value);
   if (Array.isArray(value)) return value.map((item) => walk(item, key, indexedSources, stats, seen));
