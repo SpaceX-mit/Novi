@@ -92,7 +92,7 @@ function editableFields(stage, content) {
   return editable;
 }
 
-function parseJsonResponse(response) {
+function parseJsonResponse(response, preferredKeys = [], { allowUnmatched = false } = {}) {
   const raw = messageText(response).trim();
   if (!raw) throw new Error('LLM returned an empty response');
   const cleaned = raw
@@ -103,7 +103,7 @@ function parseJsonResponse(response) {
     ...[...cleaned.matchAll(/```(?:json|javascript|js)?\s*([\s\S]*?)```/gi)].map((match) => match[1]),
     cleaned,
   ];
-  let lastError;
+  let lastError; let firstObject = null;
   for (const candidate of candidates) {
     for (let start = candidate.indexOf('{'); start >= 0; start = candidate.indexOf('{', start + 1)) {
       let depth = 0; let inString = false; let escaped = false;
@@ -122,7 +122,10 @@ function parseJsonResponse(response) {
           if (depth !== 0) continue;
           try {
             const parsed = JSON.parse(candidate.slice(start, index + 1));
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              firstObject ||= parsed;
+              if (!preferredKeys.length || preferredKeys.some((key) => Object.hasOwn(parsed, key))) return parsed;
+            }
             lastError = new Error('LLM response must be a JSON object');
           } catch (error) { lastError = error; }
           break;
@@ -130,7 +133,8 @@ function parseJsonResponse(response) {
       }
     }
   }
-  const error = new Error(lastError?.message || 'LLM did not return a JSON object');
+  if (firstObject && (!preferredKeys.length || allowUnmatched)) return firstObject;
+  const error = new Error(lastError?.message || (preferredKeys.length ? 'LLM response did not contain an expected editable object' : 'LLM did not return a JSON object'));
   error.code = 'LLM_RESPONSE_INVALID';
   throw error;
 }
@@ -539,7 +543,7 @@ async function generateDeepDiveSuite(state, model, config, onModel, budgets) {
           await notifyModel(onModel, { id: `${eventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: `Deep Dive ${index + 1}/${assignments.length} streaming`, status: 'streaming', stageId: 'writing', mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(text, config.apiKey), usage: streamUsage, createdAt: new Date().toISOString() });
         });
         modelCompleted = true;
-        const candidate = parseJsonResponse(response);
+        const candidate = parseJsonResponse(response, ['deepDiveDocuments']);
         if (!Array.isArray(candidate.deepDiveDocuments) || candidate.deepDiveDocuments.length !== 1) throw new Error('LLM Deep Dive response must contain exactly one document');
         validateDeepDiveDocument(candidate.deepDiveDocuments[0], assignment);
         accepted = candidate.deepDiveDocuments[0]; usage = addUsage(usage, usageFor(response));
@@ -581,7 +585,7 @@ function stageNode(stage, model, config, onStage, onModel, budgets) {
         await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'LLM streaming', status: 'streaming', stageId: stage.id, mode: state.activeMode, provider: config.provider, model: config.model, response: safeModelText(text, config.apiKey), usage, createdAt: new Date().toISOString() });
       });
       modelCompleted = true;
-      const candidate = parseJsonResponse(response);
+      const candidate = parseJsonResponse(response, Object.keys(editable), { allowUnmatched: true });
       const acceptedCandidate = Object.fromEntries(Object.entries(normalizeCandidateForEditable(candidate, editable)).filter(([key]) => Object.hasOwn(editable, key)));
       validateCollaborativeCandidate(stage, acceptedCandidate);
       let content = reconcileStageContent(stage, mergeStageContent(state.content, editable, acceptedCandidate), acceptedCandidate);
@@ -803,7 +807,7 @@ function plannerNode(model, config, onMode, onModel, budgets) {
         await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'Planner streaming', status: 'streaming', stageId: 'planner', mode: 'plan-execute', provider: config.provider, model: config.model, response: safeModelText(text, config.apiKey), usage, createdAt: new Date().toISOString() });
       });
       modelCompleted = true;
-      const candidate = parseJsonResponse(response);
+        const candidate = parseJsonResponse(response, ['steps', 'toolCalls']);
       const plan = (candidate.steps || []).slice(0, budgets.maxStageRuns).map((step) => ({ stage: String(step?.stage || ''), objective: String(step?.objective || '').slice(0, 500) })).filter((step) => stageIds.includes(step.stage) && step.objective);
       if (!plan.length) throw new Error('Planner returned no valid steps');
       const pendingToolCalls = (candidate.toolCalls || []).slice(0, Math.min(8, budgets.maxToolCalls)).map((call) => ({ name: String(call?.name || ''), input: call?.input })).filter((call) => toolDefinitionFor(state.tools, call.name) && call.input && typeof call.input === 'object' && !Array.isArray(call.input));
@@ -844,7 +848,7 @@ function controllerNode(kind, model, config, onMode, onModel, budgets) {
         await notifyModel(onModel, { id: `${modelEventId}:response`, type: 'model-response', actor: `${config.provider} / ${config.model}`, title: 'Controller streaming', status: 'streaming', stageId: `${kind}-controller`, mode: kind, provider: config.provider, model: config.model, response: safeModelText(text, config.apiKey), usage, createdAt: new Date().toISOString() });
       });
       modelCompleted = true;
-      const candidate = parseJsonResponse(response);
+      const candidate = parseJsonResponse(response, ['next', 'mode']);
       const next = String(candidate.next || '');
       const candidateMode = allowedAgentMode(candidate.mode) || kind;
       if (!allowed.includes(next)) throw new Error(`${kind} controller selected an invalid next stage`);
