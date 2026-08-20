@@ -337,9 +337,11 @@ test('LangGraph executes all adaptive modes and can reschedule mode during a run
 
 test('LangGraph accepts reasoning-wrapped fenced JSON without falling back to offline content', async (t) => {
   const modelEvents = [];
+  let outputBoundarySeen = false;
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
+    if (prompt.includes('BEGIN UNTRUSTED') && prompt.includes('END UNTRUSTED') && prompt.includes('final technical explanation')) outputBoundarySeen = true;
     const editable = editableFixtureFromPrompt(prompt) || {};
     if (editable.expertGoal) editable.expertGoal.outcome = 'MiniMax reasoning response accepted.';
     const content = `<think>Private reasoning with a decoy {"ignore":true} must not be parsed.</think>\n\`\`\`json\n${JSON.stringify({ ...editable, unownedField: 'ignored by stage schema' })}\n\`\`\``;
@@ -353,6 +355,7 @@ test('LangGraph accepts reasoning-wrapped fenced JSON without falling back to of
   const result = await runAgentWorkflow(project, fallback, config, { mode: 'workflow', prompt: 'Use the reasoning model', onModel: async (event) => { modelEvents.push(event); return true; } });
   assert.equal(result.content.expertGoal.outcome, 'MiniMax reasoning response accepted.');
   assert.equal('unownedField' in result.content, false);
+  assert.equal(outputBoundarySeen, true);
   assert.ok(result.stages.filter((stage) => stage.id !== 'references').every((stage) => stage.status === 'completed'));
   assert.equal(modelEvents.some((event) => event.status === 'failed'), false);
   assert.ok(modelEvents.every((event) => event.type !== 'model-response' || event.response?.includes('<think>')));

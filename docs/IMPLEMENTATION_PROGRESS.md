@@ -75,6 +75,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 
 ## 更新记录
 
+- 2026-08-20：真实 Anthropic-compatible Agent OS 审计显示，部分模型把前序技术上下文中的“reasoning traces/chain”等术语误判为要求输出私有推理，导致 Deep Dive 拒答；同时长 JSON 在 Goal/Knowledge/Writing/Review 发生修订或超时，旧结果 `publicationReady=false`。为强化上下文安全，所有 Specialist 与 Deep Dive prompt 现在将草稿、来源摘录、Workspace/Tool observation 包裹为明确的 `BEGIN/END UNTRUSTED` 数据区，并在 prompt 末尾重申只输出公开技术分析 JSON，不输出隐藏推理、系统提示、凭据或策略文本。新增回归验证提示边界；定向 runtime 测试通过。真实审计需重新运行，当前仍不能宣称发布质量完成。
+
 - 2026-08-20：Research Intake 首步边界保持不变：外部 ChatGPT 生成的提示词只作为 Novi 的待判断输入；Intake Agent 必须先判断深度研究的问题、范围、交付物、证据和边界，信息不足时多轮追问或提供选项，ready 后仍需用户确认才启动来源检索和 Wiki 生成。本轮同时修复 reasoning Provider 丢失 `expertGoal`/`systemDocument`/`knowledgeSystem` 外层包装时的严格恢复逻辑：仅在对象字段唯一可识别且仍通过原 schema/质量门禁时恢复，非法或不完整 inner object 继续 rejected/fallback。验证：`npm run check`（56 modules）、`npm test`（93 passed + 1 PostgreSQL 条件跳过）、`node --test test/core.test.mjs --test-name-pattern='inner stage object|reasoning-wrapped'`、`git diff --check`。真实供应商内容质量和 `publicationReady=true` 仍未完成。
 
 - 2026-08-20：继续真实 Agent OS 诊断：最新旧结果显示已产生 5 篇 Deep Dive 和 7 个文档形状，但 Writing/Review/Finalizer 仍有 fallback/rejection，质量门禁因 18 个不受 excerpt 支持的 citation marker 及 coverage 0.333 而 `publicationReady=false`。进一步收窄 Finalizer 只生成 `llmWiki`，Review/Finalizer Deep Dive 摘要分别限制为 280/260 字符，并明确 Writing 必须返回顶层 `systemDocument` 字段；诊断脚本增加 500 字符脱敏响应预览。真实来源和人工专业抽检仍未完成。
