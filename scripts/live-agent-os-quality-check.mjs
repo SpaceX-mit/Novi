@@ -7,13 +7,17 @@ const apiKey = process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY
 if (!apiKey) throw new Error('live-agent-os-quality-check: Anthropic-compatible credential is unavailable');
 
 const sourceSeed = [
-  ['LangGraph docs', 'Official Docs', 'https://langchain-ai.github.io/langgraph/'],
-  ['MCP specification', 'Standards', 'https://modelcontextprotocol.io/specification/2025-06-18'],
+  // Prefer stable, content-bearing pages over documentation landing pages.
+  // A reachable redirect/navigation shell is not sufficient evidence for a
+  // mechanism claim such as checkpoint semantics or protocol message shape.
+  ['LangGraph core README', 'Official Docs', 'https://raw.githubusercontent.com/langchain-ai/langgraphjs/main/libs/langgraph-core/README.md'],
+  ['LangGraph checkpointer types', 'Source Code', 'https://raw.githubusercontent.com/langchain-ai/langgraphjs/main/libs/checkpoint/src/base.ts'],
+  ['MCP protocol schema', 'Standards', 'https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/schema/2025-06-18/schema.ts'],
   ['ReAct paper', 'Papers', 'https://arxiv.org/abs/2210.03629'],
-  ['OpenAI Agents SDK docs', 'Official Docs', 'https://openai.github.io/openai-agents-python/'],
-  ['NIST AI RMF', 'Standards', 'https://www.nist.gov/itl/ai-risk-management-framework'],
-  ['OWASP LLM Top 10', 'Standards', 'https://owasp.org/www-project-top-10-for-large-language-model-applications/'],
-  ['AutoGen docs', 'Official Docs', 'https://microsoft.github.io/autogen/stable/'],
+  ['OpenAI Agents SDK agents', 'Official Docs', 'https://openai.github.io/openai-agents-python/agents/'],
+  ['NIST AI RMF Playbook', 'Standards', 'https://airc.nist.gov/airmf-resources/playbook/'],
+  ['OWASP LLM Top 10 source', 'Standards', 'https://raw.githubusercontent.com/OWASP/www-project-top-10-for-large-language-model-applications/master/index.md'],
+  ['AutoGen core guide', 'Official Docs', 'https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/index.html'],
 ];
 
 const verified = await verifyEvidenceSources(sourceSeed.map(([name, kind, url]) => ({ name, kind, url, mapped: true })));
@@ -31,7 +35,7 @@ const project = {
 const config = { provider: 'anthropic', family: 'anthropic', model: process.env.NOVI_LIVE_AUDIT_MODEL || 'claude-sonnet-4-5-20250929', apiKey };
 const budgets = {
   maxStageRuns: Number(process.env.NOVI_LIVE_AUDIT_MAX_STAGE_RUNS || 8),
-  maxStageAttempts: Number(process.env.NOVI_LIVE_AUDIT_MAX_STAGE_ATTEMPTS || 2),
+  maxStageAttempts: Number(process.env.NOVI_LIVE_AUDIT_MAX_STAGE_ATTEMPTS || 3),
   maxToolCalls: 6,
   recursionLimit: 96,
 };

@@ -2,6 +2,8 @@
 
 最近更新：2026-08-20
 
+本轮真实审计证据与深度修复（2026-08-20，待推送）：将 Agent OS 真实审计来源从重定向/导航页替换为 LangGraph core/checkpointer 源码、MCP protocol schema、OpenAI Agents agents、NIST Playbook、OWASP 受控源码和 AutoGen Core 页面；审计默认阶段重试从 2 提高为 3。Deep Dive 写作目标增加发布门禁余量，Finalizer 明确要求 8 节、每节双段和更充足字符；质量审计保留 220 字符最低结构门禁，避免把已有的双段中文综合章节误报为失败。`npm run check` 与定向 Agent OS/Finalizer/Provider 测试通过（94 passed + 1 PostgreSQL 条件跳过）。真实审计尚未重新证明 `publicationReady=true`，上次真实结果仍为 `false`。
+
 本轮 Finalizer 深度门禁修复（2026-08-20）：LLM Wiki Finalizer 现在要求 summary 至少 320 字符、8 个综合章节、每节至少 260 字符且至少两段；提示词同时要求每节先解释机制/边界，再给出实现取舍、失败模式或验证方式。定向测试通过（94 passed + 1 PostgreSQL 条件跳过），`npm run check` 通过（56 modules）。这只提高浅层 Wiki 的拒绝和重试质量，真实供应商审计仍需确认 `publicationReady=true`；本地审计 JSON 仍不纳入提交。
 
 本轮 Agent OS 质量修复（2026-08-20）：真实 Anthropic-compatible 审计暴露中文 Wiki 术语与英文受控 excerpt 的引用支持判定偏低，导致 Finalizer 的 4–7 个合法引用被拒。`src/citation-repair.mjs` 增加受控中英 Agent OS 术语映射（状态图/checkpoint、工具/protocol、记忆/memory、审批/approval、沙箱/sandbox、评估/evaluation 等），仍保持原有重叠阈值；所有带 `[S#]` 的文本字段现在都会经过支持校验。新增中英引用回归，`node --test test/core.test.mjs --test-name-pattern='citation repair|Agent OS Wiki quality'` 通过（94 passed + 1 PostgreSQL 条件跳过），`npm run check` 通过（56 modules）。修复已推送为 `41960b0`。真实审计需重新运行，`publicationReady` 尚未证明。
