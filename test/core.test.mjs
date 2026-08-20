@@ -358,6 +358,37 @@ test('LangGraph accepts reasoning-wrapped fenced JSON without falling back to of
   assert.ok(modelEvents.every((event) => event.type !== 'model-response' || event.response?.includes('<think>')));
 });
 
+test('LangGraph recovers a uniquely identifiable inner stage object without weakening schema validation', async (t) => {
+  const modelServer = http.createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
+    const editable = editableFixtureFromPrompt(prompt) || {};
+    const goal = editable.expertGoal;
+    const content = goal ? { ...goal, outcome: 'Recovered from an inner provider object.' } : editable;
+    await sendOpenAiChat(res, request, JSON.stringify(content), { id: 'inner-goal', model: 'inner-goal-model' });
+  });
+  await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve));
+  t.after(() => modelServer.close());
+  const project = { id: 'inner-goal-project', tenantId: 'tenant', title: 'Inner goal', topic: 'Agent runtime', description: '', type: 'knowledge' };
+  const fallback = generateArtifact(project);
+  const config = { provider: 'custom', model: 'inner-goal-model', baseUrl: `http://127.0.0.1:${modelServer.address().port}/v1`, apiKey: 'test-key' };
+  const result = await runAgentWorkflow(project, fallback, config, { mode: 'workflow', prompt: 'Recover a provider inner object' });
+  assert.equal(result.content.expertGoal.outcome, 'Recovered from an inner provider object.');
+  assert.equal(result.stages.filter((stage) => stage.id !== 'references').every((stage) => stage.status === 'completed'), true);
+
+  const invalidServer = http.createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
+    const editable = editableFixtureFromPrompt(prompt) || {};
+    await sendOpenAiChat(res, request, JSON.stringify({ question: editable.expertGoal?.question || 'missing' }), { id: 'invalid-inner', model: 'invalid-inner-model' });
+  });
+  await new Promise((resolve) => invalidServer.listen(0, '127.0.0.1', resolve));
+  t.after(() => invalidServer.close());
+  const invalid = await runAgentWorkflow(project, fallback, { ...config, model: 'invalid-inner-model', baseUrl: `http://127.0.0.1:${invalidServer.address().port}/v1` }, { mode: 'workflow', prompt: 'Reject an incomplete provider inner object' });
+  assert.equal(invalid.stages.find((stage) => stage.id === 'goal').status, 'fallback');
+  assert.match(invalid.stages.find((stage) => stage.id === 'goal').warning, /LLM response rejected|LLM field|incomplete|editable field/u);
+});
+
 test('LangGraph retries a shallow Wiki finalizer until the quality contract passes', async (t) => {
   let finalizerCalls = 0;
   const modelEvents = [];

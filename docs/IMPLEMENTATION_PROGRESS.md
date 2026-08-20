@@ -1,6 +1,6 @@
 # Novi 实现进度
 
-最近更新：2026-08-19
+最近更新：2026-08-20
 
 ## 当前结论
 
@@ -74,6 +74,8 @@ Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品�
 4. 在已配置的 GitHub 远程仓库运行持续集成门禁并归档结果；随后接入真实供应商/目标基础设施并关闭正式发布门禁。
 
 ## 更新记录
+
+- 2026-08-20：Research Intake 首步边界保持不变：外部 ChatGPT 生成的提示词只作为 Novi 的待判断输入；Intake Agent 必须先判断深度研究的问题、范围、交付物、证据和边界，信息不足时多轮追问或提供选项，ready 后仍需用户确认才启动来源检索和 Wiki 生成。本轮同时修复 reasoning Provider 丢失 `expertGoal`/`systemDocument`/`knowledgeSystem` 外层包装时的严格恢复逻辑：仅在对象字段唯一可识别且仍通过原 schema/质量门禁时恢复，非法或不完整 inner object 继续 rejected/fallback。验证：`npm run check`（56 modules）、`npm test`（93 passed + 1 PostgreSQL 条件跳过）、`node --test test/core.test.mjs --test-name-pattern='inner stage object|reasoning-wrapped'`、`git diff --check`。真实供应商内容质量和 `publicationReady=true` 仍未完成。
 
 - 2026-08-20：继续真实 Agent OS 诊断：最新旧结果显示已产生 5 篇 Deep Dive 和 7 个文档形状，但 Writing/Review/Finalizer 仍有 fallback/rejection，质量门禁因 18 个不受 excerpt 支持的 citation marker 及 coverage 0.333 而 `publicationReady=false`。进一步收窄 Finalizer 只生成 `llmWiki`，Review/Finalizer Deep Dive 摘要分别限制为 280/260 字符，并明确 Writing 必须返回顶层 `systemDocument` 字段；诊断脚本增加 500 字符脱敏响应预览。真实来源和人工专业抽检仍未完成。
 

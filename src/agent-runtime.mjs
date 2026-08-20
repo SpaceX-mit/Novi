@@ -135,9 +135,25 @@ function parseJsonResponse(response) {
   throw error;
 }
 
+function normalizeCandidateForEditable(candidate, editable) {
+  // Some providers close an inner object correctly but lose the outer wrapper
+  // while emitting fenced JSON. Recover only a uniquely identifiable stage
+  // field, then run the same schema and quality checks below. This is not a
+  // permissive parser: ambiguous or partial objects remain rejected.
+  let normalizedCandidate = candidate;
+  if (Object.keys(candidate).every((key) => !Object.hasOwn(editable, key))) {
+    const matches = Object.keys(editable).filter((key) => Object.hasOwn(candidate, key));
+    if (matches.length === 0 && editable.expertGoal && candidate.question && candidate.domain && candidate.outcome) normalizedCandidate = { expertGoal: candidate };
+    else if (matches.length === 0 && editable.systemDocument && candidate.sections && candidate.completionChecklist) normalizedCandidate = { systemDocument: candidate };
+    else if (matches.length === 0 && editable.knowledgeSystem && candidate.layers && candidate.validationQuestions) normalizedCandidate = { knowledgeSystem: candidate };
+  }
+  return normalizedCandidate;
+}
+
 function mergeStageContent(content, editable, candidate) {
   const patch = {};
-  for (const [key, value] of Object.entries(candidate)) {
+  const normalizedCandidate = normalizeCandidateForEditable(candidate, editable);
+  for (const [key, value] of Object.entries(normalizedCandidate)) {
     // Providers may return the complete draft even when this stage owns only a
     // subset of fields. Ignore those extra fields; only schema-validated fields
     // from the current stage can change the workflow state.
@@ -553,7 +569,7 @@ function stageNode(stage, model, config, onStage, onModel, budgets) {
       });
       modelCompleted = true;
       const candidate = parseJsonResponse(response);
-      const acceptedCandidate = Object.fromEntries(Object.entries(candidate).filter(([key]) => Object.hasOwn(editable, key)));
+      const acceptedCandidate = Object.fromEntries(Object.entries(normalizeCandidateForEditable(candidate, editable)).filter(([key]) => Object.hasOwn(editable, key)));
       validateCollaborativeCandidate(stage, acceptedCandidate);
       let content = reconcileStageContent(stage, mergeStageContent(state.content, editable, acceptedCandidate), acceptedCandidate);
       let stageUsage = usageFor(response);
