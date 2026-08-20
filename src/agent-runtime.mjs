@@ -512,7 +512,7 @@ function deepDivePrompt(state, document, index, total, budgets) {
     wikiLanguageInstruction(state.language),
     'Return ONLY one valid JSON object with the single key deepDiveDocuments containing exactly one document.',
     'Preserve the supplied document id and slug exactly. Keep exactly six sections, but make every section title domain-specific. Section bodies must not contain additional Markdown headings.',
-    `Each section body must contain at least ${DEEP_DIVE_MIN_SECTION_CHARS} characters in two or more coherent paragraphs. Explain causal mechanisms, interfaces or algorithms, concrete implementation details, trade-offs, failure propagation, and a falsifiable validation method.`,
+    `Each section body must contain ${DEEP_DIVE_MIN_SECTION_CHARS}-${DEEP_DIVE_MIN_SECTION_CHARS + 180} characters in exactly two coherent paragraphs. Keep the complete JSON response below roughly 7,000 output tokens. Explain causal mechanisms, interfaces or algorithms, concrete implementation details, trade-offs, failure propagation, and a falsifiable validation method.`,
     'Do not produce a glossary, checklist, outline, disconnected bullet catalog, generic best-practice list, or repeated boilerplate. Use precise domain terminology and connect claims into an argument.',
     'Use supplied [S#] markers only where the source packet actually supports a factual claim. Label unsupported points as hypotheses or evidence gaps; never invent citations.',
     `Quality contract: ${stageQualityContract({ id: 'writing' })} ${domainQualityContract(state, 'deep-dive-writing')}`,
