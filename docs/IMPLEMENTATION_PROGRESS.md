@@ -2,6 +2,8 @@
 
 最近更新：2026-08-20
 
+本轮修复（2026-08-20）：统一 `Generate now` 与 Session Composer 的 Research Intake 确认边界。首次生成在 Intake Agent 给出 ready 研究方案后，只接受明确的“确认生成/confirm/start”指令；重复 workspace topic/description 不再被当作同意，不会提前创建 Job、调用来源或扣生成额度。新增 HTTP 回归覆盖该路径；`node --test test/core.test.mjs --test-name-pattern='Research Intake|Agent conversation turns require'` 通过（93 passed + 1 PostgreSQL 条件跳过）。
+
 本轮核对（2026-08-20）：Research Intake 首步边界已按当前产品要求复核。`npm run check` 通过（56 modules）；`node --test test/core.test.mjs --test-name-pattern='Research Intake|Agent conversation turns require'` 通过（93 passed + 1 PostgreSQL 条件跳过）。验证确认：外部 ChatGPT 整理的提示词只作为 Novi 输入；首轮由 Intake Agent 决定研究是否完整，信息不足时继续追问/给方向选项，ready 后仍需用户确认，未确认前不检索、不创建 Job、不扣生成或来源额度。真实供应商内容质量与 `publicationReady=true` 仍未完成。
 
 本轮质量推进（2026-08-20）：真实 Anthropic-compatible 审计再次完成 7 个受控来源验证、Goal/Research/Knowledge/Review 和 5 篇 Deep Dive 生成。新增 Finalizer 紧凑 synthesis patch 契约（保留已验证 documentMap/glossary/nextQuestions，避免整篇 Wiki 超出输出上限），并新增有限的 JSON 字符串未转义引号修复；`npm run check` 与定向/完整测试通过。真实结果仍为 `publicationReady=false`：Deep Dive 仍有个别重试，Finalizer 因 synthesis 章节深度与概念覆盖失败，且 citation marker 与 source excerpt 支持率不足。该审计产物不纳入提交，后续必须继续提高引用级证据和 Finalizer 深度，不能以 fallback 文档作为完成证明。

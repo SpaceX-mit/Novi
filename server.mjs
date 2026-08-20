@@ -1091,8 +1091,13 @@ async function api(req, res, url, store, auth, metrics, dependencies = {}) {
     if (selectedSession.status === 'running') return send(res, 409, { error: 'Agent session is already running', code: 'AGENT_SESSION_ACTIVE' });
     const requireIntake = generationInput.requireIntake === true;
     const storedIntake = selectedSession.activeResearchIntake || [...(selectedSession.messages || [])].reverse().find((message) => message.kind === 'intake' && message.runtime?.status === 'ready')?.runtime;
+    // A ready Intake plan still requires an explicit user confirmation for a
+    // first artifact. Merely repeating the workspace topic/description is
+    // another research input, not consent to spend quota and start tools.
+    // Existing artifacts are already past the initial boundary and may be
+    // regenerated/refined directly.
     const intakeConfirmed = Boolean(current.artifacts?.length)
-      || (storedIntake?.status === 'ready' && (intakeConfirmation(prompt) || prompt === current.topic || prompt === current.description));
+      || (storedIntake?.status === 'ready' && intakeConfirmation(prompt));
     if (requireIntake && !intakeConfirmed) {
       const providerConfig = await resolvedProviderConfig(await store.read(), user.tenantId);
       if (!providerConfig) return send(res, 409, { error: 'No active LLM provider configured', code: 'LLM_PROVIDER_REQUIRED' });
