@@ -341,7 +341,7 @@ test('LangGraph accepts reasoning-wrapped fenced JSON without falling back to of
   const modelServer = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const request = JSON.parse(body); const prompt = String(request.messages?.at(-1)?.content || '');
-    if (prompt.includes('BEGIN UNTRUSTED') && prompt.includes('END UNTRUSTED') && prompt.includes('final technical explanation')) outputBoundarySeen = true;
+    if (prompt.includes('BEGIN UNTRUSTED') && prompt.includes('END UNTRUSTED') && prompt.includes('final, public technical analysis')) outputBoundarySeen = true;
     const editable = editableFixtureFromPrompt(prompt) || {};
     if (editable.expertGoal) editable.expertGoal.outcome = 'MiniMax reasoning response accepted.';
     const content = `<think>Private reasoning with a decoy {"ignore":true} must not be parsed.</think>\n\`\`\`json\n${JSON.stringify({ ...editable, unownedField: 'ignored by stage schema' })}\n\`\`\``;
