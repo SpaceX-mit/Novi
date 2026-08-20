@@ -4,6 +4,8 @@
 
 本轮核对（2026-08-20）：Research Intake 首步边界已按当前产品要求复核。`npm run check` 通过（56 modules）；`node --test test/core.test.mjs --test-name-pattern='Research Intake|Agent conversation turns require'` 通过（93 passed + 1 PostgreSQL 条件跳过）。验证确认：外部 ChatGPT 整理的提示词只作为 Novi 输入；首轮由 Intake Agent 决定研究是否完整，信息不足时继续追问/给方向选项，ready 后仍需用户确认，未确认前不检索、不创建 Job、不扣生成或来源额度。真实供应商内容质量与 `publicationReady=true` 仍未完成。
 
+本轮质量推进（2026-08-20）：真实 Anthropic-compatible 审计再次完成 7 个受控来源验证、Goal/Research/Knowledge/Review 和 5 篇 Deep Dive 生成。新增 Finalizer 紧凑 synthesis patch 契约（保留已验证 documentMap/glossary/nextQuestions，避免整篇 Wiki 超出输出上限），并新增有限的 JSON 字符串未转义引号修复；`npm run check` 与定向/完整测试通过。真实结果仍为 `publicationReady=false`：Deep Dive 仍有个别重试，Finalizer 因 synthesis 章节深度与概念覆盖失败，且 citation marker 与 source excerpt 支持率不足。该审计产物不纳入提交，后续必须继续提高引用级证据和 Finalizer 深度，不能以 fallback 文档作为完成证明。
+
 ## 当前结论
 
 Novi 的 Web、本地服务端、Linux Electron 基线以及三条核心产品路径已经实现并具有本地自动化验证证据。Web 支持主流 LLM Provider、自适应 LangGraph 模式、Goal 驱动的参考发现与领域专家协作、最终 LLM Wiki、默认中文/可选多语言生成、Workspace Markdown 预览、持久 Agent Session、内置/自定义/MCP 工具、组织 Skills 和声明式 Plugins。正式收费商用发布尚未完成，剩余工作主要是持久 Agent checkpoint、目标环境和正式发布门禁。

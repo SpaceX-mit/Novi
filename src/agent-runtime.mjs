@@ -92,6 +92,26 @@ function editableFields(stage, content) {
   return editable;
 }
 
+// Some reasoning providers emit natural-language quotation marks inside a
+// JSON string without escaping them. Repair only quotes whose next meaningful
+// character cannot be a JSON delimiter; structural quotes and truncated
+// objects remain subject to the normal JSON parser and balanced-brace check.
+function repairLooseJsonQuotes(value) {
+  const text = String(value || ''); let output = ''; let inString = false; let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character !== '"') { output += character; if (inString && character === '\\' && !escaped) escaped = true; else escaped = false; continue; }
+    if (escaped) { output += character; escaped = false; continue; }
+    if (!inString) { inString = true; output += character; continue; }
+    let next = index + 1;
+    while (next < text.length && /\s/u.test(text[next])) next += 1;
+    const nextCharacter = text[next] || '';
+    if (nextCharacter && !/[,:}\]]/u.test(nextCharacter)) { output += '\\\"'; continue; }
+    inString = false; output += character;
+  }
+  return output;
+}
+
 function parseJsonResponse(response, preferredKeys = [], { allowUnmatched = false } = {}) {
   const raw = messageText(response).trim();
   if (!raw) throw new Error('LLM returned an empty response');
@@ -99,10 +119,11 @@ function parseJsonResponse(response, preferredKeys = [], { allowUnmatched = fals
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/<analysis>[\s\S]*?<\/analysis>/gi, '')
     .trim();
-  const candidates = [
+  const rawCandidates = [
     ...[...cleaned.matchAll(/```(?:json|javascript|js)?\s*([\s\S]*?)```/gi)].map((match) => match[1]),
     cleaned,
   ];
+  const candidates = [...new Set(rawCandidates.flatMap((candidate) => [candidate, repairLooseJsonQuotes(candidate)]))];
   let lastError; let firstObject = null;
   for (const candidate of candidates) {
     for (let start = candidate.indexOf('{'); start >= 0; start = candidate.indexOf('{', start + 1)) {
@@ -162,8 +183,16 @@ function mergeStageContent(content, editable, candidate) {
     // subset of fields. Ignore those extra fields; only schema-validated fields
     // from the current stage can change the workflow state.
     if (!Object.hasOwn(editable, key)) continue;
-    if (!validModelValue(value, editable[key])) throw new Error(`LLM field ${key} failed schema validation`);
-    patch[key] = value;
+    const finalizerPatch = key === 'llmWiki' && value && typeof value === 'object' && Array.isArray(value.sections)
+      && typeof value.summary === 'string' && value.sections.length >= 8
+      && value.sections.every((section) => section && typeof section.title === 'string' && typeof section.body === 'string');
+    if (!finalizerPatch && !validModelValue(value, editable[key])) throw new Error(`LLM field ${key} failed schema validation`);
+    // The finalizer emits a compact synthesis patch to avoid max-token
+    // truncation. Preserve the already validated navigation/glossary/next
+    // question fields when merging that patch.
+    patch[key] = key === 'llmWiki' && editable[key] && value && typeof value === 'object'
+      ? { ...editable[key], ...value }
+      : value;
   }
   if (!Object.keys(patch).length) throw new Error('LLM response did not contain an editable field');
   return { ...content, ...patch };
@@ -218,8 +247,7 @@ function validateCollaborativeCandidate(stage, candidate) {
   if (candidate.systemDocument && (candidate.systemDocument.sections.length < 5 || candidate.systemDocument.completionChecklist.length < 4)) throw new Error('LLM system document does not meet the minimum quality contract');
   if (candidate.deepDiveDocuments) validateDeepDiveSuite(candidate.deepDiveDocuments);
   if (stage.id === 'review' && candidate.review && candidate.review.length < 3) throw new Error('LLM review does not meet the minimum quality contract');
-  if (stage.id === 'finalizer' && candidate.llmWiki && (!candidate.llmWiki.sections?.length || !candidate.llmWiki.documentMap?.length || !candidate.llmWiki.glossary?.length || !candidate.llmWiki.nextQuestions?.length)) throw new Error('LLM Wiki is incomplete');
-  if (stage.id === 'finalizer' && candidate.llmWiki && (String(candidate.llmWiki.summary || '').trim().length < 120 || candidate.llmWiki.sections.length < 6 || candidate.llmWiki.documentMap.length < 5 || candidate.llmWiki.glossary.length < 4 || candidate.llmWiki.nextQuestions.length < 3 || candidate.llmWiki.sections.some((section) => String(section?.body || '').trim().length < 120))) throw new Error('LLM Wiki does not meet the minimum quality contract');
+  if (stage.id === 'finalizer' && candidate.llmWiki && (String(candidate.llmWiki.summary || '').trim().length < 120 || candidate.llmWiki.sections.length < 8 || candidate.llmWiki.sections.some((section) => String(section?.body || '').trim().length < 120))) throw new Error('LLM Wiki synthesis patch does not meet the minimum quality contract');
   if (stage.id === 'finalizer' && candidate.wikiSections && (candidate.wikiSections.length < 6 || candidate.wikiSections.some((section) => String(section?.body || '').trim().length < 20))) throw new Error('LLM Wiki sections do not meet the minimum quality contract');
 }
 
@@ -231,8 +259,8 @@ function reconcileStageContent(stage, content, candidate) {
   if (stage.id !== 'finalizer') return content;
   if (candidate.llmWiki?.sections?.length) {
     const expectedSlugs = (content.deepDiveDocuments || []).map((document) => document.slug);
-    const mappedSlugs = candidate.llmWiki.documentMap.map((document) => document.slug);
-    if (expectedSlugs.length !== mappedSlugs.length || expectedSlugs.some((slug, index) => slug !== mappedSlugs[index])) throw new Error('LLM Wiki document map does not match the generated Deep Dive suite');
+    const mappedSlugs = candidate.llmWiki.documentMap?.map((document) => document.slug);
+    if (mappedSlugs && (expectedSlugs.length !== mappedSlugs.length || expectedSlugs.some((slug, index) => slug !== mappedSlugs[index]))) throw new Error('LLM Wiki document map does not match the generated Deep Dive suite');
     return { ...content, wikiSections: candidate.llmWiki.sections };
   }
   if (candidate.wikiSections?.length) return { ...content, llmWiki: { ...content.llmWiki, sections: candidate.wikiSections } };
@@ -449,6 +477,7 @@ function stageQualityContract(stage) {
 function stageShapeContract(stage) {
   if (stage.id === 'knowledge') return 'Knowledge response shape is strict and compact: return exactly {"knowledgeSystem":{"title":"...","purpose":"...","layers":[{"id":"layer-1","title":"...","objective":"...","topics":["...","..."],"dependencies":[]}],"learningSequence":["layer-1"],"validationQuestions":["...","...","...","..."]}}. Use exactly 8 layers, preserve the layer ids and dependencies from the draft, keep each objective under 280 characters and each topic under 100 characters. Do not add examples, prose, Markdown, citations, or any other keys; do not repeat Deep Dive content.';
   if (stage.id === 'writing') return 'Writing response shape is strict and compact: return exactly {"systemDocument":{"title":"...","executiveSummary":"...","sections":[{"title":"...","body":"..."}],"completionChecklist":["..."]}} with the top-level editable key. Use exactly 5 sections, keep each section body under 450 characters, executiveSummary under 600 characters, and each checklist item under 140 characters. Do not return the inner object by itself, summary, title, abstract, Deep Dive documents, Markdown, or explanatory prose; long technical arguments are handled by separate focused Deep Dive calls.';
+  if (stage.id === 'finalizer') return 'Finalizer response shape is a compact patch: return exactly {"llmWiki":{"title":"...","summary":"...","sections":[{"title":"...","body":"..."}]}}. Return exactly 8 synthesis sections, each body 220–320 characters, and keep summary under 900 characters. Do not return documentMap, glossary, nextQuestions, Deep Dive documents, Markdown, or explanatory prose; Novi preserves those previously validated fields and merges this patch before the final quality gate. Do not use literal unescaped double quotes inside text strings.';
   return '';
 }
 
@@ -491,7 +520,13 @@ function stagePrompt(stage, state, editable, budgets) {
     `Quality contract: ${stageQualityContract(stage)} ${stageShapeContract(stage)} ${domainQualityContract(state, stage)}`,
     `Topic: ${state.project.topic}`,
     `User context: ${state.project.description || 'none'}`,
-    untrustedDataBoundary('EDITABLE DRAFT', `Editable schema and current draft: ${JSON.stringify(editable)}`),
+    untrustedDataBoundary('EDITABLE DRAFT', `Editable schema and current draft: ${JSON.stringify(stage.id === 'finalizer' ? {
+      llmWiki: {
+        title: editable.llmWiki?.title,
+        summary: String(editable.llmWiki?.summary || '').slice(0, 900),
+        sections: (editable.llmWiki?.sections || []).slice(0, 8).map((section) => ({ title: section.title, body: String(section.body || '').slice(0, 320) })),
+      },
+    } : editable)}`),
     untrustedDataBoundary('SHARED SPECIALIST CONTEXT', stageCollaborationContext(state, stage.id)),
     untrustedDataBoundary('CONTROLLED SOURCE EXCERPTS', boundedSources(state.sources).map((source) => ({ ...source, snippet: String(source.snippet || '').slice(0, 900) }))),
     untrustedDataBoundary('WORKSPACE KNOWLEDGE', boundedKnowledge(state.knowledgeContext)),
@@ -512,7 +547,7 @@ function deepDivePrompt(state, document, index, total, budgets) {
     wikiLanguageInstruction(state.language),
     'Return ONLY one valid JSON object with the single key deepDiveDocuments containing exactly one document.',
     'Preserve the supplied document id and slug exactly. Keep exactly six sections, but make every section title domain-specific. Section bodies must not contain additional Markdown headings.',
-    `Each section body must contain ${DEEP_DIVE_MIN_SECTION_CHARS}-${DEEP_DIVE_MIN_SECTION_CHARS + 180} characters in exactly two coherent paragraphs. Keep the complete JSON response below roughly 7,000 output tokens. Explain causal mechanisms, interfaces or algorithms, concrete implementation details, trade-offs, failure propagation, and a falsifiable validation method.`,
+    `Each section body must contain ${DEEP_DIVE_MIN_SECTION_CHARS}-${DEEP_DIVE_MIN_SECTION_CHARS + 180} characters in exactly two coherent paragraphs. Keep the complete JSON response below roughly 7,000 output tokens. Explain causal mechanisms, interfaces or algorithms, concrete implementation details, trade-offs, failure propagation, and a falsifiable validation method. Use Chinese quotation marks or escape any double quote inside a JSON string; never emit an unescaped literal double quote in prose.`,
     'Do not produce a glossary, checklist, outline, disconnected bullet catalog, generic best-practice list, or repeated boilerplate. Use precise domain terminology and connect claims into an argument.',
     'Use supplied [S#] markers only where the source packet actually supports a factual claim. Label unsupported points as hypotheses or evidence gaps; never invent citations.',
     `Quality contract: ${stageQualityContract({ id: 'writing' })} ${domainQualityContract(state, 'deep-dive-writing')}`,
